@@ -45,17 +45,42 @@ from modules.bidder_name_extractor import extract_bidder_name_from_file
 # 设置控制台输出编码为UTF-8
 if sys.platform == 'win32':
     import codecs
-    sys.stdout = codecs.getwriter('utf-8')(sys.stdout.detach())
-    sys.stderr = codecs.getwriter('utf-8')(sys.stderr.detach())
 
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s [%(levelname)s] %(message)s',
-    handlers=[
-        logging.FileHandler('analysis.log', encoding='utf-8'),
-        logging.StreamHandler(),
-    ],
-)
+    # 修复日志缓冲区分离问题
+    try:
+        if not sys.stdout.closed:
+            sys.stdout = codecs.getwriter('utf-8')(sys.stdout.detach())
+        if not sys.stderr.closed:
+            sys.stderr = codecs.getwriter('utf-8')(sys.stderr.detach())
+    except (ValueError, AttributeError):
+        # 当stdout/stderr已经被分离时，使用默认的编码
+        pass
+
+# 配置日志，添加错误处理以防止缓冲区分离问题
+try:
+    logging.basicConfig(
+        level=logging.INFO,
+        format='%(asctime)s [%(levelname)s] %(message)s',
+        handlers=[
+            logging.FileHandler('analysis.log', encoding='utf-8'),
+            logging.StreamHandler(),
+        ],
+        force=True,
+    )
+except (ValueError, AttributeError):
+    # 当stdout被重定向或分离时使用基本配置
+    try:
+        logging.basicConfig(
+            level=logging.INFO,
+            format='%(asctime)s [%(levelname)s] %(message)s',
+            handlers=[
+                logging.FileHandler('analysis.log', encoding='utf-8'),
+            ],
+            force=True,
+        )
+    except Exception:
+        # 最后的备用方案
+        pass
 
 # 创建 FastAPI 应用
 app = FastAPI()
@@ -69,6 +94,7 @@ app.add_middleware(
     allow_headers=['*'],
 )
 
+
 # Dependency to get the database session
 def get_db():
     db = SessionLocal()
@@ -76,6 +102,7 @@ def get_db():
         yield db
     finally:
         db.close()
+
 
 # 创建一个进程池
 executor = ProcessPoolExecutor(max_workers=os.cpu_count())
@@ -135,17 +162,19 @@ def analysis_task(project_id: int, bid_document_id: int):
             bid_document_id,
             project_id,
         )
-        
-        bid_document = db.query(BidDocument).filter(BidDocument.id == bid_document_id).first()
+
+        bid_document = (
+            db.query(BidDocument).filter(BidDocument.id == bid_document_id).first()
+        )
         if not bid_document:
             logging.error('投标文件不存在: %s', bid_document_id)
             return
-            
+
         project = db.query(TenderProject).filter(TenderProject.id == project_id).first()
         if not project:
             logging.error('项目不存在: %s', project_id)
             return
-            
+
         tender_file_path = project.tender_file_path
         if not tender_file_path or not os.path.exists(tender_file_path):
             logging.error('招标文件不存在: %s', tender_file_path)
@@ -255,10 +284,10 @@ def analysis_task(project_id: int, bid_document_id: int):
         price_score = result_data.get('price_score', 0)
         detailed_scores = result_data.get('detailed_scores', {})
         extracted_price = result_data.get('extracted_price')
-        
+
         if price_score == 0 and detailed_scores:
             price_score = _extract_price_score_from_detailed_scores(detailed_scores)
-        
+
         analysis_result = AnalysisResult(
             project_id=project_id,
             bid_document_id=bid_document_id,
@@ -273,7 +302,7 @@ def analysis_task(project_id: int, bid_document_id: int):
             is_modified=False,
             modification_count=0,
         )
-        
+
         db.add(analysis_result)
         bid_document.processing_status = 'completed'
         db.commit()
@@ -300,76 +329,81 @@ def _extract_price_score_from_detailed_scores(detailed_scores):
                 detailed_scores = json.loads(detailed_scores)
             except json.JSONDecodeError:
                 return 0.0
-                
+
         if not isinstance(detailed_scores, list):
             return 0.0
-            
+
         def find_price_score(scores):
             for score in scores:
                 criteria_name = score.get('criteria_name', '').lower()
-                is_price_criteria = (
-                    any(keyword in criteria_name for keyword in ['价格', 'price', '报价', '投标报价']) 
-                    or score.get('is_price_criteria', False)
-                )
-                
+                is_price_criteria = any(
+                    keyword in criteria_name
+                    for keyword in ['价格', 'price', '报价', '投标报价']
+                ) or score.get('is_price_criteria', False)
+
                 if is_price_criteria and 'score' in score:
                     return float(score['score'])
-                
+
                 if 'children' in score and score['children']:
                     child_price_score = find_price_score(score['children'])
                     if child_price_score is not None and child_price_score > 0:
                         return child_price_score
-                        
+
             return None
-            
+
         price_score = find_price_score(detailed_scores)
         return float(price_score) if price_score is not None else 0.0
 
     except Exception as e:
-        logging.error(f"从详细评分中提取价格分时出错: {e}")
+        logging.error(f'从详细评分中提取价格分时出错: {e}')
         return 0.0
 
 
-def run_analysis_and_calculate_prices(
-    project_id: int, bid_files_info: list
-):
-    logging.info(f"开始为项目 {project_id} 执行后台分析和价格计算任务。")
-    
+def run_analysis_and_calculate_prices(project_id: int, bid_files_info: list):
+    logging.info(f'开始为项目 {project_id} 执行后台分析和价格计算任务。')
+
     loop = asyncio.new_event_loop()
     asyncio.set_event_loop(loop)
-    
+
     futures = [
         loop.run_in_executor(executor, analysis_task, project_id, bid_info['id'])
         for bid_info in bid_files_info
     ]
 
     loop.run_until_complete(asyncio.gather(*futures))
-    logging.info(f"项目 {project_id} 的所有分析任务已完成。")
+    logging.info(f'项目 {project_id} 的所有分析任务已完成。')
 
     db = SessionLocal()
     try:
-        logging.info(f"开始为项目 {project_id} 计算价格分。")
+        logging.info(f'开始为项目 {project_id} 计算价格分。')
         calculator = PriceScoreCalculator(db_session=db)
         price_scores = calculator.calculate_project_price_scores(project_id)
 
         if price_scores:
-            logging.info(f"项目 {project_id} 价格分计算完成，更新了 {len(price_scores)} 个投标方。")
+            logging.info(
+                f'项目 {project_id} 价格分计算完成，更新了 {len(price_scores)} 个投标方。'
+            )
         else:
-            logging.warning(f"项目 {project_id} 未能计算出任何价格分。")
-            
+            logging.warning(f'项目 {project_id} 未能计算出任何价格分。')
+
         project = db.query(TenderProject).filter(TenderProject.id == project_id).first()
         if project:
-            has_errors = db.query(BidDocument).filter(
-                BidDocument.project_id == project_id,
-                BidDocument.processing_status == 'error'
-            ).count() > 0
-            
+            has_errors = (
+                db.query(BidDocument)
+                .filter(
+                    BidDocument.project_id == project_id,
+                    BidDocument.processing_status == 'error',
+                )
+                .count()
+                > 0
+            )
+
             project.status = 'completed_with_errors' if has_errors else 'completed'
             db.commit()
-            logging.info(f"项目 {project_id} 的状态已更新为 {project.status}。")
+            logging.info(f'项目 {project_id} 的状态已更新为 {project.status}。')
 
     except Exception as e:
-        logging.error(f"为项目 {project_id} 计算价格分时出错: {e}")
+        logging.error(f'为项目 {project_id} 计算价格分时出错: {e}')
         logging.error(traceback.format_exc())
     finally:
         db.close()
@@ -412,9 +446,9 @@ async def analyze_immediately(
         bid_file_path = save_upload_file(
             bid_file, os.path.join(UPLOADS_DIR, f'{project.id}_bid_{bid_file.filename}')
         )
-        
+
         extracted_name = extract_bidder_name_from_file(bid_file_path)
-        
+
         bidder_name = extracted_name
         if not bidder_name:
             bidder_name = (
@@ -422,7 +456,9 @@ async def analyze_immediately(
                 if bid_file.filename
                 else f'unnamed_bid_{bid_file.size}'
             )
-            logging.warning(f"无法从 {bid_file.filename} 中提取投标方名称，将使用文件名 '{bidder_name}' 作为备用。")
+            logging.warning(
+                f"无法从 {bid_file.filename} 中提取投标方名称，将使用文件名 '{bidder_name}' 作为备用。"
+            )
 
         bid_document = BidDocument(
             project_id=project.id,
@@ -511,7 +547,7 @@ async def get_analysis_results(project_id: int, db: Session = Depends(get_db)):
     response_data = []
     for res in results:
         price_score = getattr(res, 'price_score', None)
-        
+
         response_data.append(
             {
                 'id': res.id,
@@ -543,7 +579,9 @@ async def get_scoring_rules(project_id: int, db: Session = Depends(get_db)):
         if isinstance(project.scoring_rules_summary, list):
             return JSONResponse(content=project.scoring_rules_summary)
         else:
-            logging.warning(f"Project {project_id} 的 scoring_rules_summary 格式不正确，将从 ScoringRule 表中回退。")
+            logging.warning(
+                f'Project {project_id} 的 scoring_rules_summary 格式不正确，将从 ScoringRule 表中回退。'
+            )
 
     scoring_rules = (
         db.query(ScoringRule).filter(ScoringRule.project_id == project_id).all()
@@ -593,7 +631,9 @@ async def get_all_projects(db: Session = Depends(get_db)):
                 'project_code': project.project_code,
                 'name': project.name,
                 'description': project.description,
-                'created_at': project.created_at.isoformat() if project.created_at else None,
+                'created_at': project.created_at.isoformat()
+                if project.created_at
+                else None,
                 'status': project.status,
                 'bid_count': bid_count,
                 'result_count': result_count,
@@ -761,6 +801,7 @@ class ScoreUpdateItem(BaseModel):
     id: int
     total_score: float
 
+
 @app.post('/api/analysis-results/bulk-update-scores')
 async def bulk_update_scores(
     score_updates: List[ScoreUpdateItem], db: Session = Depends(get_db)
@@ -771,14 +812,18 @@ async def bulk_update_scores(
         if result:
             result.total_score = update.total_score
             updated_count += 1
-    
+
     if updated_count > 0:
         db.commit()
         logging.info(f'成功更新了 {updated_count} 条分析结果的总分。')
-        return JSONResponse(content={'message': f'成功更新了 {updated_count} 条分析结果的总分。'})
+        return JSONResponse(
+            content={'message': f'成功更新了 {updated_count} 条分析结果的总分。'}
+        )
     else:
         logging.warning('批量更新分数请求未找到任何有效的分析结果。')
-        return JSONResponse(status_code=404, content={'error': '未找到任何有效的分析结果进行更新。'})
+        return JSONResponse(
+            status_code=404, content={'error': '未找到任何有效的分析结果进行更新。'}
+        )
 
 
 if __name__ == '__main__':

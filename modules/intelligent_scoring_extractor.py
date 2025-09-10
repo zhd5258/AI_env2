@@ -349,7 +349,7 @@ class IntelligentScoringExtractor:
         try:
             # 构建AI分析提示词
             prompt = f"""
-请分析以下招标文件中的评分规则，确保总分不超过100分。
+请分析以下招标文件中的评分规则，并返回正确的评分规则结构。
 
 招标文件内容：
 {scoring_section}
@@ -362,7 +362,8 @@ class IntelligentScoringExtractor:
 2. 保持规则的层级结构
 3. 确保父项分数等于子项分数之和
 4. 如果发现重复或错误的规则，请修正
-5. 只返回JSON格式的评分规则，不要包含其他内容
+5. 对于价格分规则，请保留"is_price_rule": true标记
+6. 只返回JSON格式的评分规则，不要包含其他内容
 
 返回格式示例：
 [
@@ -463,14 +464,19 @@ class IntelligentScoringExtractor:
     def _extract_scoring_section(self, full_text: str) -> str:
         """提取评标相关的章节内容"""
         # 寻找评标相关的章节标题
-        scoring_keywords = ['评标', '评分', '评审', '评价', '评分标准', '评标标准']
+        scoring_keywords = ['评标办法', '评分标准', '评审标准', '评价标准', '评分细则', '评标细则']
+        
+        # 章节结束标记
+        end_keywords = ['合同', '附件', '附录', '格式', '投标文件格式', '附表']
 
         lines = full_text.split('\n')
         start_idx = -1
         end_idx = len(lines)
 
+        # 查找评标章节开始位置
         for i, line in enumerate(lines):
-            if any(keyword in line for keyword in scoring_keywords):
+            line_clean = re.sub(r'\s+', '', line)  # 去除所有空白字符便于匹配
+            if any(keyword in line_clean for keyword in scoring_keywords):
                 start_idx = i
                 self.logger.info(f'找到评标章节开始位置: {line.strip()}')
                 break
@@ -479,14 +485,14 @@ class IntelligentScoringExtractor:
             self.logger.warning('未找到评标章节，将使用全文进行评分规则提取')
             return full_text
 
-        # 寻找章节结束位置（下一个章节标题或文档结束）
+        # 查找章节结束位置
         for i in range(start_idx + 1, len(lines)):
             line = lines[i].strip()
             if line and (
-                line.startswith('第')
-                and '章' in line
-                or line.startswith('章')
-                or any(keyword in line for keyword in ['合同', '附件', '附录', '格式'])
+                (line.startswith('第') and '章' in line) or 
+                line.startswith('章') or
+                any(keyword in line for keyword in end_keywords) or
+                re.match(r'^[一二三四五六七八九十]+、', line)  # 新的章节标题
             ):
                 end_idx = i
                 break
@@ -495,10 +501,10 @@ class IntelligentScoringExtractor:
         self.logger.info(f'提取评标章节，长度: {len(scoring_section)} 字符')
 
         # 如果提取的章节太短，使用更大的范围
-        if len(scoring_section) < 500:
+        if len(scoring_section) < 300:  # 降低阈值到300字符
             self.logger.warning('提取的评标章节太短，扩大搜索范围')
             # 扩大搜索范围，包含更多内容
-            expanded_end = min(start_idx + 50, len(lines))  # 至少包含50行
+            expanded_end = min(start_idx + 100, len(lines))  # 增加到100行
             scoring_section = '\n'.join(lines[start_idx:expanded_end])
             self.logger.info(f'扩大后的评标章节，长度: {len(scoring_section)} 字符')
 
@@ -506,6 +512,7 @@ class IntelligentScoringExtractor:
 
     def _verify_and_adjust_scores(self, rules: List[Dict[str, Any]]):
         """递归验证并调整父项的分数，确保总分不超过100分"""
+        total_score = 0
         for rule in rules:
             if rule['children']:
                 # 递归处理子项
@@ -519,39 +526,20 @@ class IntelligentScoringExtractor:
                 # 如果父项分数与子项之和不匹配，进行调整
                 if abs(rule['max_score'] - children_score_sum) > 0.1:  # 使用浮点数容差
                     self.logger.warning(
-                        f"父项 '{rule['criteria_name']}' 的分数 ({rule['max_score']}) "
-                        f'与其子项分数之和 ({children_score_sum}) 不匹配。将自动调整父项分数。'
+                        f"调整父项 '{rule['criteria_name']}' 的分数: {rule['max_score']} -> {children_score_sum}"
                     )
                     rule['max_score'] = children_score_sum
-            else:
-                # 对于叶子节点，确保分数合理
-                if rule['max_score'] > 100:
-                    self.logger.warning(
-                        f"评分项 '{rule['criteria_name']}' 的分数 ({rule['max_score']}) 超过100分，调整为100分"
-                    )
-                    rule['max_score'] = 100.0
+            total_score += rule['max_score']
 
-        # 检查顶级规则的总分
-        total_score = sum(rule['max_score'] for rule in rules)
-        if total_score > 100:
-            self.logger.warning(
-                '总分 (%s) 超过100分，使用AI辅助分析评分规则', total_score
-            )
-            # 使用AI辅助分析评分规则
-            scoring_section = self._extract_scoring_section('\n'.join(self.pages))
-            ai_analyzed_rules = self._ai_analyze_scoring_rules(scoring_section, rules)
-
-            # 验证AI分析结果
-            ai_total_score = sum(rule['max_score'] for rule in ai_analyzed_rules)
-            if abs(ai_total_score - 100.0) < 0.1:
-                self.logger.info('AI分析成功，总分: %s', ai_total_score)
-                return ai_analyzed_rules
-            else:
-                self.logger.warning(
-                    'AI分析结果总分仍不正确: %s，使用默认规则', ai_total_score
-                )
-                # 如果AI分析也失败，返回默认规则
-                return self._get_default_scoring_rules()
+        # 如果是顶层调用且总分不为100，进行整体调整
+        if hasattr(self, '_top_level_call') and self._top_level_call:
+            if abs(total_score - 100.0) > 0.1:
+                self.logger.warning(f"总分 {total_score} 不等于100，需要调整")
+        else:
+            # 设置标志表示这是顶层调用
+            self._top_level_call = True
+            if abs(total_score - 100.0) > 0.1:
+                self.logger.warning(f"总分 {total_score} 不等于100，需要调整")
 
     def parse_evaluation_criteria(self):
         return self.extract_scoring_rules()
