@@ -17,12 +17,19 @@ class PDFProcessor:
             logging.basicConfig(level=logging.INFO, 
                               format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
                               stream=sys.stdout)
-        except ValueError:
+        except (ValueError, AttributeError):
             # 当stdout被重定向或分离时使用基本配置
-            logging.basicConfig(level=logging.INFO,
-                              format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+            try:
+                logging.basicConfig(level=logging.INFO,
+                                  format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+            except Exception:
+                # 最后的备用方案
+                pass
         
         self.logger = logging.getLogger(__name__)
+        # 添加空处理器以防日志记录失败
+        if not self.logger.handlers:
+            self.logger.addHandler(logging.NullHandler())
         self.failed_pages = []  # 用于记录处理失败的页面
 
     def extract_text_per_page(self) -> List[str]:

@@ -70,7 +70,7 @@ def _extract_bidder_name_by_regex(text_to_search: str) -> str | None:
         matches = re.finditer(pattern, text_to_search, re.MULTILINE)
         for match in matches:
             potential_name = match.group(1).strip()
-            logging.info(f"Regex pattern '{pattern}' matched: '{potential_name}'")
+            logging.info("Regex pattern '%s' matched: '%s'", pattern, potential_name)
             
             filtered_name = _filter_bidder_name(potential_name)
             
@@ -78,7 +78,7 @@ def _extract_bidder_name_by_regex(text_to_search: str) -> str | None:
                 logging.info(f"Valid bidder name found via regex: '{filtered_name}'")
                 return filtered_name
             else:
-                logging.info(f"Filtered name '{filtered_name}' is not a valid company name.")
+                logging.info("Filtered name '%s' is not a valid company name.", filtered_name)
     
     return None
 
@@ -109,7 +109,7 @@ def _extract_bidder_name_by_ai(text_to_search: str) -> str | None:
 
         if response and "未找到" not in response:
             potential_name = response.strip()
-            logging.info(f"AI extracted: '{potential_name}'")
+            logging.info("AI extracted: '%s'", potential_name)
             
             filtered_name = _filter_bidder_name(potential_name)
 
@@ -117,7 +117,7 @@ def _extract_bidder_name_by_ai(text_to_search: str) -> str | None:
                 logging.info(f"Valid bidder name found via AI: '{filtered_name}'")
                 return filtered_name
             else:
-                logging.info(f"AI filtered name '{filtered_name}' is not a valid company name.")
+                logging.info("AI filtered name '%s' is not a valid company name.", filtered_name)
 
     except Exception as e:
         logging.error(f"Error during AI bidder name extraction: {e}")
