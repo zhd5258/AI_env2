@@ -1,0 +1,9 @@
+/* 历史页面专用样式 */
+.navbar-brand {
+    font-weight: 600;
+}
+
+.spinner-border {
+    width: 3rem;
+    height: 3rem;
+}

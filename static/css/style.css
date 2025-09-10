@@ -1,0 +1,588 @@
+:root {
+    --primary-color: #4361ee;
+    --secondary-color: #3f37c9;
+    --success-color: #4cc9f0;
+    --accent-color: #f72585;
+    --light-bg: #f8f9fa;
+    --dark-bg: #212529;
+    --card-shadow: 0 10px 20px rgba(0,0,0,0.1), 0 6px 6px rgba(0,0,0,0.1);
+}
+
+body {
+    background: linear-gradient(135deg, #f5f7fa 0%, #c3cfe2 100%);
+    min-height: 100vh;
+    padding: 20px 0;
+    font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+}
+
+.header {
+    text-align: center;
+    margin-bottom: 30px;
+    color: var(--dark-bg);
+}
+
+.header h1 {
+    font-weight: 700;
+    background: linear-gradient(45deg, var(--primary-color), var(--accent-color));
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+    background-clip: text;
+    font-size: 2.5rem;
+    margin-bottom: 10px;
+}
+
+.header p {
+    font-size: 1.1rem;
+    color: #6c757d;
+    max-width: 700px;
+    margin: 0 auto;
+}
+
+.card {
+    border-radius: 15px;
+    box-shadow: var(--card-shadow);
+    border: none;
+    margin-bottom: 25px;
+    transition: transform 0.3s ease, box-shadow 0.3s ease;
+}
+
+.card:hover {
+    transform: translateY(-5px);
+    box-shadow: 0 15px 30px rgba(0,0,0,0.15);
+}
+
+.card-header {
+    background: linear-gradient(45deg, var(--primary-color), var(--secondary-color));
+    color: white;
+    border-radius: 15px 15px 0 0 !important;
+    font-weight: 600;
+    padding: 15px 20px;
+}
+
+.upload-section {
+    background-color: white;
+    border-radius: 15px;
+    padding: 25px;
+    box-shadow: var(--card-shadow);
+    margin-bottom: 25px;
+}
+
+.upload-section .form-label {
+    font-weight: 600;
+    color: #495057;
+}
+
+.btn-primary {
+    background: linear-gradient(45deg, var(--primary-color), var(--secondary-color));
+    border: none;
+    padding: 10px 25px;
+    font-weight: 600;
+    transition: all 0.3s ease;
+}
+
+.btn-primary:hover {
+    transform: translateY(-2px);
+    box-shadow: 0 5px 15px rgba(67, 97, 238, 0.4);
+}
+
+.progress-container {
+    background: white;
+    border-radius: 15px;
+    padding: 25px;
+    box-shadow: var(--card-shadow);
+    margin-bottom: 25px;
+}
+
+.progress {
+    height: 30px;
+    border-radius: 15px;
+    overflow: hidden;
+    background-color: #e9ecef;
+}
+
+.progress-bar {
+    background: linear-gradient(45deg, var(--primary-color), var(--success-color));
+    font-weight: 600;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: white;
+}
+
+.file-list {
+    background-color: #e9ecef;
+    border-radius: 10px;
+    padding: 15px;
+    margin-top: 15px;
+}
+
+.result-section {
+    background: white;
+    border-radius: 15px;
+    padding: 25px;
+    box-shadow: var(--card-shadow);
+}
+
+.result-section h3 {
+    color: var(--primary-color);
+    border-bottom: 2px solid var(--primary-color);
+    padding-bottom: 10px;
+    margin-bottom: 20px;
+}
+
+.bidder-card {
+    border-left: 4px solid var(--primary-color);
+    transition: all 0.3s ease;
+}
+
+.bidder-card:hover {
+    border-left: 4px solid var(--accent-color);
+    box-shadow: 0 5px 15px rgba(0,0,0,0.1);
+}
+
+.score-badge {
+    display: inline-block;
+    padding: 6px 12px;
+    border-radius: 20px;
+    font-weight: 600;
+    text-align: center;
+    min-width: 40px;
+}
+
+.rank-1 {
+    background: linear-gradient(45deg, #FFD700, #FFA500);
+    color: white;
+    box-shadow: 0 3px 10px rgba(255, 215, 0, 0.4);
+}
+
+.rank-2 {
+    background: linear-gradient(45deg, #C0C0C0, #A9A9A9);
+    color: white;
+    box-shadow: 0 3px 10px rgba(192, 192, 192, 0.4);
+}
+
+.rank-3 {
+    background: linear-gradient(45deg, #CD7F32, #A0522D);
+    color: white;
+    box-shadow: 0 3px 10px rgba(205, 127, 50, 0.4);
+}
+
+.rank-other {
+    background: linear-gradient(45deg, var(--primary-color), var(--secondary-color));
+    color: white;
+    box-shadow: 0 3px 10px rgba(67, 97, 238, 0.4);
+}
+
+.accordion-button {
+    font-weight: 600;
+}
+
+.accordion-button:not(.collapsed) {
+    background: linear-gradient(45deg, #f0f4ff, #e2e6ff);
+    color: var(--primary-color);
+}
+
+.modal-content {
+    border-radius: 15px;
+    overflow: hidden;
+}
+
+.modal-header {
+    background: linear-gradient(45deg, var(--primary-color), var(--secondary-color));
+    color: white;
+}
+
+.detail-progress-card {
+    transition: all 0.3s ease;
+    border-radius: 10px;
+    overflow: hidden;
+    box-shadow: 0 2px 5px rgba(0,0,0,0.1);
+}
+
+.detail-progress-card:hover {
+    transform: scale(1.02);
+    box-shadow: 0 5px 15px rgba(0,0,0,0.2);
+}
+
+/* 进度展示优化样式 */
+.progress-container {
+    background: white;
+    border-radius: 15px;
+    padding: 25px;
+    box-shadow: var(--card-shadow);
+    margin-bottom: 25px;
+}
+
+.progress-header {
+    border-bottom: 2px solid #e9ecef;
+    padding-bottom: 15px;
+    margin-bottom: 20px;
+}
+
+.progress-text {
+    font-size: 1.1rem;
+    font-weight: 500;
+}
+
+.progress-details {
+    margin-top: 10px;
+    font-size: 0.9rem;
+    color: #6c757d;
+}
+
+/* 状态徽章优化 */
+.status-badge {
+    font-size: 0.9rem;
+    padding: 8px 15px;
+    border-radius: 50px;
+    font-weight: 500;
+}
+
+.status-processing {
+    background: linear-gradient(45deg, #4cc9f0, #4895ef);
+    color: white;
+}
+
+.status-completed {
+    background: linear-gradient(45deg, #4ade80, #22c55e);
+    color: white;
+}
+
+.status-error {
+    background: linear-gradient(45deg, #f97373, #ef4444);
+    color: white;
+}
+
+/* 表格样式优化 */
+.table-responsive {
+    border-radius: 10px;
+    overflow: hidden;
+    box-shadow: 0 5px 15px rgba(0,0,0,0.08);
+}
+
+.table {
+    margin-bottom: 0;
+}
+
+.table thead th {
+    background: linear-gradient(45deg, var(--primary-color), var(--secondary-color));
+    color: white;
+    font-weight: 600;
+    border: none;
+    position: relative;
+}
+
+.table-hover tbody tr:hover {
+    background-color: rgba(67, 97, 238, 0.05);
+    transform: scale(1.01);
+    transition: all 0.2s ease;
+}
+
+.table th, .table td {
+    vertical-align: middle;
+    padding: 12px 15px;
+}
+
+/* 排名徽章样式 */
+.score-badge {
+    display: inline-block;
+    padding: 6px 12px;
+    border-radius: 20px;
+    font-weight: 600;
+    text-align: center;
+    min-width: 40px;
+}
+
+.rank-1 {
+    background: linear-gradient(45deg, #FFD700, #FFA500);
+    color: white;
+    box-shadow: 0 3px 10px rgba(255, 215, 0, 0.4);
+}
+
+.rank-2 {
+    background: linear-gradient(45deg, #C0C0C0, #A9A9A9);
+    color: white;
+    box-shadow: 0 3px 10px rgba(192, 192, 192, 0.4);
+}
+
+.rank-3 {
+    background: linear-gradient(45deg, #CD7F32, #A0522D);
+    color: white;
+    box-shadow: 0 3px 10px rgba(205, 127, 50, 0.4);
+}
+
+.rank-other {
+    background: linear-gradient(45deg, var(--primary-color), var(--secondary-color));
+    color: white;
+    box-shadow: 0 3px 10px rgba(67, 97, 238, 0.4);
+}
+
+/* 排序表头样式 */
+table th {
+    user-select: none;
+    transition: background-color 0.2s;
+    cursor: pointer;
+}
+
+table th:hover {
+    background: linear-gradient(45deg, var(--secondary-color), var(--primary-color));
+}
+
+.sort-icon {
+    margin-left: 5px;
+    font-size: 0.8em;
+    color: #6c757d;
+}
+
+/* 数据表格增强样式 */
+.data-table {
+    width: 100%;
+    border-collapse: separate;
+    border-spacing: 0;
+    border-radius: 10px;
+    overflow: hidden;
+}
+
+.data-table th:first-child,
+.data-table td:first-child {
+    border-left: none;
+}
+
+.data-table th:last-child,
+.data-table td:last-child {
+    border-right: none;
+}
+
+/* 表格搜索和过滤区域 */
+.table-controls {
+    background: #f8f9fa;
+    padding: 15px;
+    border-radius: 10px;
+    margin-bottom: 20px;
+    box-shadow: 0 2px 5px rgba(0,0,0,0.05);
+}
+
+.table-controls .form-control {
+    border-radius: 20px;
+    border: 1px solid #dee2e6;
+}
+
+.table-controls .btn {
+    border-radius: 20px;
+}
+
+/* 响应式优化 */
+@media (max-width: 768px) {
+    .header h1 {
+        font-size: 2rem;
+    }
+    
+    .upload-section, .progress-container, .result-section {
+        padding: 15px;
+    }
+    
+    .container {
+        padding: 10px;
+    }
+    
+    .table-responsive {
+        font-size: 0.85rem;
+    }
+    
+    .detail-progress-card {
+        margin-bottom: 15px;
+    }
+    
+    .status-badge {
+        font-size: 0.8rem;
+        padding: 5px 10px;
+    }
+    
+    /* 移动端表格优化 */
+    .table thead th {
+        font-size: 0.8rem;
+        padding: 10px 8px;
+    }
+    
+    .table td {
+        font-size: 0.8rem;
+        padding: 10px 8px;
+    }
+    
+    /* 横向滚动表格 */
+    .table-responsive {
+        overflow-x: auto;
+        -webkit-overflow-scrolling: touch;
+    }
+    
+    /* 隐藏部分列以适应小屏幕 */
+    .table-hide-mobile {
+        display: none;
+    }
+    
+    .score-badge {
+        padding: 4px 8px;
+        font-size: 0.8rem;
+        min-width: 30px;
+    }
+    
+    /* 移动端按钮组优化 */
+    .btn-group {
+        flex-wrap: wrap;
+    }
+    
+    .btn-group .btn {
+        flex: 1 1 auto;
+        margin: 2px;
+        border-radius: 20px !important;
+    }
+    
+    /* 移动端控制区域优化 */
+    .table-controls .row > div {
+        margin-bottom: 10px;
+    }
+    
+    /* 移动端图表优化 */
+    #chartView .col-md-8, 
+    #chartView .col-md-4 {
+        margin-bottom: 20px;
+    }
+}
+
+@media (max-width: 576px) {
+    .table thead th {
+        font-size: 0.75rem;
+        padding: 8px 5px;
+    }
+    
+    .table td {
+        font-size: 0.75rem;
+        padding: 8px 5px;
+    }
+    
+    .table-controls {
+        padding: 10px;
+    }
+    
+    .table-controls .form-control {
+        font-size: 0.8rem;
+        padding: 5px 10px;
+    }
+    
+    .table-controls .btn {
+        font-size: 0.8rem;
+        padding: 5px 10px;
+    }
+    
+    /* 极小屏幕优化 */
+    .header h1 {
+        font-size: 1.5rem;
+    }
+    
+    .header p {
+        font-size: 0.9rem;
+    }
+    
+    .card {
+        border-radius: 10px;
+    }
+    
+    .card-header {
+        padding: 10px 15px;
+        font-size: 1rem;
+    }
+    
+    /* 移动端模态框优化 */
+    .modal-dialog {
+        margin: 10px;
+    }
+    
+    .modal-content {
+        border-radius: 10px;
+    }
+}
+
+/* 表格分页样式 */
+.pagination {
+    margin-top: 20px;
+    justify-content: center;
+}
+
+.pagination .page-link {
+    border-radius: 10px;
+    margin: 0 2px;
+    border: 1px solid #dee2e6;
+    color: var(--primary-color);
+}
+
+.pagination .page-link:hover {
+    background-color: var(--primary-color);
+    color: white;
+}
+
+.pagination .page-item.active .page-link {
+    background: linear-gradient(45deg, var(--primary-color), var(--secondary-color));
+    border-color: var(--primary-color);
+}
+
+/* 加载动画 */
+.loading-spinner {
+    display: inline-block;
+    width: 20px;
+    height: 20px;
+    border: 3px solid rgba(67, 97, 238, 0.3);
+    border-radius: 50%;
+    border-top-color: var(--primary-color);
+    animation: spin 1s ease-in-out infinite;
+}
+
+@keyframes spin {
+    to { transform: rotate(360deg); }
+}
+
+/* 工具提示样式 */
+.tooltip {
+    font-size: 0.85rem;
+}
+
+/* 按钮组样式 */
+.btn-group .btn {
+    border-radius: 0;
+}
+
+.btn-group .btn:first-child {
+    border-top-left-radius: 20px;
+    border-bottom-left-radius: 20px;
+}
+
+.btn-group .btn:last-child {
+    border-top-right-radius: 20px;
+    border-bottom-right-radius: 20px;
+}
+
+/* 图表容器优化 */
+#chartView .card {
+    border: none;
+    box-shadow: 0 5px 15px rgba(0,0,0,0.08);
+}
+
+#chartView .card-body {
+    padding: 20px;
+}
+
+/* 移动端图表响应式 */
+@media (max-width: 768px) {
+    #chartView canvas {
+        max-width: 100%;
+        height: auto !important;
+    }
+    
+    #chartView .row {
+        flex-direction: column;
+    }
+    
+    #chartView .col-md-8, 
+    #chartView .col-md-4 {
+        width: 100%;
+    }
+}
