@@ -48,9 +48,17 @@ if sys.platform == 'win32':
 
     # 修复日志缓冲区分离问题
     try:
-        if not sys.stdout.closed:
+        if (
+            hasattr(sys.stdout, 'detach')
+            and callable(getattr(sys.stdout, 'detach', None))
+            and not sys.stdout.closed
+        ):
             sys.stdout = codecs.getwriter('utf-8')(sys.stdout.detach())
-        if not sys.stderr.closed:
+        if (
+            hasattr(sys.stderr, 'detach')
+            and callable(getattr(sys.stderr, 'detach', None))
+            and not sys.stderr.closed
+        ):
             sys.stderr = codecs.getwriter('utf-8')(sys.stderr.detach())
     except (ValueError, AttributeError):
         # 当stdout/stderr已经被分离时，使用默认的编码
