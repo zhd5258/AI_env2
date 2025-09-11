@@ -37,9 +37,9 @@ from modules.database import (
     ScoringRule,
 )
 from modules.intelligent_bid_analyzer import IntelligentBidAnalyzer
-from modules.excel_processor import ExcelProcessor
 from modules.price_score_calculator import PriceScoreCalculator
 from modules.bidder_name_extractor import extract_bidder_name_from_file
+from modules.summary_generator import generate_summary_data
 
 # 1. Setup Logging
 # 设置控制台输出编码为UTF-8
@@ -684,69 +684,19 @@ async def get_failed_pages_info(
         )
 
 
-@app.get('/api/projects/{project_id}/evaluation-table')
-async def get_evaluation_table(project_id: int, db: Session = Depends(get_db)):
+@app.get('/api/projects/{project_id}/dynamic-summary')
+async def get_dynamic_summary(project_id: int, db: Session = Depends(get_db)):
     try:
-        results = (
-            db.query(AnalysisResult)
-            .filter(AnalysisResult.project_id == project_id)
-            .all()
-        )
-        if not results:
-            return JSONResponse(
-                status_code=404, content={'error': 'Results not found for this project'}
-            )
-
-        response_data = []
-        for res in results:
-            response_data.append(
-                {
-                    'bidder_name': res.bidder_name,
-                    'total_score': res.total_score,
-                    'detailed_scores': json.loads(res.detailed_scores)
-                    if isinstance(res.detailed_scores, str)
-                    else res.detailed_scores,
-                    'ai_model': res.ai_model,
-                }
-            )
-
-        processor = ExcelProcessor()
-        evaluation_table = processor.generate_evaluation_table(response_data)
-
-        return JSONResponse(content=evaluation_table)
+        summary_data = generate_summary_data(project_id, db)
+        if 'error' in summary_data:
+            return JSONResponse(status_code=404, content=summary_data)
+        return JSONResponse(content=summary_data)
     except Exception as e:
-        logging.error(f'生成评标办法表格时出错: {e}')
+        logging.error(f'生成动态汇总表时出错: {e}')
+        logging.error(traceback.format_exc())
         return JSONResponse(
             status_code=500,
-            content={'error': f'生成评标办法表格时出错: {str(e)}'},
-        )
-
-
-@app.get('/api/projects/{project_id}/excel-results')
-async def get_excel_results(project_id: int, db: Session = Depends(get_db)):
-    try:
-        processor = ExcelProcessor()
-        results = processor.process_excel_data()
-        return JSONResponse(content=results)
-    except Exception as e:
-        logging.error(f'获取Excel结果时出错: {e}')
-        return JSONResponse(
-            status_code=500,
-            content={'error': f'获取Excel结果时出错: {str(e)}'},
-        )
-
-
-@app.get('/api/projects/{project_id}/excel-scoring-items')
-async def get_excel_scoring_items(project_id: int, db: Session = Depends(get_db)):
-    try:
-        processor = ExcelProcessor()
-        scoring_items = processor.get_scoring_items()
-        return JSONResponse(content=scoring_items)
-    except Exception as e:
-        logging.error(f'获取Excel评分项时出错: {e}')
-        return JSONResponse(
-            status_code=500,
-            content={'error': f'获取Excel评分项时出错: {str(e)}'},
+            content={'error': f'服务器内部错误: {str(e)}'},
         )
 
 

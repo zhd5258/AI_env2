@@ -101,7 +101,19 @@ class ScoringRule(Base):
     description = Column(String)
     # Adding veto item marking field
     is_veto = Column(Boolean, default=False)
+    # 添加层级关系字段
+    parent_id = Column(Integer, ForeignKey('scoring_rule.id'), nullable=True)
+    # 添加序号字段
+    numbering = Column(String)
+    # 添加是否为价格评分标准字段
+    is_price_criteria = Column(Boolean, default=False)
+    # 添加价格计算公式字段
+    price_formula = Column(String, nullable=True)
+    
     project = relationship('TenderProject', back_populates='scoring_rules')
+    # 添加子项关系
+    children = relationship('ScoringRule', back_populates='parent')
+    parent = relationship('ScoringRule', back_populates='children', remote_side=[id])
 
 
 class ScoreModificationHistory(Base):

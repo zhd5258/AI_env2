@@ -83,74 +83,57 @@ document.addEventListener('DOMContentLoaded', function () {
         modal.show();
 
         try {
-            // 并行获取评标总表和原始分析结果（为了价格分）
-            const [evalTableResponse, resultsResponse] = await Promise.all([
-                fetch(`/api/projects/${projectId}/evaluation-table`),
-                fetch(`/api/projects/${projectId}/results`)
-            ]);
+            // 调用新的动态汇总API
+            const response = await fetch(`/api/projects/${projectId}/dynamic-summary`);
 
-            if (!evalTableResponse.ok || !resultsResponse.ok) {
-                throw new Error('无法获取项目结果，请稍后重试');
+            if (!response.ok) {
+                const errorData = await response.json();
+                throw new Error(errorData.error || '无法获取项目结果，请稍后重试');
             }
 
-            const evaluationTable = await evalTableResponse.json();
-            const results = await resultsResponse.json();
+            const summaryData = await response.json();
             
             let content = `<h5>项目ID: ${projectId}</h5>`;
 
-            // --- 1. 渲染详细的评标汇总表 ---
+            // --- 渲染动态生成的评标汇总表 ---
             content += '<h6><i class="fas fa-table me-2"></i>评标汇总表</h6>';
-            if (evaluationTable && evaluationTable.headers && evaluationTable.rows) {
+            if (summaryData && summaryData.headers && summaryData.rows) {
                 content += '<div class="table-responsive">';
                 content += '<table class="table table-bordered table-striped table-hover">';
+                
                 // 渲染表头
                 content += '<thead class="table-dark"><tr>';
-                evaluationTable.headers.forEach(header => {
+                summaryData.headers.forEach(header => {
                     content += `<th>${header}</th>`;
                 });
                 content += '</tr></thead>';
+                
                 // 渲染数据行
                 content += '<tbody>';
-                evaluationTable.rows.forEach(row => {
+                summaryData.rows.forEach(rowData => {
                     content += '<tr>';
-                    row.forEach(cell => {
-                        // 对数字类型进行格式化，保留两位小数
-                        const cellValue = (typeof cell === 'number') ? cell.toFixed(2) : cell;
+                    // 排名和投标人名称
+                    content += `<td>${rowData.rank}</td>`;
+                    content += `<td>${rowData.bidder_name}</td>`;
+                    
+                    // 各评分项得分
+                    rowData.scores.forEach(score => {
+                        const cellValue = (typeof score === 'number') ? score.toFixed(2) : (score === null ? 'N/A' : score);
                         content += `<td>${cellValue}</td>`;
                     });
+                    
+                    // 价格分和总分
+                    const priceScore = (typeof rowData.price_score === 'number') ? rowData.price_score.toFixed(2) : 'N/A';
+                    const totalScore = (typeof rowData.total_score === 'number') ? rowData.total_score.toFixed(2) : 'N/A';
+                    content += `<td>${priceScore}</td>`;
+                    content += `<td>${totalScore}</td>`;
+
                     content += '</tr>';
                 });
                 content += '</tbody></table>';
                 content += '</div>';
             } else {
-                content += '<div class="alert alert-warning">无法加载详细的评标汇总表。</div>';
-            }
-
-            // --- 2. 渲染价格分详情表 ---
-            content += '<h6 class="mt-4"><i class="fas fa-dollar-sign me-2"></i>价格分详情</h6>';
-            if (results && results.length > 0) {
-                const priceData = results.map(r => ({
-                    bidder_name: r.bidder_name,
-                    extracted_price: r.extracted_price,
-                    price_score: r.price_score
-                })).sort((a, b) => {
-                    if (!a.extracted_price || a.extracted_price <= 0) return 1;
-                    if (!b.extracted_price || b.extracted_price <= 0) return -1;
-                    return a.extracted_price - b.extracted_price;
-                });
-
-                content += '<div class="table-responsive">';
-                content += '<table class="table table-bordered">';
-                content += '<thead class="table-light"><tr><th>价格排名</th><th>投标方</th><th>投标报价 (元)</th><th>价格得分</th></tr></thead><tbody>';
-                priceData.forEach((data, index) => {
-                    const priceDisplay = data.extracted_price ? data.extracted_price.toLocaleString('zh-CN', { style: 'currency', currency: 'CNY' }) : 'N/A';
-                    const priceScoreDisplay = data.price_score !== null ? data.price_score.toFixed(2) : 'N/A';
-                    content += `<tr><td>${index + 1}</td><td>${data.bidder_name}</td><td>${priceDisplay}</td><td>${priceScoreDisplay}</td></tr>`;
-                });
-                content += '</tbody></table>';
-                content += '</div>';
-            } else {
-                content += '<div class="alert alert-warning">没有找到价格分详细信息。</div>';
+                content += `<div class="alert alert-warning">${summaryData.error || '无法加载详细的评标汇总表。'}</div>`;
             }
 
             modalBody.innerHTML = content;

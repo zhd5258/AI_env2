@@ -4,7 +4,9 @@
 """
 
 import logging
-from typing import List, Dict, Any, Optional, Tuple
+import json
+import re
+from typing import List, Dict, Any, Optional, Tuple, Union
 from modules.database import SessionLocal, AnalysisResult, ScoringRule
 
 
@@ -49,65 +51,89 @@ class PriceScoreCalculator:
             for result in analysis_results:
                 # 从detailed_scores中查找价格分项
                 price_info = self._extract_price_from_result(result)
-                if price_info:
-                    bidder_prices[result.bidder_name] = price_info
+                if price_info and price_info.get('price') is not None:
+                    bidder_prices[result.bidder_name] = price_info['price']
+                elif result.extracted_price is not None:
+                    # 使用直接提取的价格
+                    bidder_prices[result.bidder_name] = result.extracted_price
 
             if not bidder_prices:
-                self.logger.warning(f'项目 {project_id} 没有找到有效的价格信息')
+                self.logger.warning(f'项目 {project_id} 没有找到有效的投标价格')
                 return {}
 
-            # 3. 获取价格分的满分和计算公式
-            price_max_score, price_formula = self._get_price_rule_info(project_id, db)
-
-            # 4. 计算价格分
-            price_scores = self._calculate_price_scores(
-                bidder_prices, price_max_score, price_formula
+            # 3. 获取评分规则中的价格分规则
+            price_rules = (
+                db.query(ScoringRule)
+                .filter(
+                    ScoringRule.project_id == project_id,
+                    ScoringRule.is_price_criteria == True
+                )
+                .all()
             )
 
-            # 5. 更新数据库中的价格分
-            self._update_price_scores_in_db(analysis_results, price_scores, db)
+            price_max_score = 40  # 默认值
+            price_formula = None
+            
+            if price_rules:
+                price_rule = price_rules[0]  # 通常只有一个价格评分规则
+                price_max_score = price_rule.max_score
+                price_formula = price_rule.price_formula
+                self.logger.info(f"找到价格评分规则: 满分 {price_max_score}, 公式: {price_formula}")
+            else:
+                self.logger.warning(f'项目 {project_id} 没有找到价格评分规则，使用默认值')
 
-            return price_scores
+            # 4. 计算价格分
+            scores = self._calculate_price_scores(bidder_prices, price_max_score, price_formula)
+            
+            # 5. 更新数据库中的价格分
+            for result in analysis_results:
+                if result.bidder_name in scores:
+                    result.price_score = scores[result.bidder_name]
+                    # 同时更新总分
+                    if result.detailed_scores:
+                        total_score = sum(
+                            item.get('score', 0) 
+                            for item in result.detailed_scores 
+                            if item.get('criteria_name') != '价格分'
+                        )
+                        result.total_score = total_score + scores[result.bidder_name]
+            
+            if should_close:
+                db.commit()
+                
+            return scores
 
         except Exception as e:
-            self.logger.error(f'计算项目 {project_id} 价格分时出错: {e}')
+            self.logger.error(f'计算项目 {project_id} 的价格分时出错: {e}', exc_info=True)
+            if should_close:
+                db.rollback()
             return {}
         finally:
             if should_close:
                 db.close()
 
-    def _extract_price_from_result(self, result: AnalysisResult) -> Optional[float]:
+    def _extract_price_from_result(self, result: AnalysisResult) -> Optional[Dict[str, Any]]:
         """
         从分析结果中提取价格信息
-
+        
         Args:
-            result: 分析结果对象
-
+            result: AnalysisResult对象
+            
         Returns:
-            Optional[float]: 提取到的价格，如果未找到则返回None
+            Optional[Dict[str, Any]]: 价格信息字典，包含'price'键
         """
-        try:
-            # 首先尝试从result.extracted_price获取价格
-            if result.extracted_price is not None:
-                return float(result.extracted_price)
-
-            # 从detailed_scores中查找价格分项
-            detailed_scores = result.detailed_scores
-            if isinstance(detailed_scores, str):
-                import json
-
-                detailed_scores = json.loads(detailed_scores)
-
-            # 递归查找价格分项
-            price = self._find_price_in_scores(detailed_scores)
-            if price is not None:
-                return price
-
+        if not result.detailed_scores:
             return None
 
-        except Exception as e:
-            self.logger.error(f'从分析结果中提取价格时出错: {e}')
-            return None
+        # 查找价格分项
+        for item in result.detailed_scores:
+            if item.get('is_price_criteria') or '价格' in item.get('criteria_name', ''):
+                return {
+                    'price': item.get('price') or item.get('score'),
+                    'details': item
+                }
+        
+        return None
 
     def _find_price_in_scores(self, scores: List[Dict[str, Any]]) -> Optional[float]:
         """
@@ -148,112 +174,193 @@ class PriceScoreCalculator:
 
         return None
 
-    def _get_price_rule_info(self, project_id: int, db) -> Tuple[float, Optional[str]]:
+    def _parse_price_formula(self, price_formula: Optional[str], price_description: Optional[str]) -> Optional[Dict[str, Any]]:
         """
-        获取价格分的满分和计算公式
-
+        解析价格计算公式和变量定义
+        
         Args:
-            project_id: 项目ID
-            db: 数据库会话
-
+            price_formula: 价格计算公式
+            price_description: 价格评分描述
+            
         Returns:
-            Tuple[float, Optional[str]]: (价格分的满分, 价格计算公式)
+            Optional[Dict[str, Any]]: 包含公式和变量定义的字典
         """
-        try:
-            # 从评分规则中查找价格分的满分和公式
-            scoring_rules = (
-                db.query(ScoringRule).filter(ScoringRule.project_id == project_id).all()
-            )
+        if not price_formula and not price_description:
+            return None
+            
+        # 尝试从AI分析的结果中提取公式和变量定义
+        formula_info = {
+            'formula': price_formula,
+            'description': price_description,
+            'variables': {}
+        }
+            
+        # 如果有描述信息，尝试从中提取变量定义
+        if price_description:
+            # 简单的变量提取逻辑（实际应用中可能需要更复杂的处理）
+            variables = {}
+            
+            # 查找类似"评标基准价"的变量定义
+            benchmark_pattern = r'(评标基准价|基准价)[^\n]*?([最低报价|最低评标价|满足要求的最低价])'
+            benchmark_match = re.search(benchmark_pattern, price_description)
+            if benchmark_match:
+                variables['benchmark_price'] = benchmark_match.group(2)
+                
+            # 查找满分定义
+            max_score_pattern = r'(\d+(?:\.\d+)?)\s*分|满分\s*(\d+(?:\.\d+)?)'
+            max_score_match = re.search(max_score_pattern, price_description)
+            if max_score_match:
+                score = max_score_match.group(1) or max_score_match.group(2)
+                if score:
+                    variables['max_score'] = float(score)
+            
+            formula_info['variables'] = variables
+            
+        return formula_info
 
-            for rule in scoring_rules:
-                criteria_name = rule.criteria_name.lower()
-                if any(
-                    keyword in criteria_name
-                    for keyword in ['价格', 'price', '报价', '投标报价']
-                ):
-                    # 价格计算公式存储在description字段
-                    formula = rule.description
-                    self.logger.info(f'项目 {project_id} 找到价格分计算公式: {formula}')
-                    return float(rule.max_score), formula
-
-            # 如果没有找到，返回默认值
-            self.logger.warning(
-                f'项目 {project_id} 未找到价格分计算规则，将使用默认规则'
-            )
-            return 40.0, None
-
-        except Exception as e:
-            self.logger.error(f'获取价格分满分和公式时出错: {e}')
-            return 40.0, None
-
-    def _calculate_price_scores(
-        self,
-        bidder_prices: Dict[str, float],
-        price_max_score: float,
-        formula: Optional[str],
+    def _calculate_with_custom_formula(
+        self, 
+        bidder_prices: Dict[str, float], 
+        price_max_score: float, 
+        formula_info: Dict[str, Any]
     ) -> Dict[str, float]:
         """
-        根据从招标文件提取的评标规则计算价格分
-
+        使用自定义公式计算价格分
+        
         Args:
-            bidder_prices: 投标方价格映射
+            bidder_prices: 投标方价格
             price_max_score: 价格分满分
-            formula: 价格分计算公式 (例如: "(min_price / price) * price_max_score")
+            formula_info: 公式信息
+            
+        Returns:
+            Dict[str, float]: 投标方名称到价格分的映射
+        """
+        scores = {}
+        
+        # 获取变量定义
+        variables = formula_info.get('variables', {})
+        benchmark_definition = variables.get('benchmark_price', '最低报价')
+        
+        # 确定评标基准价
+        benchmark_price = None
+        if '最低' in benchmark_definition:
+            benchmark_price = min(bidder_prices.values())
+        else:
+            # 默认使用最低报价作为评标基准价
+            benchmark_price = min(bidder_prices.values())
+            
+        self.logger.info(f"评标基准价定义: {benchmark_definition}, 实际评标基准价: {benchmark_price}")
 
+        # 根据公式计算每个投标人的价格分
+        formula = formula_info.get('formula', '')
+        description = formula_info.get('description', '')
+        
+        # 如果公式中包含特定的计算方式，则按该方式计算
+        if '评标基准价/投标报价' in formula or '基准价/报价' in formula:
+            self.logger.info("使用 评标基准价/投标报价 的计算方式")
+            for bidder, price in bidder_prices.items():
+                # 投标报价得分＝（评标基准价/投标报价）*价格分满分
+                score = (benchmark_price / price) * price_max_score
+                scores[bidder] = round(score, 2)
+                self.logger.info(f"投标人 {bidder} 报价 {price}，得分 {scores[bidder]}")
+        else:
+            # 使用AI辅助计算（如果需要更复杂的计算）
+            self.logger.info("使用AI辅助计算价格分")
+            scores = self._calculate_with_ai_assistance(bidder_prices, price_max_score, formula_info)
+            
+        return scores
+
+    def _calculate_with_ai_assistance(
+        self, 
+        bidder_prices: Dict[str, float], 
+        price_max_score: float, 
+        formula_info: Dict[str, Any]
+    ) -> Dict[str, float]:
+        """
+        使用AI辅助计算价格分
+        
+        Args:
+            bidder_prices: 投标方价格
+            price_max_score: 价格分满分
+            formula_info: 公式信息
+            
+        Returns:
+            Dict[str, float]: 投标方名称到价格分的映射
+        """
+        # 这里可以实现更复杂的AI辅助计算逻辑
+        # 目前我们简化处理，使用默认方法
+        return self._calculate_with_default_method(bidder_prices, price_max_score)
+
+    def _calculate_with_default_method(
+        self, 
+        bidder_prices: Dict[str, float], 
+        price_max_score: float
+    ) -> Dict[str, float]:
+        """
+        使用默认方法计算价格分
+        
+        Args:
+            bidder_prices: 投标方价格
+            price_max_score: 价格分满分
+            
+        Returns:
+            Dict[str, float]: 投标方名称到价格分的映射
+        """
+        scores = {}
+        # 找到最低价格作为评标基准价
+        min_price = min(bidder_prices.values())
+        self.logger.info(f"评标基准价: {min_price}")
+
+        for bidder, price in bidder_prices.items():
+            if price == min_price:
+                # 最低报价得满分
+                scores[bidder] = price_max_score
+                self.logger.info(f"投标人 {bidder} 报价为最低价 {price}，得满分 {price_max_score}")
+            else:
+                # 按照评标规则公式计算：投标报价得分＝（评标基准价/投标报价）*满分
+                score = (min_price / price) * price_max_score
+                scores[bidder] = round(score, 2)
+                self.logger.info(f"投标人 {bidder} 报价 {price}，得分 {scores[bidder]}")
+                
+        return scores
+
+    def _calculate_price_scores(
+        self, 
+        bidder_prices: Dict[str, float], 
+        price_max_score: float, 
+        price_formula: Optional[str] = None,
+        price_description: Optional[str] = None
+    ) -> Dict[str, float]:
+        """
+        计算各投标方的价格分
+        
+        Args:
+            bidder_prices: 投标方名称到价格的映射
+            price_max_score: 价格分满分
+            price_formula: 价格计算公式（如果有）
+            price_description: 价格评分描述（如果有）
+            
         Returns:
             Dict[str, float]: 投标方名称到价格分的映射
         """
         if not bidder_prices:
             return {}
 
-        # 筛选出有效的价格（大于0）
-        valid_prices = {
-            bidder: price for bidder, price in bidder_prices.items() if price > 0
-        }
-        if not valid_prices:
-            self.logger.warning('没有找到任何有效的投标报价（大于0）')
-            return {bidder: 0.0 for bidder in bidder_prices}
-
-        # 找到最低价格作为评标基准价
-        min_price = min(valid_prices.values())
-
-        # 如果没有提供公式，则使用默认的线性插值法
-        if not formula:
-            formula = '(min_price / price) * price_max_score'
-            self.logger.info(f'使用默认价格分计算公式: {formula}')
-
-        price_scores = {}
-        for bidder, price in bidder_prices.items():
-            # 对于无效报价（0或None），价格分直接给0
-            if price is None or price <= 0:
-                price_scores[bidder] = 0.0
-                continue
-
-            try:
-                # 为eval准备一个安全的环境
-                safe_dict = {
-                    'min_price': min_price,
-                    'price': price,
-                    'price_max_score': price_max_score,
-                    'round': round,
-                    'min': min,
-                    'max': max,
-                }
-                # 执行计算
-                score = eval(formula, {'__builtins__': {}}, safe_dict)
-                # 确保分数不会超过满分
-                price_scores[bidder] = round(min(score, price_max_score), 2)
-
-            except Exception as e:
-                self.logger.error(
-                    f"执行价格分公式 '{formula}' 时出错 (bidder: {bidder}): {e}. "
-                    f'将使用默认公式进行回退计算。'
-                )
-                # 回退到默认公式
-                score = (min_price / price) * price_max_score
-                price_scores[bidder] = round(min(score, price_max_score), 2)
-
-        return price_scores
+        scores = {}
+        
+        # 解析价格计算公式和变量定义
+        formula_info = self._parse_price_formula(price_formula, price_description)
+        
+        # 如果有专门的价格计算公式，使用AI辅助计算
+        if formula_info and formula_info.get('formula') and formula_info.get('variables'):
+            self.logger.info("使用专门的价格计算公式进行计算")
+            scores = self._calculate_with_custom_formula(bidder_prices, price_max_score, formula_info)
+        else:
+            # 使用默认计算方法
+            self.logger.info("使用默认价格计算方法")
+            scores = self._calculate_with_default_method(bidder_prices, price_max_score)
+                
+        return scores
 
     def _update_price_scores_in_db(
         self, analysis_results: List[AnalysisResult], price_scores: Dict[str, float], db
