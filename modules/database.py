@@ -92,28 +92,18 @@ class AnalysisResult(Base):
 
 class ScoringRule(Base):
     __tablename__ = 'scoring_rule'
-    id = Column(Integer, primary_key=True, index=True)
+    id = Column(Integer, primary_key=True, index=True, autoincrement=True)
     project_id = Column(Integer, ForeignKey('tender_project.id'))
-    category = Column(String)
-    criteria_name = Column(String)
-    max_score = Column(Float)
-    weight = Column(Float)
-    description = Column(String)
-    # Adding veto item marking field
-    is_veto = Column(Boolean, default=False)
-    # 添加层级关系字段
-    parent_id = Column(Integer, ForeignKey('scoring_rule.id'), nullable=True)
-    # 添加序号字段
-    numbering = Column(String)
-    # 添加是否为价格评分标准字段
-    is_price_criteria = Column(Boolean, default=False)
-    # 添加价格计算公式字段
-    price_formula = Column(String, nullable=True)
+    Parent_Item_Name = Column(String(20))
+    Parent_max_score = Column(Integer)
+    Child_Item_Name = Column(String(20))
+    Child_max_score = Column(Integer)
+    description = Column(String(100))
+    is_veto = Column(Boolean)
+    is_price_criteria = Column(Boolean)
+    price_formula = Column(String(100))
     
     project = relationship('TenderProject', back_populates='scoring_rules')
-    # 添加子项关系
-    children = relationship('ScoringRule', back_populates='parent')
-    parent = relationship('ScoringRule', back_populates='children', remote_side=[id])
 
 
 class ScoreModificationHistory(Base):

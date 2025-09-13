@@ -80,6 +80,12 @@ class EnhancedPriceExtractor:
             r'￥\s*([\d,]+\.?\d*)',
             r'([\d,]+\.?\d*)\s*元',
         ]
+        # 专门针对价格一览表的模式
+        self.price_summary_patterns = [
+            r'(小写).*?(\d[\d,]*\.?\d*)',
+            r'(大写).*?([壹贰叁肆伍陆柒捌玖拾佰仟万亿零一二三四五六七八九十百千万亿]+)',
+            r'(总报价|总价).*?(\d[\d,]*\.?\d*)',
+        ]
 
     def extract_enhanced_prices(self, pages: List[str]) -> List[Dict[str, Any]]:
         """
@@ -88,13 +94,18 @@ class EnhancedPriceExtractor:
         all_prices = []
         
         # 1. 识别关键章节
-        price_summary_pages = self._identify_sections(pages, ['投标一览表', '开标一览表'])
+        price_summary_pages = self._identify_sections(pages, ['投标一览表', '开标一览表', '价格一览表'])
         price_doc_pages = self._identify_sections(pages, ['价格文件', '报价部分'])
 
         for i, page_text in enumerate(pages):
             context = page_text.replace('\n', ' ')
             
-            # 2. 在页面中查找所有可能的价格
+            # 2. 特别处理价格一览表页面
+            if i in price_summary_pages:
+                summary_prices = self._extract_prices_from_summary_page(page_text, i)
+                all_prices.extend(summary_prices)
+            
+            # 3. 在页面中查找所有可能的价格
             # 查找与关键字强相关的价格
             for pattern in self.price_patterns:
                 for match in re.finditer(pattern, context):
@@ -135,6 +146,54 @@ class EnhancedPriceExtractor:
 
         return all_prices
 
+    def _extract_prices_from_summary_page(self, page_text: str, page_index: int) -> List[Dict[str, Any]]:
+        """
+        从价格一览表页面提取价格，特别处理小写和大写价格对照的情况
+        """
+        prices = []
+        xiaoxie_price = None
+        daxie_price_text = None
+        daxie_price_value = None
+        
+        # 查找小写价格
+        xiaoxie_match = re.search(r'(小写).*?(\d[\d,]*\.?\d*)', page_text, re.IGNORECASE)
+        if xiaoxie_match:
+            xiaoxie_price_str = xiaoxie_match.group(2)
+            xiaoxie_price = self._str_to_float(xiaoxie_price_str)
+            if xiaoxie_price is not None:
+                prices.append({
+                    'value': xiaoxie_price, 
+                    'page': page_index, 
+                    'confidence': 90,  # 高置信度
+                    'reason': '价格一览表小写价格'
+                })
+        
+        # 查找大写价格
+        daxie_match = re.search(r'(大写).*?([壹贰叁肆伍陆柒捌玖拾佰仟万亿零一二三四五六七八九十百千万亿]+)', page_text, re.IGNORECASE)
+        if daxie_match:
+            daxie_price_text = daxie_match.group(2)
+            daxie_price_value = self.converter.chinese_to_number(daxie_price_text)
+            if daxie_price_value is not None:
+                prices.append({
+                    'value': daxie_price_value, 
+                    'page': page_index, 
+                    'confidence': 85,  # 较高置信度
+                    'reason': '价格一览表大写价格'
+                })
+        
+        # 如果同时找到小写和大写价格，进行验证
+        if xiaoxie_price is not None and daxie_price_value is not None:
+            # 如果两个价格相差不大(允许一定误差)，则提高小写价格的置信度
+            if abs(xiaoxie_price - daxie_price_value) / max(xiaoxie_price, daxie_price_value) < 0.01:  # 1%误差范围内
+                # 找到小写价格条目并提高置信度
+                for price_info in prices:
+                    if price_info['value'] == xiaoxie_price:
+                        price_info['confidence'] = 95  # 很高置信度
+                        price_info['reason'] = '价格一览表小写价格(与大写价格匹配)'
+                        break
+        
+        return prices
+
     def select_best_total_price(self, prices: List[Dict[str, Any]]) -> Optional[float]:
         """
         根据置信度选择最可信的投标总价。
@@ -170,9 +229,9 @@ class EnhancedPriceExtractor:
 
         # 章节加分
         if page_index in price_summary_pages:
-            confidence += 40  # 在“投标一览表”中，权重最高
+            confidence += 40  # 在"投标一览表"中，权重最高
         elif page_index in price_doc_pages:
-            confidence += 20  # 在“价格文件”中，权重次之
+            confidence += 20  # 在"价格文件"中，权重次之
 
         # 大写中文验证加分
         if chinese_price_str:
@@ -217,7 +276,7 @@ class EnhancedPriceExtractor:
             bool: 如果是总价返回True，否则返回False
         """
         # 检查上下文中是否包含价格数值和总价相关关键字
-        total_keywords = ['总价', '总报价', '投标报价', '合计', '总计', '报价总额']
+        total_keywords = ['总价', '总报价', '投标报价', '合计', '总计', '报价总额', '小写', '大写']
         
         # 检查上下文中是否包含总价相关关键字
         context_contains_keyword = any(keyword in context for keyword in total_keywords)

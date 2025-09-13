@@ -75,6 +75,16 @@ document.addEventListener('DOMContentLoaded', function () {
         }
     }
 
+    function simplifyName(name, maxLength = 10) {
+        if (typeof name !== 'string' || name.length <= maxLength) {
+            return { simplified: name, full: name };
+        }
+        return {
+            simplified: name.substring(0, maxLength) + '...',
+            full: name
+        };
+    }
+
     window.viewProjectDetails = async function (projectId) {
         const modalBody = document.getElementById('projectDetailsModalBody');
         const modal = new bootstrap.Modal(document.getElementById('projectDetailsModal'));
@@ -83,7 +93,6 @@ document.addEventListener('DOMContentLoaded', function () {
         modal.show();
 
         try {
-            // 调用新的动态汇总API
             const response = await fetch(`/api/projects/${projectId}/dynamic-summary`);
 
             if (!response.ok) {
@@ -95,34 +104,43 @@ document.addEventListener('DOMContentLoaded', function () {
             
             let content = `<h5>项目ID: ${projectId}</h5>`;
 
-            // --- 渲染动态生成的评标汇总表 ---
             content += '<h6><i class="fas fa-table me-2"></i>评标汇总表</h6>';
-            if (summaryData && summaryData.headers && summaryData.rows) {
+            if (summaryData && summaryData.header_rows && summaryData.rows) {
                 content += '<div class="table-responsive">';
                 content += '<table class="table table-bordered table-striped table-hover">';
                 
-                // 渲染表头
-                content += '<thead class="table-dark"><tr>';
-                summaryData.headers.forEach(header => {
-                    content += `<th>${header}</th>`;
+                // 渲染多层表头
+                content += '<thead class="table-dark">';
+                summaryData.header_rows.forEach(headerRowData => {
+                    content += '<tr>';
+                    headerRowData.forEach(headerCell => {
+                        const colspan = headerCell.colspan ? `colspan="${headerCell.colspan}"` : '';
+                        const rowspan = headerCell.rowspan ? `rowspan="${headerCell.rowspan}"` : '';
+                        
+                        // 对子项名称进行简化
+                        const isChildItem = !headerCell.colspan && !headerCell.rowspan;
+                        const nameInfo = isChildItem ? simplifyName(headerCell.name) : { simplified: headerCell.name, full: headerCell.name };
+                        
+                        const title = (nameInfo.simplified !== nameInfo.full) ? `title="${nameInfo.full}"` : '';
+
+                        content += `<th ${colspan} ${rowspan} ${title}>${nameInfo.simplified}</th>`;
+                    });
+                    content += '</tr>';
                 });
-                content += '</tr></thead>';
+                content += '</thead>';
                 
                 // 渲染数据行
                 content += '<tbody>';
                 summaryData.rows.forEach(rowData => {
                     content += '<tr>';
-                    // 排名和投标人名称
                     content += `<td>${rowData.rank}</td>`;
                     content += `<td>${rowData.bidder_name}</td>`;
                     
-                    // 各评分项得分
                     rowData.scores.forEach(score => {
                         const cellValue = (typeof score === 'number') ? score.toFixed(2) : (score === null ? 'N/A' : score);
                         content += `<td>${cellValue}</td>`;
                     });
                     
-                    // 价格分和总分
                     const priceScore = (typeof rowData.price_score === 'number') ? rowData.price_score.toFixed(2) : 'N/A';
                     const totalScore = (typeof rowData.total_score === 'number') ? rowData.total_score.toFixed(2) : 'N/A';
                     content += `<td>${priceScore}</td>`;

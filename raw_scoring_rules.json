@@ -1,0 +1,46 @@
+[
+  {
+    "criteria_name": "商务部分(18分)",
+    "max_score": 18.0,
+    "description": "响应人须具备有效的质量管理体系、环境管理体系、职业健康管理体系认证证书，具备一项得1分，最多得5分。（复印件加盖公章）",
+    "is_price_criteria": false,
+    "price_formula": null,
+    "numbering": [
+      1
+    ],
+    "children": []
+  },
+  {
+    "criteria_name": "服务部分（10分）",
+    "max_score": 10.0,
+    "description": "根据投标人提供的售后服务方案（响应时间，排障时间，售后人员及机构，培训方案、质保时间、易损件配置等）等进行综合评定，最优的得5分，依名次递减1-5分；",
+    "is_price_criteria": false,
+    "price_formula": null,
+    "numbering": [
+      5
+    ],
+    "children": []
+  },
+  {
+    "criteria_name": "技术部分(32分)",
+    "max_score": 32.0,
+    "description": "投标货物或其配件为一线品牌的得2分，非一线品牌根据使用情况评分1分，其余不得分。",
+    "is_price_criteria": false,
+    "price_formula": null,
+    "numbering": [
+      8
+    ],
+    "children": []
+  },
+  {
+    "criteria_name": "价格分（40分）",
+    "max_score": 40.0,
+    "description": "",
+    "is_price_criteria": true,
+    "price_formula": "",
+    "numbering": [
+      14
+    ],
+    "children": []
+  }
+]

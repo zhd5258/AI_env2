@@ -1,9 +1,11 @@
 import re
 import logging
 from typing import List, Dict, Any
+from .text_analyzer_helpers import TextAnalyzerHelpers
+
 
 # 为避免循环导入，将这些函数作为静态方法实现
-class TextAnalyzerMixin:
+class TextAnalyzerMixin(TextAnalyzerHelpers):
     """文本分析混入类，提供文本形式评分规则提取功能"""
     
     def _extract_scoring_rules_from_text(self) -> List[Dict[str, Any]]:
@@ -49,35 +51,26 @@ class TextAnalyzerMixin:
 
             # 5. 如果规则提取失败，尝试使用AI辅助分析整个章节
             if not final_rules:
-                self.logger.warning('结构化规则提取失败，尝试使用AI辅助分析...')
-                # 使用全文进行AI分析，而不仅仅是章节内容
-                final_rules = self._ai_extract_rules(full_text)
+                self.logger.info('未提取到结构化评分规则，尝试使用AI辅助分析')
+                ai_rules = self._try_extract_with_ai(evaluation_section_text)
+                if ai_rules:
+                    final_rules = ai_rules
+                    self.logger.info(f'AI辅助分析提取到 {len(ai_rules)} 条评分规则')
+                else:
+                    self.logger.warning('AI辅助分析也未能提取到评分规则')
 
-            # 6. 如果AI分析也失败，使用默认规则
-            if not final_rules:
-                self.logger.warning('AI分析也失败，使用默认评分规则...')
-                final_rules = self._get_default_scoring_rules()
-
-            # 7. 将扁平的规则列表构建成层级树
+            # 6. 构建评分规则树结构
             if final_rules:
+                # 构建树结构
                 tree = self._build_tree_from_flat_list(final_rules)
-                self._verify_and_adjust_scores(tree)  # 验证并调整分数
-                self.logger.info(f'成功提取到 {len(final_rules)} 条评分规则')
+                self._verify_and_adjust_scores(tree)
                 return tree
+            else:
+                self.logger.warning('未能提取到任何评分规则')
+                return []
 
-            self.logger.warning('未能从评标办法章节提取到任何评分规则。')
-            return []
         except Exception as e:
-            self.logger.error(f'提取评分规则时发生严重错误: {e}', exc_info=True)
-            # 发生严重错误时返回默认规则
-            try:
-                default_rules = self._get_default_scoring_rules()
-                if default_rules:
-                    tree = self._build_tree_from_flat_list(default_rules)
-                    self._verify_and_adjust_scores(tree)
-                    return tree
-            except Exception as fallback_e:
-                self.logger.error(f'回退到默认规则也失败: {fallback_e}')
+            self.logger.error(f'从文本提取评分规则时出错: {e}', exc_info=True)
             return []
             
     def _extract_scoring_section(self, full_text: str) -> str:

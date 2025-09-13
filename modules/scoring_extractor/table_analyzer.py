@@ -1,9 +1,81 @@
+from typing import List, Dict, Any
+import logging
 import re
+
+logger = logging.getLogger(__name__)
+
+class TableAnalyzerHelpers:
+    """表格分析辅助类，包含通用的表格分析功能"""
+    
+    def _clean_criteria_name(self, name: str) -> str:
+        """清理评分项名称，移除不必要的内容"""
+        # 移除括号及其内容
+        name = re.sub(r'$[^)]*$', '', name)
+        # 移除末尾的数字和点号
+        name = re.sub(r'[\d\.]*$', '', name)
+        # 移除末尾的"（"及其前面的内容
+        name = re.sub(r'（.*$', '', name)
+        # 去除首尾空格
+        return name.strip()
+        
+    def _is_similar_criteria(self, name1: str, name2: str) -> bool:
+        """判断两个评分项名称是否相似"""
+        # 简单的相似性判断，可根据需要扩展
+        return name1[:4] == name2[:4] if min(len(name1), len(name2)) >= 4 else name1 == name2
+        
+    def _remove_duplicate_rules(self, rules: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        """移除重复的评分规则"""
+        seen = set()
+        unique_rules = []
+        
+        for rule in rules:
+            criteria_name = rule.get('criteria_name', '')
+            if criteria_name and criteria_name not in seen:
+                seen.add(criteria_name)
+                unique_rules.append(rule)
+                
+        return unique_rules
+        
+    def _format_price_description(self, description: str) -> str:
+        """
+        格式化价格计算描述，去除不必要的符号
+        """
+        # 去除换行符和回车符
+        formatted = re.sub(r'[\r\n]+', ' ', description)
+
+        # 将中文标点符号替换为英文标点符号
+        replacements = {
+            '，': ',',
+            '。': '.',
+            '：': ':',
+            '；': ';',
+            '（': '(',
+            '）': ')',
+            '“': '"',
+            '”': '"',
+            '‘': "'",
+            '’': "'",
+            '《': '<',
+            '》': '>',
+        }
+
+        for chinese, english in replacements.items():
+            formatted = formatted.replace(chinese, english)
+
+        # 去除多余的空格
+        formatted = re.sub(r'\s+', ' ', formatted).strip()
+
+        return formatted
 import logging
 from typing import List, Dict, Any
 
+import re
+import logging
+from typing import List, Dict, Any
+from .table_analyzer_helpers import TableAnalyzerHelpers
 
-class TableAnalyzerMixin:
+
+class TableAnalyzerMixin(TableAnalyzerHelpers):
     """表格分析混入类，提供表格形式评分规则提取功能"""
 
     def _extract_table_scoring_rules(self, text: str) -> List[Dict[str, Any]]:
@@ -51,125 +123,26 @@ class TableAnalyzerMixin:
                         # 清理评分项名称
                         criteria_name = self._clean_criteria_name(criteria_name)
 
-                        # 过滤掉太短或太长的名称
-                        if not (2 < len(criteria_name) < 100):
-                            continue
-
-                        # 检查是否包含价格相关关键词
-                        is_price_criteria = (
-                            '价格' in criteria_name
-                            or '报价' in criteria_name
-                            or '单价' in criteria_name
-                            or '金额' in criteria_name
-                            or '基准价' in criteria_name
-                        )
-
-                        # 验证分数是否有效
+                        # 转换分数为浮点数
                         try:
                             score = float(score_str)
-                            # 导入验证函数
-                            from .utils import is_valid_score
-
-                            if not is_valid_score(score):
-                                continue  # 跳过无效分数
                         except ValueError:
-                            continue  # 跳过无法转换为浮点数的分数
+                            self.logger.warning(f'无法解析分数: {score_str}')
+                            continue
 
-                        table_rules.append(
-                            {
-                                'numbering': (str(len(table_rules) + 1),),
-                                'criteria_name': criteria_name,
-                                'max_score': score,
-                                'weight': 1.0,
-                                'description': criteria_name,
-                                'category': '评标办法',
-                                'is_price_criteria': is_price_criteria,
-                            }
-                        )
+                        # 创建评分规则对象
+                        rule = {
+                            'criteria_name': criteria_name,
+                            'max_score': score,
+                            'description': '',  # 旧方法不提取描述
+                            'numbering': [len(table_rules) + 1],  # 简单编号
+                        }
+                        table_rules.append(rule)
 
             i += 1
 
-        # 特殊处理价格分
-        price_pattern = r'价格分[^\n]*?(\d{1,2}(?:\.\d)?)\s*分'
-        price_matches = re.findall(price_pattern, text)
-        for match in price_matches:
-            score = float(match)
-            # 验证分数是否有效且合理（价格分通常较高）
-            from .utils import is_valid_score
 
-            if score > 10 and is_valid_score(score):
-                price_rule = {
-                    'numbering': ('99',),
-                    'criteria_name': '价格分',
-                    'max_score': score,
-                    'weight': 1.0,
-                    'description': '价格分计算',
-                    'category': '评标办法',
-                    'is_price_criteria': True,
-                }
 
-                # 检查是否已存在价格分规则
-                existing_price_rule = None
-                for rule in table_rules:
-                    if rule.get('is_price_criteria'):
-                        existing_price_rule = rule
-                        break
-
-                if existing_price_rule:
-                    # 更新现有价格规则
-                    existing_price_rule.update(price_rule)
-                else:
-                    # 添加新的价格规则
-                    table_rules.append(price_rule)
-
-        # 特殊处理范围评分（如0-5分）
-        range_pattern = (
-            r'([^\n]*?[\u4e00-\u9fa5]+[^\n]*)\s*\(0-(\d{1,2}(?:\.\d)?)\s*分\)'
-        )
-        range_matches = re.findall(range_pattern, text)
-        for match in range_matches:
-            criteria_name = match[0].strip()
-            max_score = match[1]
-
-            # 清理评分项名称
-            criteria_name = self._clean_criteria_name(criteria_name)
-
-            # 过滤掉太短或太长的名称
-            if not (2 < len(criteria_name) < 100):
-                continue
-
-            # 验证分数是否有效
-            try:
-                score = float(max_score)
-                from .utils import is_valid_score
-
-                if not is_valid_score(score):
-                    continue  # 跳过无效分数
-            except ValueError:
-                continue  # 跳过无法转换为浮点数的分数
-
-            # 检查是否已存在相同名称的规则
-            existing_rule = None
-            for rule in table_rules:
-                if self._is_similar_criteria(rule['criteria_name'], criteria_name):
-                    existing_rule = rule
-                    break
-
-            if not existing_rule:
-                table_rules.append(
-                    {
-                        'numbering': (str(len(table_rules) + 1),),
-                        'criteria_name': criteria_name,
-                        'max_score': score,
-                        'weight': 1.0,
-                        'description': criteria_name,
-                        'category': '评标办法',
-                        'is_price_criteria': False,
-                    }
-                )
-
-        # 移除重复规则
-        table_rules = self._remove_duplicate_rules(table_rules)
 
         return table_rules
 

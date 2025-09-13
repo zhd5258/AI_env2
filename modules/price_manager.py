@@ -66,13 +66,15 @@ class PriceManager:
         # 从评分规则中查找价格分的满分和计算公式
         if tender_rules:
             for rule in tender_rules:
+                # 修复字段引用，使用ScoringRule对象的属性而不是字典方法
+                criteria_name = rule.Parent_Item_Name if hasattr(rule, 'Parent_Item_Name') else ''
                 if (
-                    '价格' in rule.get('criteria_name', '')
-                    or 'price' in rule.get('criteria_name', '').lower()
+                    '价格' in criteria_name
+                    or 'price' in criteria_name.lower()
                 ):
-                    price_max_score = rule.get('max_score', 40)
-                    price_formula = rule.get('price_formula', None)
-                    price_description = rule.get('description', '')
+                    price_max_score = rule.Parent_max_score if hasattr(rule, 'Parent_max_score') else 40
+                    price_formula = rule.price_formula if hasattr(rule, 'price_formula') else None
+                    price_description = rule.description if hasattr(rule, 'description') else ''
                     break
 
         self.logger.info(f"价格分计算 - 满分: {price_max_score}, 公式: {price_formula}")

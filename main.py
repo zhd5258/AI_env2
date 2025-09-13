@@ -10,7 +10,7 @@ import sys
 import traceback
 import time
 import threading
-from typing import List
+from typing import List, Optional
 from concurrent.futures import ProcessPoolExecutor
 
 from fastapi import (
@@ -40,6 +40,10 @@ from modules.intelligent_bid_analyzer import IntelligentBidAnalyzer
 from modules.price_score_calculator import PriceScoreCalculator
 from modules.bidder_name_extractor import extract_bidder_name_from_file
 from modules.summary_generator import generate_summary_data
+
+
+# 评分规则提取器
+from modules.scoring_extractor import IntelligentScoringExtractor
 
 # 1. Setup Logging
 # 设置控制台输出编码为UTF-8
@@ -370,6 +374,84 @@ def _extract_price_score_from_detailed_scores(detailed_scores):
 def run_analysis_and_calculate_prices(project_id: int, bid_files_info: list):
     logging.info(f'开始为项目 {project_id} 执行后台分析和价格计算任务。')
 
+    # 首先提取评分规则并保存到数据库
+    db = SessionLocal()
+    try:
+        project = db.query(TenderProject).filter(TenderProject.id == project_id).first()
+        if (
+            project
+            and project.tender_file_path
+            and os.path.exists(project.tender_file_path)
+        ):
+            # 检查是否已有评分规则
+            existing_rules = (
+                db.query(ScoringRule)
+                .filter(ScoringRule.project_id == project_id)
+                .count()
+            )
+            if existing_rules == 0:
+                logging.info(f'项目 {project_id} 没有评分规则，开始提取...')
+                # 使用统一的评分规则提取方法
+                extractor = IntelligentScoringExtractor()
+                scoring_rules = extractor.extract(
+                    project.tender_file_path
+                )
+
+                if scoring_rules:
+                    # Manually save rules to the database
+                    db.query(ScoringRule).filter(ScoringRule.project_id == project_id).delete()
+                    
+                    def save_rule_recursive(rule_data, project_id, parent_id=None):
+                        """递归保存评分规则"""
+                        # 创建评分规则对象
+                        db_rule = ScoringRule(
+                            project_id=project_id,
+                            Parent_Item_Name=rule_data.get('criteria_name'),
+                            Parent_max_score=rule_data.get('max_score'),
+                            description=rule_data.get('description', ''),
+                            is_price_criteria='价格' in rule_data.get('criteria_name', '') or 'price' in rule_data.get('criteria_name', '').lower()
+                        )
+                        
+                        # 如果是价格规则，设置价格公式字段
+                        if db_rule.is_price_criteria:
+                            db_rule.price_formula = None  # 可以根据需要设置具体公式
+                            db_rule.Child_Item_Name = None
+                            db_rule.Child_max_score = None
+                        else:
+                            # 对于非价格规则，如果有子项，需要特殊处理
+                            if 'children' in rule_data and rule_data['children']:
+                                # 父项规则，子项信息将在子项规则中保存
+                                db_rule.Child_Item_Name = None
+                                db_rule.Child_max_score = None
+                            else:
+                                # 叶子节点规则（没有子项）
+                                db_rule.Child_Item_Name = rule_data.get('criteria_name')
+                                db_rule.Child_max_score = rule_data.get('max_score')
+                        
+                        db.add(db_rule)
+                        db.flush()  # 获取生成的ID
+                        
+                        # 递归保存子项
+                        if 'children' in rule_data and rule_data['children']:
+                            for child_rule in rule_data['children']:
+                                save_rule_recursive(child_rule, project_id, parent_id=db_rule.id)
+                    
+                    for rule_data in scoring_rules:
+                        save_rule_recursive(rule_data, project_id)
+                        
+                    db.commit()
+                    logging.info(
+                        f'成功提取并保存 {len(scoring_rules)} 条评分规则到数据库'
+                    )
+                else:
+                    logging.error(f'提取评分规则失败')
+            else:
+                logging.info(f'项目 {project_id} 已存在评分规则，跳过提取步骤')
+    except Exception as e:
+        logging.error(f'处理项目 {project_id} 的评分规则时出错: {e}')
+    finally:
+        db.close()
+
     loop = asyncio.new_event_loop()
     asyncio.set_event_loop(loop)
 
@@ -606,10 +688,10 @@ async def get_scoring_rules(project_id: int, db: Session = Depends(get_db)):
         response_data.append(
             {
                 'id': rule.id,
-                'category': rule.category,
-                'criteria_name': rule.criteria_name,
-                'max_score': rule.max_score,
-                'weight': rule.weight,
+                'category': rule.Parent_Item_Name,  # 修复字段名
+                'criteria_name': rule.Child_Item_Name if rule.Child_Item_Name else rule.Parent_Item_Name,
+                'max_score': rule.Child_max_score if rule.Child_max_score else rule.Parent_max_score,
+                'weight': 1.0,
                 'description': rule.description,
                 'is_veto': rule.is_veto,
             }
@@ -781,6 +863,101 @@ async def bulk_update_scores(
         logging.warning('批量更新分数请求未找到任何有效的分析结果。')
         return JSONResponse(
             status_code=404, content={'error': '未找到任何有效的分析结果进行更新。'}
+        )
+
+
+@app.post('/api/projects/{project_id}/extract-scoring-rules')
+async def extract_scoring_rules_api(
+    project_id: int, request: Request, db: Session = Depends(get_db)
+) -> JSONResponse:
+    """
+    从项目关联的招标文件中提取评分规则
+
+    Args:
+        project_id: 项目ID
+        request: 请求对象
+        db: 数据库会话
+
+    Returns:
+        JSON响应
+    """
+    # 添加返回类型提示以提高类型安全性
+    try:
+        # 获取项目信息
+        project = db.query(TenderProject).filter(TenderProject.id == project_id).first()
+        if not project:
+            return JSONResponse(status_code=404, content={'error': '项目不存在'})
+
+        # 检查项目是否有招标文件
+        if not project.tender_file_path or not os.path.exists(project.tender_file_path):
+            return JSONResponse(
+                status_code=400, content={'error': '项目没有关联的招标文件'}
+            )
+
+        # 使用评分提取器提取评分规则
+        extractor = IntelligentScoringExtractor()
+        scoring_rules = extractor.extract(
+            project.tender_file_path
+        )
+
+        # 保存到数据库
+        if scoring_rules:
+            # Manually save rules to the database
+            db.query(ScoringRule).filter(ScoringRule.project_id == project_id).delete()
+            
+            def save_rule_recursive(rule_data, project_id, parent_id=None):
+                """递归保存评分规则"""
+                # 创建评分规则对象
+                db_rule = ScoringRule(
+                    project_id=project_id,
+                    Parent_Item_Name=rule_data.get('criteria_name'),
+                    Parent_max_score=rule_data.get('max_score'),
+                    description=rule_data.get('description', ''),
+                    is_price_criteria='价格' in rule_data.get('criteria_name', '') or 'price' in rule_data.get('criteria_name', '').lower()
+                )
+                        
+                # 如果是价格规则，设置价格公式字段
+                if db_rule.is_price_criteria:
+                    db_rule.price_formula = None  # 可以根据需要设置具体公式
+                    db_rule.Child_Item_Name = None
+                    db_rule.Child_max_score = None
+                else:
+                    # 对于非价格规则，如果有子项，需要特殊处理
+                    if 'children' in rule_data and rule_data['children']:
+                        # 父项规则，子项信息将在子项规则中保存
+                        db_rule.Child_Item_Name = None
+                        db_rule.Child_max_score = None
+                    else:
+                        # 叶子节点规则（没有子项）
+                        db_rule.Child_Item_Name = rule_data.get('criteria_name')
+                        db_rule.Child_max_score = rule_data.get('max_score')
+                        
+                        db.add(db_rule)
+                        db.flush()  # 获取生成的ID
+                        
+                        # 递归保存子项
+                        if 'children' in rule_data and rule_data['children']:
+                            for child_rule in rule_data['children']:
+                                save_rule_recursive(child_rule, project_id, parent_id=db_rule.id)
+                    
+                    for rule_data in scoring_rules:
+                        save_rule_recursive(rule_data, project_id)
+                        
+                    db.commit()
+                    return JSONResponse(
+                        content={
+                            'message': '评分规则提取并保存成功',
+                            'count': len(scoring_rules),
+                            'rules': scoring_rules,
+                        }
+                    )
+        else:
+            return JSONResponse(status_code=500, content={'error': '提取评分规则失败'})
+
+    except Exception as e:
+        logging.error(f'提取评分规则API出错: {e}')
+        return JSONResponse(
+            status_code=500, content={'error': f'提取评分规则时发生错误: {str(e)}'}
         )
 
 

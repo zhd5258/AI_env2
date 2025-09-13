@@ -19,7 +19,7 @@ def test_all_modules():
     
     # 2. 测试评分规则提取模块
     try:
-        from modules.intelligent_scoring_extractor import IntelligentScoringExtractor
+        from modules.scoring_extractor import IntelligentScoringExtractor
         extractor = IntelligentScoringExtractor()
         print("✓ 评分规则提取模块导入并实例化成功")
     except Exception as e:
