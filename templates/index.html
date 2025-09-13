@@ -69,14 +69,39 @@
 
         <!-- 添加结果详情模态框 -->
         <div class="modal fade" id="resultDetailsModal" tabindex="-1" aria-labelledby="resultDetailsModalLabel" aria-hidden="true">
-            <div class="modal-dialog modal-xl">
+            <div class="modal-dialog modal-xl modal-dialog-scrollable">
                 <div class="modal-content">
                     <div class="modal-header">
-                        <h5 class="modal-title" id="resultDetailsModalLabel">评分详情</h5>
+                        <h5 class="modal-title" id="resultDetailsModalLabel">详细分析</h5>
                         <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal" aria-label="Close"></button>
                     </div>
                     <div class="modal-body" id="modalBody">
-                        <!-- 详细内容将通过JavaScript动态添加 -->
+                        <!-- Section for Price Chart -->
+                        <div class="mb-5">
+                            <h4><i class="fas fa-dollar-sign me-2"></i>价格与价格分对比</h4>
+                            <div style="height: 400px;">
+                                <canvas id="priceChart"></canvas>
+                            </div>
+                        </div>
+                        
+                        <hr>
+
+                        <!-- Section for Detailed Scores Table -->
+                        <div>
+                            <div class="d-flex justify-content-between align-items-center mb-3">
+                                <h4><i class="fas fa-list-ul me-2"></i>详细评分结果</h4>
+                                <div class="btn-group" role="group" id="viewToggle">
+                                    <input type="radio" class="btn-check" name="viewType" id="childView" value="child" autocomplete="off" checked>
+                                    <label class="btn btn-outline-primary" for="childView">按子项显示</label>
+
+                                    <input type="radio" class="btn-check" name="viewType" id="parentView" value="parent" autocomplete="off">
+                                    <label class="btn btn-outline-primary" for="parentView">按父项汇总</label>
+                                </div>
+                            </div>
+                            <div id="detailedTableContainer" class="table-responsive">
+                                <!-- Detailed table will be rendered here by JavaScript -->
+                            </div>
+                        </div>
                     </div>
                     <div class="modal-footer">
                         <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">关闭</button>
@@ -93,13 +118,7 @@
     <!-- 加载 Popper.js 和 Bootstrap JS -->
     <script src="https://cdn.jsdelivr.net/npm/@popperjs/core@2.11.8/dist/umd/popper.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
-    <!-- 在页面底部加载自定义JavaScript -->
-    <script src="/static/js/upload.js"></script>
-    <script src="/static/js/results-table.js"></script>
-    <script src="/static/js/results-export.js"></script>
-    <script src="/static/js/results-sorting.js"></script>
-    <script src="/static/js/results-filters.js"></script>
-    <script src="/static/js/results.js"></script>
-    <script src="/static/js/charts.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <script src="/static/js/app.js"></script>
 </body>
 </html>

@@ -7,6 +7,7 @@ import json
 import asyncio
 import logging
 import sys
+import os
 import traceback
 import time
 import threading
@@ -648,6 +649,9 @@ async def get_analysis_results(project_id: int, db: Session = Depends(get_db)):
                 'detailed_scores': json.loads(res.detailed_scores)
                 if isinstance(res.detailed_scores, str)
                 else res.detailed_scores,
+                'dynamic_scores': json.loads(res.dynamic_scores)
+                if isinstance(res.dynamic_scores, str)
+                else res.dynamic_scores or {},
                 'ai_model': res.ai_model,
             }
         )
@@ -962,4 +966,5 @@ async def extract_scoring_rules_api(
 
 
 if __name__ == '__main__':
-    uvicorn.run(app, host='0.0.0.0', port=8000)
+    # 启动FastAPI应用
+        uvicorn.run(app, host='0.0.0.0', port=8000, access_log=False)

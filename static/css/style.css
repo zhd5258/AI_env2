@@ -586,3 +586,24 @@ table th:hover {
         width: 100%;
     }
 }
+
+.summary-table .bidder-col {
+    max-width: 150px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    cursor: pointer;
+}
+
+/* NEW STYLES FOR HEADER TRUNCATION */
+.summary-table thead th {
+    max-width: 200px; /* Adjust as needed */
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+/* Ensure sticky columns still look right */
+.summary-table th.sticky-col {
+    overflow: visible;
+}

@@ -74,6 +74,8 @@ class AnalysisResult(Base):
     price_score = Column(Float)  # Adding price score field
     extracted_price = Column(Float) # Extracted bid price
     detailed_scores = Column(JSON)
+    # 添加动态评分项字段，用于存储各评分项的得分
+    dynamic_scores = Column(JSON, default=dict)  # 存储动态评分项得分，key为评分项简称，value为得分
     analysis_summary = Column(String)
     analyzed_at = Column(DateTime, default=datetime.datetime.utcnow)
     scoring_method = Column(String, default='AI')

@@ -114,7 +114,8 @@ class IntelligentBidAnalyzer(BidAnalyzerHelpers):
             self._update_progress(0, self.total_rules_to_analyze, f'[{self.bidder_name}] 初始化分析...', [])
             
             # 分析每个子项规则
-            analyzed_scores = []
+            analyzed_scores = {}
+            analyzed_scores_for_progress = []
             for rule in child_rules:
                 self.progress_counter += 1
                 current_rule_name = f'分析规则 {self.progress_counter}/{self.total_rules_to_analyze}: {rule.Child_Item_Name}'
@@ -133,28 +134,32 @@ class IntelligentBidAnalyzer(BidAnalyzerHelpers):
                 else:
                     score, reason = self._parse_ai_score_response(ai_response, rule.Child_max_score)
                 
-                # 保存分析结果到数据库
-                analyzed_rule = {
+                # 保存分析结果到字典
+                analyzed_scores[rule.Child_Item_Name] = score
+                
+                # 为进度更新创建一个单独的列表
+                analyzed_rule_for_progress = {
                     'criteria_name': rule.Child_Item_Name,
                     'max_score': rule.Child_max_score,
                     'score': score,
                     'reason': reason,
                     'parent_name': rule.Parent_Item_Name
                 }
-                analyzed_scores.append(analyzed_rule)
+                analyzed_scores_for_progress.append(analyzed_rule_for_progress)
                 
                 # 更新进度
-                self._update_progress(self.progress_counter, self.total_rules_to_analyze, current_rule_name, analyzed_scores)
+                self._update_progress(self.progress_counter, self.total_rules_to_analyze, current_rule_name, analyzed_scores_for_progress)
             
             # 5. 计算价格分
+            price_score = 0
             price_rule = next((rule for rule in rules_from_db if rule.is_price_criteria), None)
             if price_rule:
                 price_score_result = self._calculate_price_score(price_rule, best_price)
-                analyzed_scores.append(price_score_result)
+                price_score = price_score_result.get('score', 0)
             
             # 6. 计算总分
-            total_score = sum(item.get('score', 0) for item in analyzed_scores)
-            self._update_progress(self.total_rules_to_analyze, self.total_rules_to_analyze, '分析完成', analyzed_scores)
+            total_score = sum(analyzed_scores.values()) + price_score
+            self._update_progress(self.total_rules_to_analyze, self.total_rules_to_analyze, '分析完成', analyzed_scores_for_progress)
 
             # 7. 准备并返回结果
             analysis_result = {
