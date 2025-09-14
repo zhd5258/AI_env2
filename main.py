@@ -7,12 +7,12 @@ import json
 import asyncio
 import logging
 import sys
-import os
 import traceback
 import time
 import threading
 from typing import List, Optional
 from concurrent.futures import ProcessPoolExecutor
+from pathlib import Path
 
 from fastapi import (
     FastAPI,
@@ -28,6 +28,8 @@ from fastapi.templating import Jinja2Templates
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
+import concurrent.futures  # 添加线程相关导入
+import threading
 
 from modules.database import (
     SessionLocal,
@@ -45,6 +47,20 @@ from modules.summary_generator import generate_summary_data
 
 # 评分规则提取器
 from modules.scoring_extractor import IntelligentScoringExtractor
+
+
+# 跨平台路径处理
+def get_platform_safe_path(*path_parts):
+    """跨平台安全的路径处理"""
+    path = Path(*path_parts)
+    return str(path)
+
+
+# 跨平台文件操作
+def safe_makedirs(path):
+    """跨平台安全的创建目录"""
+    Path(path).mkdir(parents=True, exist_ok=True)
+
 
 # 1. Setup Logging
 # 设置控制台输出编码为UTF-8
@@ -68,6 +84,17 @@ if sys.platform == 'win32':
     except (ValueError, AttributeError):
         # 当stdout/stderr已经被分离时，使用默认的编码
         pass
+else:
+    # Linux/Unix系统下的编码处理
+    import locale
+
+    try:
+        locale.setlocale(locale.LC_ALL, 'en_US.UTF-8')
+    except locale.Error:
+        try:
+            locale.setlocale(locale.LC_ALL, 'C.UTF-8')
+        except locale.Error:
+            pass
 
 # 配置日志，添加错误处理以防止缓冲区分离问题
 try:
@@ -121,12 +148,14 @@ def get_db():
 executor = ProcessPoolExecutor(max_workers=os.cpu_count())
 
 # 创建上传目录
-UPLOADS_DIR = 'uploads'
-os.makedirs(UPLOADS_DIR, exist_ok=True)
+UPLOADS_DIR = get_platform_safe_path('uploads')
+safe_makedirs(UPLOADS_DIR)
 
 # 配置静态文件和模板
-app.mount('/static', StaticFiles(directory='static'), name='static')
-templates = Jinja2Templates(directory='templates')
+app.mount(
+    '/static', StaticFiles(directory=get_platform_safe_path('static')), name='static'
+)
+templates = Jinja2Templates(directory=get_platform_safe_path('templates'))
 
 # 创建数据库表
 TenderProject.metadata.create_all(bind=engine)
@@ -155,11 +184,38 @@ async def history_page(request: Request):
 
 def save_upload_file(upload_file: UploadFile, destination: str) -> str:
     try:
+        # 确保目标目录存在
+        dest_path = Path(destination)
+        safe_makedirs(dest_path.parent)
+        
         with open(destination, 'wb') as buffer:
             shutil.copyfileobj(upload_file.file, buffer)
     finally:
         upload_file.file.close()
     return destination
+
+# 添加一个新的函数用于在后台提取PDF文本
+def extract_pdf_text_background(file_path: str, bidder_name: str):
+    """
+    在后台提取PDF文本的函数，用于多线程处理
+    
+    Args:
+        file_path: PDF文件路径
+        bidder_name: 投标方名称
+        
+    Returns:
+        tuple: (bidder_name, pages_text, success)
+    """
+    try:
+        logging.info(f"开始后台提取 {bidder_name} 的PDF文本")
+        from modules.pdf_processor import PDFProcessor
+        processor = PDFProcessor(file_path)
+        pages_text = processor.process_pdf_per_page()
+        logging.info(f"完成 {bidder_name} 的PDF文本提取，共 {len(pages_text)} 页")
+        return (bidder_name, pages_text, True)
+    except Exception as e:
+        logging.error(f"提取 {bidder_name} 的PDF文本时出错: {e}")
+        return (bidder_name, [], False)
 
 
 def analysis_task(project_id: int, bid_document_id: int):
@@ -189,7 +245,7 @@ def analysis_task(project_id: int, bid_document_id: int):
             return
 
         tender_file_path = project.tender_file_path
-        if not tender_file_path or not os.path.exists(tender_file_path):
+        if not tender_file_path or not Path(tender_file_path).exists():
             logging.error('招标文件不存在: %s', tender_file_path)
             bid_document.processing_status = 'error'
             bid_document.error_message = '招标文件不存在'
@@ -382,7 +438,7 @@ def run_analysis_and_calculate_prices(project_id: int, bid_files_info: list):
         if (
             project
             and project.tender_file_path
-            and os.path.exists(project.tender_file_path)
+            and Path(project.tender_file_path).exists()
         ):
             # 检查是否已有评分规则
             existing_rules = (
@@ -394,14 +450,14 @@ def run_analysis_and_calculate_prices(project_id: int, bid_files_info: list):
                 logging.info(f'项目 {project_id} 没有评分规则，开始提取...')
                 # 使用统一的评分规则提取方法
                 extractor = IntelligentScoringExtractor()
-                scoring_rules = extractor.extract(
-                    project.tender_file_path
-                )
+                scoring_rules = extractor.extract(project.tender_file_path)
 
                 if scoring_rules:
                     # Manually save rules to the database
-                    db.query(ScoringRule).filter(ScoringRule.project_id == project_id).delete()
-                    
+                    db.query(ScoringRule).filter(
+                        ScoringRule.project_id == project_id
+                    ).delete()
+
                     def save_rule_recursive(rule_data, project_id, parent_id=None):
                         """递归保存评分规则"""
                         # 创建评分规则对象
@@ -410,9 +466,11 @@ def run_analysis_and_calculate_prices(project_id: int, bid_files_info: list):
                             Parent_Item_Name=rule_data.get('criteria_name'),
                             Parent_max_score=rule_data.get('max_score'),
                             description=rule_data.get('description', ''),
-                            is_price_criteria='价格' in rule_data.get('criteria_name', '') or 'price' in rule_data.get('criteria_name', '').lower()
+                            is_price_criteria='价格'
+                            in rule_data.get('criteria_name', '')
+                            or 'price' in rule_data.get('criteria_name', '').lower(),
                         )
-                        
+
                         # 如果是价格规则，设置价格公式字段
                         if db_rule.is_price_criteria:
                             db_rule.price_formula = None  # 可以根据需要设置具体公式
@@ -428,24 +486,26 @@ def run_analysis_and_calculate_prices(project_id: int, bid_files_info: list):
                                 # 叶子节点规则（没有子项）
                                 db_rule.Child_Item_Name = rule_data.get('criteria_name')
                                 db_rule.Child_max_score = rule_data.get('max_score')
-                        
+
                         db.add(db_rule)
                         db.flush()  # 获取生成的ID
-                        
+
                         # 递归保存子项
                         if 'children' in rule_data and rule_data['children']:
                             for child_rule in rule_data['children']:
-                                save_rule_recursive(child_rule, project_id, parent_id=db_rule.id)
-                    
+                                save_rule_recursive(
+                                    child_rule, project_id, parent_id=db_rule.id
+                                )
+
                     for rule_data in scoring_rules:
                         save_rule_recursive(rule_data, project_id)
-                        
+
                     db.commit()
                     logging.info(
                         f'成功提取并保存 {len(scoring_rules)} 条评分规则到数据库'
                     )
                 else:
-                    logging.error(f'提取评分规则失败')
+                    logging.error('提取评分规则失败')
             else:
                 logging.info(f'项目 {project_id} 已存在评分规则，跳过提取步骤')
     except Exception as e:
@@ -527,24 +587,33 @@ async def analyze_immediately(
 
     tender_file_path = save_upload_file(
         tender_file,
-        os.path.join(UPLOADS_DIR, f'{project.id}_tender_{tender_file.filename}'),
+        get_platform_safe_path(
+            UPLOADS_DIR, f'{project.id}_tender_{tender_file.filename}'
+        ),
     )
     project.tender_file_path = tender_file_path
     db.commit()
 
+    # 用于存储投标文件信息的列表
+    bid_documents = []
     bid_files_info = []
+    
+    # 先保存所有文件
     for bid_file in bid_files:
         bid_file_path = save_upload_file(
-            bid_file, os.path.join(UPLOADS_DIR, f'{project.id}_bid_{bid_file.filename}')
+            bid_file,
+            get_platform_safe_path(
+                UPLOADS_DIR, f'{project.id}_bid_{bid_file.filename}'
+            ),
         )
 
+        # 提取投标方名称
         extracted_name = extract_bidder_name_from_file(bid_file_path)
 
         bidder_name = extracted_name
         if not bidder_name:
             bidder_name = (
-                os.path.splitext(bid_file.filename)[0]
-                if bid_file.filename
+                Path(bid_file.filename).stem if bid_file.filename
                 else f'unnamed_bid_{bid_file.size}'
             )
             logging.warning(
@@ -564,7 +633,48 @@ async def analyze_immediately(
         db.add(bid_document)
         db.commit()
         db.refresh(bid_document)
-        bid_files_info.append({'id': bid_document.id, 'path': bid_file_path})
+        
+        bid_documents.append(bid_document)
+        bid_files_info.append({'id': bid_document.id, 'path': bid_file_path, 'bidder_name': bidder_name})
+
+    # 使用多线程同步进行PDF文本提取
+    logging.info("开始多线程同步提取投标文件文本...")
+    text_extraction_results = {}
+    
+    # 创建线程池执行器
+    with concurrent.futures.ThreadPoolExecutor(max_workers=min(len(bid_files_info), 4)) as executor:
+        # 提交所有文本提取任务
+        future_to_bidder = {
+            executor.submit(extract_pdf_text_background, bid_info['path'], bid_info['bidder_name']): bid_info 
+            for bid_info in bid_files_info
+        }
+        
+        # 等待所有任务完成并收集结果
+        for future in concurrent.futures.as_completed(future_to_bidder):
+            bid_info = future_to_bidder[future]
+            try:
+                bidder_name, pages_text, success = future.result()
+                text_extraction_results[bidder_name] = {
+                    'pages_text': pages_text,
+                    'success': success,
+                    'bid_info': bid_info
+                }
+                if success:
+                    logging.info(f"成功提取 {bidder_name} 的文本，共 {len(pages_text)} 页")
+                else:
+                    logging.error(f"提取 {bidder_name} 的文本失败")
+            except Exception as e:
+                logging.error(f"处理 {bid_info['bidder_name']} 的文本提取结果时出错: {e}")
+                text_extraction_results[bid_info['bidder_name']] = {
+                    'pages_text': [],
+                    'success': False,
+                    'bid_info': bid_info
+                }
+
+    logging.info("完成所有投标文件的文本提取")
+
+    # 更新数据库中的投标文档信息（如果需要的话）
+    # 这里可以根据提取的文本进行进一步处理
 
     background_tasks.add_task(
         run_analysis_and_calculate_prices,
@@ -638,6 +748,34 @@ async def get_analysis_results(project_id: int, db: Session = Depends(get_db)):
     response_data = []
     for res in results:
         price_score = getattr(res, 'price_score', None)
+        # 确保价格分正确处理，如果为None则尝试从detailed_scores中提取
+        if price_score is None:
+            try:
+                detailed_scores = (
+                    json.loads(res.detailed_scores)
+                    if isinstance(res.detailed_scores, str)
+                    else res.detailed_scores
+                )
+                # 如果detailed_scores是字典格式，尝试从中查找价格分
+                if isinstance(detailed_scores, dict):
+                    for key, value in detailed_scores.items():
+                        if '价格' in key or 'price' in key.lower():
+                            if isinstance(value, (int, float)):
+                                price_score = value
+                                break
+                            elif isinstance(value, dict) and 'score' in value:
+                                price_score = value['score']
+                                break
+                # 如果detailed_scores是列表格式，尝试从中查找价格分
+                elif isinstance(detailed_scores, list):
+                    for item in detailed_scores:
+                        if isinstance(item, dict) and item.get(
+                            'is_price_criteria', False
+                        ):
+                            price_score = item.get('score', 0)
+                            break
+            except Exception as e:
+                logging.error(f'解析价格分时出错: {e}')
 
         response_data.append(
             {
@@ -651,7 +789,7 @@ async def get_analysis_results(project_id: int, db: Session = Depends(get_db)):
                 else res.detailed_scores,
                 'dynamic_scores': json.loads(res.dynamic_scores)
                 if isinstance(res.dynamic_scores, str)
-                else res.dynamic_scores or {},
+                else res.detailed_scores or {},
                 'ai_model': res.ai_model,
             }
         )
@@ -693,8 +831,12 @@ async def get_scoring_rules(project_id: int, db: Session = Depends(get_db)):
             {
                 'id': rule.id,
                 'category': rule.Parent_Item_Name,  # 修复字段名
-                'criteria_name': rule.Child_Item_Name if rule.Child_Item_Name else rule.Parent_Item_Name,
-                'max_score': rule.Child_max_score if rule.Child_max_score else rule.Parent_max_score,
+                'criteria_name': rule.Child_Item_Name
+                if rule.Child_Item_Name
+                else rule.Parent_Item_Name,
+                'max_score': rule.Child_max_score
+                if rule.Child_max_score
+                else rule.Parent_max_score,
                 'weight': 1.0,
                 'description': rule.description,
                 'is_veto': rule.is_veto,
@@ -893,22 +1035,20 @@ async def extract_scoring_rules_api(
             return JSONResponse(status_code=404, content={'error': '项目不存在'})
 
         # 检查项目是否有招标文件
-        if not project.tender_file_path or not os.path.exists(project.tender_file_path):
+        if not project.tender_file_path or not Path(project.tender_file_path).exists():
             return JSONResponse(
                 status_code=400, content={'error': '项目没有关联的招标文件'}
             )
 
         # 使用评分提取器提取评分规则
         extractor = IntelligentScoringExtractor()
-        scoring_rules = extractor.extract(
-            project.tender_file_path
-        )
+        scoring_rules = extractor.extract(project.tender_file_path)
 
         # 保存到数据库
         if scoring_rules:
             # Manually save rules to the database
             db.query(ScoringRule).filter(ScoringRule.project_id == project_id).delete()
-            
+
             def save_rule_recursive(rule_data, project_id, parent_id=None):
                 """递归保存评分规则"""
                 # 创建评分规则对象
@@ -917,9 +1057,10 @@ async def extract_scoring_rules_api(
                     Parent_Item_Name=rule_data.get('criteria_name'),
                     Parent_max_score=rule_data.get('max_score'),
                     description=rule_data.get('description', ''),
-                    is_price_criteria='价格' in rule_data.get('criteria_name', '') or 'price' in rule_data.get('criteria_name', '').lower()
+                    is_price_criteria='价格' in rule_data.get('criteria_name', '')
+                    or 'price' in rule_data.get('criteria_name', '').lower(),
                 )
-                        
+
                 # 如果是价格规则，设置价格公式字段
                 if db_rule.is_price_criteria:
                     db_rule.price_formula = None  # 可以根据需要设置具体公式
@@ -935,18 +1076,20 @@ async def extract_scoring_rules_api(
                         # 叶子节点规则（没有子项）
                         db_rule.Child_Item_Name = rule_data.get('criteria_name')
                         db_rule.Child_max_score = rule_data.get('max_score')
-                        
+
                         db.add(db_rule)
                         db.flush()  # 获取生成的ID
-                        
+
                         # 递归保存子项
                         if 'children' in rule_data and rule_data['children']:
                             for child_rule in rule_data['children']:
-                                save_rule_recursive(child_rule, project_id, parent_id=db_rule.id)
-                    
+                                save_rule_recursive(
+                                    child_rule, project_id, parent_id=db_rule.id
+                                )
+
                     for rule_data in scoring_rules:
                         save_rule_recursive(rule_data, project_id)
-                        
+
                     db.commit()
                     return JSONResponse(
                         content={
@@ -967,4 +1110,4 @@ async def extract_scoring_rules_api(
 
 if __name__ == '__main__':
     # 启动FastAPI应用
-        uvicorn.run(app, host='0.0.0.0', port=8000, access_log=False)
+    uvicorn.run(app, host='0.0.0.0', port=8000, access_log=False)

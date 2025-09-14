@@ -39,6 +39,14 @@ class PDFProcessorHelpers:
         # 替换特殊Unicode字符
         text = text.replace('\u2029', '\n').replace('\u2028', '\n').replace('\u00A0', ' ')
         
+        # 修正常见的OCR错误
+        text = text.replace('．', '.')  # 全角点号替换为半角
+        text = text.replace('，', ',')  # 全角逗号替换为半角
+        text = text.replace('（', '(')  # 全角左括号替换为半角
+        text = text.replace('）', ')')  # 全角右括号替换为半角
+        text = text.replace('：', ':')  # 全角冒号替换为半角
+        text = text.replace('；', ';')  # 全角分号替换为半角
+        
         # 合并多个换行符为单个换行符
         text = re.sub(r'\n+', '\n', text)
         
@@ -67,15 +75,28 @@ class PDFProcessorHelpers:
             str: OCR提取的文本
         """
         try:
-            # 尝试获取页面图像
-            image = page.to_image(resolution=200)  # 降低分辨率以提高速度
+            # 尝试获取页面图像，使用合适的分辨率
+            image = page.to_image(resolution=200)
+            
+            # 调整图像参数以提高OCR质量
+            if hasattr(image, 'reset') and callable(image.reset):
+                image = image.reset()
+            if hasattr(image, 'scale') and callable(image.scale):
+                image = image.scale(2.0)  # 放大图像
+            if hasattr(image, 'enhance') and callable(image.enhance):
+                image = image.enhance()  # 增强对比度
+            
             pil_image = image.original
             
-            # 使用pytesseract进行OCR
-            text = pytesseract.image_to_string(pil_image, lang='chi_sim+eng')
+            # 使用pytesseract进行OCR，使用更好的配置
+            text = pytesseract.image_to_string(
+                pil_image, 
+                lang='chi_sim+eng',
+                config='--psm 3 --oem 3'  # 使用更准确的识别模式
+            )
             
             if text.strip():
-                self.logger.debug(f'第 {page_number} 页OCR成功')
+                self.logger.debug(f'第 {page_number} 页OCR成功，识别出 {len(text)} 个字符')
                 return self._clean_text(text)
             else:
                 self.logger.debug(f'第 {page_number} 页OCR未提取到文本')
@@ -107,11 +128,17 @@ class PDFProcessorHelpers:
                         else:
                             pages_text.append('')
                             self.logger.warning(f'PyPDF2第 {i + 1} 页无法提取文本')
+                            # 记录失败页面
+                            self.failed_pages.append({
+                                'page_number': i + 1,
+                                'reason': 'PyPDF2无法提取文本',
+                                'method': 'PyPDF2'
+                            })
                     except Exception as e:
                         self.logger.error(f'PyPDF2处理第 {i + 1} 页时出错: {e}')
                         self.failed_pages.append({
-                            'page': i + 1,
-                            'error': str(e),
+                            'page_number': i + 1,
+                            'reason': f'PyPDF2处理出错: {str(e)}',
                             'method': 'PyPDF2'
                         })
                         pages_text.append('')

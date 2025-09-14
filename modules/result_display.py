@@ -95,9 +95,9 @@ class ResultDisplay:
         rules_tree = list(parent_groups.values())
         
         # 如果有价格规则，添加到末尾
-        if price_rule:  # 修复变量名错误
+        if price_rule:
             rules_tree.append({
-                'name': price_rule.Parent_Item_Name,
+                'name': price_rule.Parent_Item_Name or "价格评分",
                 'max_score': price_rule.Parent_max_score,
                 'children': [{
                     'name': '价格分',
@@ -128,11 +128,14 @@ class ResultDisplay:
                 else:
                     detailed_scores = result.detailed_scores
                     
-                for score_item in detailed_scores:
-                    criteria_name = score_item.get('criteria_name')
-                    score = score_item.get('score', 0)
-                    if criteria_name:
-                        bidder_scores[bidder_name][criteria_name] = score
+                # 根据新的数据结构处理detailed_scores
+                # 每个元素是一个字典，包含：Child_Item_Name、score、reason、Parent_Item_Name
+                if isinstance(detailed_scores, list):
+                    for score_item in detailed_scores:
+                        child_item_name = score_item.get('Child_Item_Name') or score_item.get('criteria_name')
+                        score = score_item.get('score', 0)
+                        if child_item_name:
+                            bidder_scores[bidder_name][child_item_name] = score
             except Exception as e:
                 logger.error(f"解析投标方 {bidder_name} 的得分数据时出错: {e}")
                 
@@ -183,18 +186,27 @@ class ResultDisplay:
             # 获取该投标方的得分
             scores = bidder_scores.get(bidder_name, {})
             
-            # 按规则树顺序填充数据
+            # 按规则树顺序填充数据，只计算子项得分
+            total_score = 0
             for parent_item in rules_tree:
                 children = parent_item['children']
                 for child_item in children:
                     score = scores.get(child_item['name'], 0)
                     row.append(score)
+                    total_score += score
             
-            # 添加总分
-            if bid_doc.analysis_result and bid_doc.analysis_result.total_score is not None:
-                row.append(bid_doc.analysis_result.total_score)
-            else:
-                row.append(0)
+            # 添加价格分（如果存在）
+            price_score = 0
+            if bid_doc.analysis_result and bid_doc.analysis_result.price_score is not None:
+                price_score = bid_doc.analysis_result.price_score
+            elif '价格分' in scores:
+                price_score = scores['价格分']
+            
+            row.append(price_score)
+            total_score += price_score
+            
+            # 添加总分（只计算子项和价格分）
+            row.append(round(total_score, 2))
                 
             data_rows.append(row)
             
@@ -250,86 +262,37 @@ def print_multi_level_table(project_id: int):
     # 计算每列的最大宽度
     col_widths = []
     max_cols = max(len(headers[0]), len(headers[1]))
+    
+    # 初始化列宽
     for i in range(max_cols):
-        max_width = 0
-        # 检查第一行表头
-        if i < len(headers[0]):
-            max_width = max(max_width, len(str(headers[0][i])))
-        # 检查第二行表头
-        if i < len(headers[1]):
-            max_width = max(max_width, len(str(headers[1][i])))
-        # 检查数据行
-        for row in data:
-            if i < len(row):
-                max_width = max(max_width, len(str(row[i])))
-        col_widths.append(max_width + 2)
+        col_widths.append(0)
     
-    # 确保列宽至少为5
-    col_widths = [max(width, 5) for width in col_widths]
+    # 计算表头列宽
+    for i, header in enumerate(headers[0]):
+        col_widths[i] = max(col_widths[i], len(str(header)))
     
-    # 打印第一行表头
-    header1_line = "|"
-    for i in range(len(headers[0])):
-        if i < len(col_widths):
-            width = col_widths[i]
-            header1_line += f" {str(headers[0][i]):<{width-2}} |"
-    print(header1_line)
+    for i, header in enumerate(headers[1]):
+        col_widths[i] = max(col_widths[i], len(str(header)))
     
-    # 打印分隔线
-    separator = "|"
-    for width in col_widths:
-        separator += "-" * (width - 1) + "|"
-    print(separator)
+    # 计算数据列宽
+    for row in data:
+        for i, cell in enumerate(row):
+            col_widths[i] = max(col_widths[i], len(str(cell)))
     
-    # 打印第二行表头
-    header2_line = "|"
-    for i in range(len(headers[1])):
-        if i < len(col_widths):
-            width = col_widths[i]
-            header2_line += f" {str(headers[1][i]):<{width-2}} |"
-    print(header2_line)
-    
-    # 打印分隔线
-    print(separator)
+    # 打印表头
+    for header_row in headers:
+        line = ""
+        for i, header in enumerate(header_row):
+            line += f"{str(header):<{col_widths[i]}} "
+        print(line)
+        print("-" * (sum(col_widths) + len(col_widths) * 2))
     
     # 打印数据行
     for row in data:
-        data_line = "|"
+        line = ""
         for i, cell in enumerate(row):
-            if i < len(col_widths):
-                width = col_widths[i]
-                data_line += f" {str(cell):<{width-2}} |"
-        print(data_line)
-    
-    # 打印分隔线
-    print(separator)
-
-
-def print_summary_table(project_id: int):
-    """
-    打印汇总表格
-    """
-    display = ResultDisplay(project_id)
-    summary_data = display.get_summary_data()
-    
-    if not summary_data:
-        print("暂无汇总数据")
-        return
-    
-    # 表头
-    print("| 排名 | 投标方名称 | 总分 | 价格分 | 投标报价 |")
-    print("|------|------------|------|--------|----------|")
-    
-    # 数据行
-    for item in summary_data:
-        price = item['extracted_price'] if item['extracted_price'] is not None else 'N/A'
-        print(f"| {item['rank']:4d} | {item['bidder_name']:<10} | {item['total_score']:>4.1f} | {item['price_score']:>6.1f} | {price:>8} |")
-
-
-if __name__ == "__main__":
-    # 示例用法
-    print("多层表头表格展示示例:")
-    # print_multi_level_table(1)  # 需要传入实际的项目ID
-    
-    print("\n汇总表格展示示例:")
-    # print_summary_table(1)  # 需要传入实际的项目ID
+            if isinstance(cell, (int, float)):
+                line += f"{cell:<{col_widths[i]}.2f} "
+            else:
+                line += f"{str(cell):<{col_widths[i]}} "
+        print(line)

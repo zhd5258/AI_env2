@@ -132,9 +132,9 @@ class PriceScoreCalculator(PriceScoreCalculatorHelpers):
                                 self.logger.error(f"解析 {bidder_name} 的 detailed_scores 时出错: {e}")
                                 continue
                         
-                        # 确保 detailed_scores 是列表类型
-                        if not isinstance(detailed_scores, list):
-                            self.logger.warning(f"{bidder_name} 的 detailed_scores 不是列表类型: {type(detailed_scores)}")
+                        # 确保 detailed_scores 是列表或字典类型
+                        if not isinstance(detailed_scores, (list, dict)):
+                            self.logger.warning(f"{bidder_name} 的 detailed_scores 不是列表或字典类型: {type(detailed_scores)}")
                             continue
                         
                         # 更新详细评分中的价格项
@@ -194,19 +194,29 @@ class PriceScoreCalculator(PriceScoreCalculatorHelpers):
                     
         return 0.0
 
-    def _update_price_in_scores(
-        self, scores: List[Dict[str, Any]], new_price_score: float
-    ) -> List[Dict[str, Any]]:
+    def _update_price_in_scores(self, scores: Union[List[Dict[str, Any]], Dict[str, Any]], new_price_score: float) -> Union[List[Dict[str, Any]], Dict[str, Any]]:
         """
         更新评分中的价格分
 
         Args:
-            scores: 评分列表
+            scores: 评分列表或字典
             new_price_score: 新的价格分
 
         Returns:
-            List[Dict[str, Any]]: 更新后的评分列表
+            Union[List[Dict[str, Any]], Dict[str, Any]]: 更新后的评分
         """
+        # 如果scores是字典格式（新格式），直接更新价格分
+        if isinstance(scores, dict):
+            updated_scores = {}
+            for key, value in scores.items():
+                # 检查键是否包含价格相关关键词
+                if any(keyword in key for keyword in ['价格', 'price', '报价', '投标报价']):
+                    updated_scores[key] = new_price_score
+                else:
+                    updated_scores[key] = value
+            return updated_scores
+        
+        # 如果scores是列表格式（旧格式），按原来的方式处理
         if not isinstance(scores, list):
             return scores
 

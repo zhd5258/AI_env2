@@ -7,3 +7,15 @@
     width: 3rem;
     height: 3rem;
 }
+
+/* 汇总表样式优化 */
+.table-responsive {
+    overflow-x: auto;
+    max-width: 100%;
+}
+
+.table th {
+    white-space: normal;
+    word-wrap: break-word;
+    vertical-align: middle;
+}
