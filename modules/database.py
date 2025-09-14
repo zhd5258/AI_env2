@@ -57,6 +57,10 @@ class BidDocument(Base):
     detailed_progress_info = Column(String, nullable=True)
     # Adding PDF processing failed page record field
     failed_pages_info = Column(String, nullable=True)
+    # Adding price extraction tracking fields
+    price_extraction_attempts = Column(Integer, default=0)
+    price_extraction_error = Column(String, nullable=True)
+    price_extracted = Column(Boolean, default=False)
 
     project = relationship('TenderProject', back_populates='bid_documents')
     analysis_result = relationship(

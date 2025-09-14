@@ -278,17 +278,24 @@ class ScoringRuleParser:
         Returns:
             str: 价格计算公式
         """
-        # 简单提取包含计算公式的内容
+        if not standard_text:
+            return ""
+            
+        # 更全面地提取包含计算公式的内容
         # 实际项目中可能需要更复杂的公式解析逻辑
         formula_patterns = [
-            r'投标报价得分.*?[=＝].*',
-            r'价格分.*?[=＝].*',
-            r'得分.*?[=＝].*?投标.*?价.*?\/.*?投标.*?价.*?[\*×].*?100',
+            r'投标报价得分[^\n]*?[=＝][^\n]*',  # 投标报价得分=...
+            r'价格分[^\n]*?[=＝][^\n]*',       # 价格分=...
+            r'得分[^\n]*?[=＝][^\n]*?投标.*?价.*?\/.*?投标.*?价.*?[\*×].*?100',  # 得分=...投标价/投标价*100
+            r'评标基准价[^\n]*?[=＝][^\n]*',    # 评标基准价=...
+            r'基准价[^\n]*?[=＝][^\n]*',       # 基准价=...
+            r'投标报价得分.*?＝.*?评标基准价.*?／.*?投标报价.*?×.*?价格分值',  # 完整公式模式
         ]
         
         for pattern in formula_patterns:
-            match = re.search(pattern, standard_text)
+            match = re.search(pattern, standard_text, re.IGNORECASE)
             if match:
                 return match.group(0)
         
-        return standard_text  # 如果未找到特定公式，返回整个标准文本
+        # 如果未找到特定公式，返回整个标准文本（限制长度）
+        return standard_text[:100] if len(standard_text) > 100 else standard_text

@@ -431,6 +431,10 @@ class TableAnalyzerMixin(TableAnalyzerHelpers):
         使用AI分析价格计算描述，提取价格计算公式
         """
         try:
+            # 如果描述为空，直接返回
+            if not description:
+                return ""
+                
             # 构建AI分析提示
             prompt = f"""
 请分析以下价格评分计算描述，提取其中的价格计算公式和变量定义：
@@ -442,7 +446,12 @@ class TableAnalyzerMixin(TableAnalyzerHelpers):
 2. 变量定义:
 3. 计算说明:
 
-如果描述中没有明确的价格计算公式，请返回"未找到明确的价格计算公式"
+如果描述中没有明确的价格计算公式，请根据描述内容推断合理的计算公式，并返回推断的公式。
+
+示例格式：
+1. 价格计算公式: 评标基准价/投标报价×价格分值
+2. 变量定义: 评标基准价=满足招标文件要求且投标价格最低的投标报价
+3. 计算说明: 满足招标文件要求且投标价格最低的投标报价为评标基准价，其价格分为满分。其他投标人的价格分统一按照公式计算。
 """
 
             # 调用AI分析器
@@ -455,8 +464,10 @@ class TableAnalyzerMixin(TableAnalyzerHelpers):
                 return response.strip()
             else:
                 self.logger.warning(f'AI分析价格公式失败: {response}')
-                return 'AI分析失败'
+                # AI分析失败时，返回原始描述作为备选
+                return description[:100] if len(description) > 100 else description
 
         except Exception as e:
             self.logger.error(f'使用AI分析价格公式时出错: {e}')
-            return 'AI分析出错'
+            # 出现异常时，返回原始描述作为备选
+            return description[:100] if description and len(description) > 100 else (description or "")

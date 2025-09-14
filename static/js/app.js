@@ -245,183 +245,194 @@ document.addEventListener('DOMContentLoaded', function () {
         }
     }
 
+    function truncateText(text, maxLength) {
+        if (text.length > maxLength) {
+            return text.substring(0, maxLength) + '...';
+        }
+        return text;
+    }
+
     function displayResults(projectId, results, rules) {
-    progressContainer.style.display = 'none';
-    if (!results || results.length === 0) {
-        resultArea.innerHTML = '<div class="alert alert-info">暂无分析结果</div>';
-        return;
-    }
-
-    results.sort((a, b) => (b.total_score || 0) - (a.total_score || 0));
-
-    const modelInfo = results[0].ai_model || '未知模型';
-
-    if (!rules || rules.length === 0) {
-        console.warn("未找到评分规则，将显示简化的结果表。");
-        displaySimpleResults(results);
-        return;
-    }
-
-    // 1. Group rules by Parent_Item_Name (category)
-    const groupedRules = rules.reduce((acc, rule) => {
-        const parent = rule.category || '未分类';
-        if (!acc[parent]) {
-            const parentRule = rules.find(r => r.criteria_name === parent && r.category === parent);
-            acc[parent] = { children: [], parent_score: parentRule ? parentRule.max_score : 0 };
+        progressContainer.style.display = 'none';
+        if (!results || results.length === 0) {
+            resultArea.innerHTML = '<div class="alert alert-info">暂无分析结果</div>';
+            return;
         }
-        if (rule.category !== rule.criteria_name) {
-            acc[parent].children.push({ name: rule.criteria_name, max_score: rule.max_score });
+
+        results.sort((a, b) => (b.total_score || 0) - (a.total_score || 0));
+
+        const modelInfo = results[0].ai_model || '未知模型';
+
+        if (!rules || rules.length === 0) {
+            console.warn("未找到评分规则，将显示简化的结果表。");
+            displaySimpleResults(results);
+            return;
         }
-        return acc;
-    }, {});
 
-    for (const category in groupedRules) {
-        if (groupedRules[category].children.length === 0) {
-            const rule = rules.find(r => r.category === category);
-            if (rule) {
-                groupedRules[category].children.push({ name: rule.criteria_name, max_score: rule.max_score });
-            }
-        }
-    }
+        // 获取动态汇总表数据
+        fetch(`/api/projects/${projectId}/dynamic-summary`)
+            .then(response => response.json())
+            .then(summaryData => {
+                // 2. Build Header HTML
+                let headerRow1 = '<tr>';
+                headerRow1 += '<th rowspan="2">排名</th>';
+                headerRow1 += '<th rowspan="2" class="sticky-col bidder-col">投标人</th>';
+                
+                // 构建表头第二行
+                let headerRow2 = '<tr>';
+                
+                // 用于跟踪所有子项标题，以便在数据行中按顺序查找
+                const allChildHeaders = [];
+                
+                if (summaryData && summaryData.scoring_items) {
+                    // 遍历评分项构建多层表头
+                    for (const [parentName, children] of Object.entries(summaryData.scoring_items)) {
+                        if (children && children.length > 0) {
+                            // 有子项的父项 - 合并列
+                            headerRow1 += `<th colspan="${children.length}" title="${parentName}">${truncateText(parentName, 8)}</th>`;
+                            
+                            // 构建表头第二行 - 子项
+                            children.forEach(child => {
+                                const childName = child.name || 'N/A';
+                                const maxScore = child.max_score || 0;
+                                headerRow2 += `<th title="${childName}">${truncateText(childName, 8)}<br>(${maxScore}分)</th>`;
+                                allChildHeaders.push(child.name);
+                            });
+                        } else {
+                            // 没有子项的父项（如价格分）- 跨两行显示
+                            headerRow1 += `<th rowspan="2" title="${parentName}">${truncateText(parentName, 8)}</th>`;
+                            // 注意：这里不需要在第二行添加任何内容
+                        }
+                    }
+                    
+                    // 添加总分列
+                    headerRow1 += '<th rowspan="2" title="总分">总分</th>';
+                }
+                
+                headerRow1 += '</tr>';
+                headerRow2 += '</tr>';
 
-    // 2. Build Header HTML
-    let headerRow1 = '<tr><th rowspan="2" class="sticky-col">排名</th><th rowspan="2" class="sticky-col bidder-col">投标人</th><th rowspan="2">总分</th>';
-    let headerRow2 = '<tr>';
-    const allChildHeaders = [];
+                // 3. Build Body HTML
+                let tableRows = results.map((result, index) => {
+                    let row = '<tr>';
+                    row += `<td class="sticky-col"><span class="badge bg-primary rounded-pill">${index + 1}</span></td>`;
+                    
+                    const bidderName = result.bidder_name || 'N/A';
+                    const truncatedName = bidderName.length > 5 ? bidderName.substring(0, 5) + '...' : bidderName;
+                    row += `<td class="sticky-col bidder-col" title="${bidderName}">${truncatedName}</td>`;
+                    
+                    const scoresMap = new Map();
+                    
+                    // 正确处理detailed_scores，根据新规范处理数据结构
+                    // detailed_scores是一个数组，每个元素包含Child_Item_Name、score、reason、Parent_Item_Name
+                    let detailedScores = result.detailed_scores || [];
+                    
+                    // 处理数组格式的detailed_scores
+                    if (Array.isArray(detailedScores)) {
+                        // 新格式: 数组中的每个元素是一个包含Child_Item_Name、score、reason、Parent_Item_Name的字典
+                        for (const item of detailedScores) {
+                            // 使用Child_Item_Name作为键，score作为值
+                            const childItemName = item.Child_Item_Name || item.criteria_name;
+                            if (childItemName && item.score !== undefined) {
+                                scoresMap.set(childItemName, item.score);
+                            }
+                        }
+                    } 
+                    // 处理旧的键值对字典结构（兼容性考虑）
+                    else if (typeof detailedScores === 'object' && detailedScores !== null) {
+                        // 旧格式: { '评分项名称': 分数, ... }
+                        for (const [name, score] of Object.entries(detailedScores)) {
+                            scoresMap.set(name, score);
+                        }
+                    }
+                    
+                    // 处理dynamic_scores
+                    if (result.dynamic_scores && typeof result.dynamic_scores === 'object') {
+                        for (const [name, score] of Object.entries(result.dynamic_scores)) {
+                            if (typeof score === 'object' && score !== null && 'score' in score) {
+                                scoresMap.set(name, score.score);
+                            } else if (typeof score === 'number') {
+                                scoresMap.set(name, score);
+                            }
+                        }
+                    }
+                    
+                    // 确保正确处理价格分，无论它是否已经在detailed_scores中
+                    if (result.price_score !== undefined && result.price_score !== null) {
+                        scoresMap.set('价格分', result.price_score);
+                    } else {
+                        // 如果price_score为null或undefined，检查是否在detailed_scores中
+                        if (Array.isArray(detailedScores)) {
+                            // 在数组中查找价格评分项
+                            for (const item of detailedScores) {
+                                if (item.is_price_criteria || (item.Child_Item_Name && item.Child_Item_Name.includes('价格'))) {
+                                    scoresMap.set('价格分', item.score);
+                                    break;
+                                }
+                            }
+                        } else if (typeof detailedScores === 'object' && detailedScores !== null) {
+                            // 查找可能的价格评分项
+                            for (const [name, score] of Object.entries(detailedScores)) {
+                                if (name.includes('价格') || name.includes('Price')) {
+                                    scoresMap.set('价格分', score);
+                                    break;
+                                }
+                            }
+                        }
+                    }
+                    
+                    // 按顺序添加子项得分
+                    allChildHeaders.forEach(childName => {
+                        const score = scoresMap.get(childName);
+                        row += `<td>${score !== undefined && score !== null ? parseFloat(score).toFixed(2) : '—'}</td>`;
+                    });
+                    
+                    // 添加总分
+                    const totalScore = result.total_score !== undefined && result.total_score !== null ? 
+                        parseFloat(result.total_score).toFixed(2) : '—';
+                    row += `<td><strong>${totalScore}</strong></td>`;
 
-    for (const category in groupedRules) {
-        const group = groupedRules[category];
-        if (group.children.length > 0) {
-            if (group.children.length === 1 && group.children[0].name === category) {
-                headerRow1 += `<th rowspan="2">${category} (${group.parent_score}分)</th>`;
-                allChildHeaders.push(group.children[0].name);
-            } else {
-                headerRow1 += `<th colspan="${group.children.length}">${category} (${group.parent_score}分)</th>`;
-                group.children.forEach(child => {
-                    const childName = child.name || 'N/A';
-                    const truncatedChildName = childName.length > 5 ? childName.substring(0, 5) + '...' : childName;
-                    headerRow2 += `<th title="${childName}">${truncatedChildName} (${child.max_score}分)</th>`;
-                    allChildHeaders.push(child.name);
+                    row += '</tr>';
+                    return row;
                 });
-            }
-        }
+
+                resultArea.innerHTML = `
+                    <div class="card">
+                        <div class="card-header">
+                            <div class="d-flex justify-content-between align-items-center">
+                                <h3><i class="fas fa-poll me-2"></i>分析结果</h3>
+                                <div class="d-flex gap-2">
+                                    <button class="btn btn-primary" onclick="exportToExcel(${projectId})">
+                                        <i class="fas fa-file-excel me-1"></i>导出Excel
+                                    </button>
+                                    <button class="btn btn-success" onclick="exportToWord(${projectId})">
+                                        <i class="fas fa-file-word me-1"></i>导出Word
+                                    </button>
+                                </div>
+                            </div>
+                            <small class="text-muted">AI模型: ${modelInfo}</small>
+                        </div>
+                        <div class="card-body">
+                            <div class="table-responsive">
+                                <table class="table table-bordered table-hover">
+                                    <thead class="table-dark align-middle text-center">
+                                        ${headerRow1}
+                                        ${headerRow2}
+                                    </thead>
+                                    <tbody class="text-center">
+                                        ${tableRows}
+                                    </tbody>
+                                </table>
+                            </div>
+                        </div>
+                    </div>
+                `;
+            })
+            .catch(error => {
+                console.error("获取动态汇总表数据时出错:", error);
+                resultArea.innerHTML = `<div class="alert alert-danger">获取动态汇总表数据失败: ${error.message}</div>`;
+            });
     }
-    headerRow1 += '</tr>';
-    headerRow2 += '</tr>';
-
-    // 3. Build Body HTML
-    let tableRows = results.map((result, index) => {
-        let row = '<tr>';
-        row += `<td class="sticky-col"><span class="badge bg-primary rounded-pill">${index + 1}</span></td>`;
-        
-        const bidderName = result.bidder_name || 'N/A';
-        const truncatedName = bidderName.length > 5 ? bidderName.substring(0, 5) + '...' : bidderName;
-        row += `<td class="sticky-col bidder-col" title="${bidderName}">${truncatedName}</td>`;
-        
-        row += `<td><strong>${(result.total_score || 0).toFixed(2)}</strong></td>`;
-
-        const scoresMap = new Map();
-        
-        // 正确处理detailed_scores，根据新规范处理数据结构
-        // detailed_scores是一个数组，每个元素包含Child_Item_Name、score、reason、Parent_Item_Name
-        let detailedScores = result.detailed_scores || [];
-        
-        // 处理数组格式的detailed_scores
-        if (Array.isArray(detailedScores)) {
-            // 新格式: 数组中的每个元素是一个包含Child_Item_Name、score、reason、Parent_Item_Name的字典
-            for (const item of detailedScores) {
-                // 使用Child_Item_Name作为键，score作为值
-                const childItemName = item.Child_Item_Name || item.criteria_name;
-                if (childItemName && item.score !== undefined) {
-                    scoresMap.set(childItemName, item.score);
-                }
-            }
-        } 
-        // 处理旧的键值对字典结构（兼容性考虑）
-        else if (typeof detailedScores === 'object' && detailedScores !== null) {
-            // 旧格式: { '评分项名称': 分数, ... }
-            for (const [name, score] of Object.entries(detailedScores)) {
-                scoresMap.set(name, score);
-            }
-        }
-        
-        // 处理dynamic_scores
-        if (result.dynamic_scores && typeof result.dynamic_scores === 'object') {
-            for (const [name, score] of Object.entries(result.dynamic_scores)) {
-                if (typeof score === 'object' && score !== null && 'score' in score) {
-                    scoresMap.set(name, score.score);
-                } else if (typeof score === 'number') {
-                    scoresMap.set(name, score);
-                }
-            }
-        }
-        
-        // 确保正确处理价格分，无论它是否已经在detailed_scores中
-        if (result.price_score !== undefined && result.price_score !== null) {
-            scoresMap.set('价格分', result.price_score);
-        } else {
-            // 如果price_score为null或undefined，检查是否在detailed_scores中
-            if (Array.isArray(detailedScores)) {
-                // 在数组中查找价格评分项
-                for (const item of detailedScores) {
-                    if (item.is_price_criteria || (item.Child_Item_Name && item.Child_Item_Name.includes('价格'))) {
-                        scoresMap.set('价格分', item.score);
-                        break;
-                    }
-                }
-            } else if (typeof detailedScores === 'object' && detailedScores !== null) {
-                // 查找可能的价格评分项
-                for (const [name, score] of Object.entries(detailedScores)) {
-                    if (name.includes('价格') || name.includes('Price')) {
-                        scoresMap.set('价格分', score);
-                        break;
-                    }
-                }
-            }
-        }
-        
-        allChildHeaders.forEach(childName => {
-            const score = scoresMap.get(childName);
-            row += `<td>${score !== undefined && score !== null ? parseFloat(score).toFixed(2) : '—'}</td>`;
-        });
-
-        row += '</tr>';
-        return row;
-    }).join('');
-
-    // 4. Assemble the final table
-    resultArea.innerHTML = `
-        <div class="card">
-            <div class="card-header d-flex justify-content-between align-items-center">
-                <div>
-                    <h3><i class="fas fa-poll me-2"></i>分析结果</h3>
-                    <p class="text-muted mb-0">使用的AI模型: ${modelInfo}</p>
-                </div>
-                <div>
-                    <button id="analysisBtn" class="btn btn-info">
-                        <i class="fas fa-chart-bar me-2"></i>图表与详细分析
-                    </button>
-                    <a href="/api/projects/${projectId}/download-results" class="btn btn-success ms-2">
-                        <i class="fas fa-file-excel me-2"></i>下载Excel报告
-                    </a>
-                </div>
-            </div>
-            <div class="card-body">
-                <div class="summary-table-container">
-                    <table class="table table-striped table-hover table-bordered summary-table">
-                        <thead class="table-dark align-middle text-center">
-                            ${headerRow1}
-                            ${headerRow2}
-                        </thead>
-                        <tbody class="text-center">
-                            ${tableRows}
-                        </tbody>
-                    </table>
-                </div>
-            </div>
-        </div>
-    `;
-}
 
     function displaySimpleResults(results) {
         let tableRows = results.map((result, index) => `

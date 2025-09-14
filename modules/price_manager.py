@@ -111,37 +111,71 @@ class PriceManager:
         Returns:
             Optional[Dict[str, Any]]: 包含公式和变量定义的字典
         """
-        if not price_formula and not price_description:
+        # 优先使用price_formula，如果没有则使用price_description
+        formula_source = price_formula or price_description
+        
+        if not formula_source:
             return None
             
         # 尝试从AI分析的结果中提取公式和变量定义
         formula_info = {
-            'formula': price_formula,
+            'formula': formula_source,
             'description': price_description,
             'variables': {}
         }
         
+        # 解析AI返回的格式
+        if '价格计算公式:' in formula_source or '1. 价格计算公式:' in formula_source:
+            # AI返回的格式，提取各部分内容
+            lines = formula_source.split('\n')
+            for line in lines:
+                if '价格计算公式:' in line:
+                    formula_part = line.split('价格计算公式:', 1)[1].strip()
+                    if formula_part:
+                        formula_info['formula'] = formula_part
+                elif '变量定义:' in line:
+                    definition_part = line.split('变量定义:', 1)[1].strip()
+                    if definition_part:
+                        formula_info['variables']['definition'] = definition_part
+                elif '计算说明:' in line:
+                    explanation_part = line.split('计算说明:', 1)[1].strip()
+                    if explanation_part:
+                        formula_info['variables']['explanation'] = explanation_part
+        
+        # 如果没有从AI格式中提取到公式，尝试其他方式
+        if formula_info['formula'] == formula_source and ':' in formula_source:
+            # 可能是简单的描述文本，尝试从中提取公式
+            # 查找包含等号或数学运算符的行作为公式
+            lines = formula_source.split('\n')
+            for line in lines:
+                if '=' in line or ('/' in line and '×' in line) or ('/' in line and '*' in line):
+                    formula_info['formula'] = line.strip()
+                    break
+        
         # 如果有描述信息，尝试从中提取变量定义
-        if price_description:
+        description_text = price_description or ""
+        if description_text:
             # 简单的变量提取逻辑（实际应用中可能需要更复杂的处理）
             variables = {}
             
             # 查找类似"评标基准价"的变量定义
             import re
-            benchmark_pattern = r'(评标基准价|基准价)[^\n]*?([最低报价|最低评标价|满足要求的最低价])'
-            benchmark_match = re.search(benchmark_pattern, price_description)
+            benchmark_pattern = r'(评标基准价|基准价)[^\n]*?([最低报价|最低评标价|满足要求的最低价|平均值])'
+            benchmark_match = re.search(benchmark_pattern, description_text)
             if benchmark_match:
                 variables['benchmark_price'] = benchmark_match.group(2)
                 
             # 查找满分定义
             max_score_pattern = r'(\d+(?:\.\d+)?)\s*分|满分\s*(\d+(?:\.\d+)?)'
-            max_score_match = re.search(max_score_pattern, price_description)
+            max_score_match = re.search(max_score_pattern, description_text)
             if max_score_match:
                 score = max_score_match.group(1) or max_score_match.group(2)
                 if score:
                     variables['max_score'] = float(score)
             
-            formula_info['variables'] = variables
+            # 如果之前没有设置变量，使用新提取的变量
+            if not formula_info['variables']:
+                formula_info['variables'] = variables
             
         return formula_info
 

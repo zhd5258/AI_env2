@@ -157,22 +157,16 @@ class IntelligentBidAnalyzer(BidAnalyzerHelpers):
                 # 更新进度
                 self._update_progress(self.progress_counter, self.total_rules_to_analyze, current_rule_name, analyzed_scores_for_progress)
             
-            # 5. 计算价格分
+            # 5. 计算价格分（注意：价格分应该在所有投标人都分析完成后统一计算，这里仅保存提取的价格）
             price_score = 0
             price_rule = next((rule for rule in rules_from_db if rule.is_price_criteria), None)
             if price_rule:
-                price_score_result = self._calculate_price_score(price_rule, best_price)
-                price_score = price_score_result.get('score', 0)
-                # 将价格评分添加到分析结果中
-                price_score_item = {
-                    'criteria_name': price_rule.Parent_Item_Name or '价格分',
-                    'max_score': price_rule.Parent_max_score,
-                    'score': price_score,
-                    'reason': price_score_result.get('reason', '根据价格评分规则计算得出'),
-                    'is_price_criteria': True,
-                    'extracted_price': best_price
-                }
-                analyzed_scores.append(price_score_item)
+                self.logger.info(f'投标人 {self.bidder_name} 提取到价格: {best_price}')
+                # 价格分将在所有投标人分析完成后统一计算，这里仅保存提取的价格
+                self._save_extracted_price(best_price)
+            else:
+                # 没有价格规则也保存提取的价格
+                self._save_extracted_price(best_price)
             
             # 6. 计算总分
             total_score = sum(item['score'] for item in analyzed_scores)

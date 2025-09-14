@@ -147,7 +147,20 @@ class DBHandlerMixin:
                 
                 # 特殊处理价格规则
                 if is_price_criteria and not rule.get('children', []):
-                    # 价格规则没有子项，将描述保存在description字段中
+                    # 价格规则没有子项，将描述和公式保存在相应字段中
+                    scoring_rule = ScoringRule(
+                        project_id=project_id,
+                        Parent_Item_Name=criteria_name[:20],
+                        Parent_max_score=int(max_score) if max_score else None,
+                        Child_Item_Name=None,
+                        Child_max_score=None,
+                        description=description[:100] if description else None,
+                        is_veto=False,
+                        is_price_criteria=True,
+                        price_formula=price_formula[:100] if price_formula else None
+                    )
+                elif is_price_criteria and rule.get('children', []):
+                    # 价格规则有子项的情况
                     scoring_rule = ScoringRule(
                         project_id=project_id,
                         Parent_Item_Name=criteria_name[:20],
@@ -180,20 +193,22 @@ class DBHandlerMixin:
                         Child_max_score=int(max_score) if max_score else None,
                         description=description[:100] if description else None,
                         is_veto=False,
-                        is_price_criteria=False,
-                        price_formula=None
+                        is_price_criteria=is_price_criteria,  # 子项也可能是价格项
+                        price_formula=price_formula[:100] if price_formula and is_price_criteria else None
                     )
                 
-                # 添加到数据库会话
                 db.add(scoring_rule)
-                db.flush()  # 刷新以获取ID
+                db.flush()  # 获取插入记录的ID
                 
-                # 递归处理子项
-                if 'children' in rule and rule['children']:
-                    self._save_scoring_rules_recursive(db, project_id, rule['children'], scoring_rule.id)
+                # 递归处理子项（如果有的话）
+                children = rule.get('children', [])
+                if children:
+                    self._save_scoring_rules_recursive(db, project_id, children, scoring_rule.id)
+                    
             except Exception as e:
-                self.logger.error(f"保存评分规则 '{rule.get('criteria_name', 'Unknown')}' 时出错: {e}")
-                continue
+                self.logger.error(f"保存评分规则 '{criteria_name}' 时出错: {e}")
+                db.rollback()
+                raise
 
     def save_scoring_rules_from_table_data(self, project_id: int, structured_tables: List[Dict]) -> bool:
         """

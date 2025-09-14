@@ -528,11 +528,13 @@ def run_analysis_and_calculate_prices(project_id: int, bid_files_info: list):
     try:
         logging.info(f'开始为项目 {project_id} 计算价格分。')
         calculator = PriceScoreCalculator(db_session=db)
-        price_scores = calculator.calculate_project_price_scores(project_id)
+        price_scores_result = calculator.calculate_project_price_scores(project_id)
 
-        if price_scores:
+        if price_scores_result:
+            # 重新获取分析结果以计算更新了多少个投标人
+            analysis_results = db.query(AnalysisResult).filter(AnalysisResult.project_id == project_id).all()
             logging.info(
-                f'项目 {project_id} 价格分计算完成，更新了 {len(price_scores)} 个投标方。'
+                f'项目 {project_id} 价格分计算完成，更新了 {len(analysis_results)} 个投标方。'
             )
         else:
             logging.warning(f'项目 {project_id} 未能计算出任何价格分。')
