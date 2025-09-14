@@ -210,27 +210,23 @@ class PriceManager:
         formula = formula_info.get('formula', '')
         description = formula_info.get('description', '')
         
-        # 如果公式中包含特定的计算方式，则按该方式计算
-        import re
-        if '评标基准价/投标报价' in formula or '基准价/报价' in formula:
-            self.logger.info("使用 评标基准价/投标报价 的计算方式")
-            for bidder, price in bidder_prices.items():
-                # 投标报价得分＝（评标基准价/投标报价）*价格分满分
-                score = (benchmark_price / price) * price_max_score
-                scores[bidder] = round(score, 2)
-                self.logger.info(f"投标人 {bidder} 报价 {price}，得分 {scores[bidder]}")
-        else:
-            # 使用默认方法计算
-            self.logger.info("使用默认价格计算方法")
-            for bidder, price in bidder_prices.items():
-                if price == benchmark_price:
-                    # 最低报价得满分
-                    scores[bidder] = price_max_score
-                    self.logger.info(f"投标人 {bidder} 报价为最低价 {price}，得满分 {price_max_score}")
-                else:
-                    # 按照评标规则公式计算：投标报价得分＝（评标基准价/投标报价）*满分
-                    score = (benchmark_price / price) * price_max_score
-                    scores[bidder] = round(score, 2)
-                    self.logger.info(f"投标人 {bidder} 报价 {price}，得分 {scores[bidder]}")
+        # 记录发送给AI大模型的完整prompt和返回值
+        self.logger.info(f"发送给AI大模型的价格分计算请求:")
+        self.logger.info(f"  公式: {formula}")
+        self.logger.info(f"  描述: {description}")
+        self.logger.info(f"  变量定义: {variables}")
+        self.logger.info(f"  投标人报价: {bidder_prices}")
+        self.logger.info(f"  评标基准价: {benchmark_price}")
+        self.logger.info(f"  价格分满分: {price_max_score}")
+        
+        # 如果没有提供公式，记录错误并返回空结果
+        if not formula:
+            self.logger.error("没有提供有效的价格计算公式，无法计算价格分")
+            return scores
+            
+        # 这里应该调用AI大模型来计算价格分，而不是硬编码计算逻辑
+        # 目前记录详细信息，后续需要实现AI大模型调用
+        self.logger.warning("价格分计算应通过AI大模型完成，当前实现返回空结果")
+        self.logger.info(f"应发送给AI大模型的信息: 公式={formula}, 投标人报价={bidder_prices}, 满分={price_max_score}, 评标基准价={benchmark_price}")
             
         return scores

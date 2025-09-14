@@ -67,57 +67,63 @@ class ResultDisplay:
     
     def _build_rules_tree(self, scoring_rules: List[ScoringRule]) -> List[Dict[str, Any]]:
         """
-        构建评分规则树结构，过滤掉只有Parent_Item_Name而Child_Item_Name为空的规则（除了价格规则）
+        构建评分规则树结构，确保正确处理Child_Item_Name字段
         """
         parent_groups = {}
-        price_rule = None
+        price_rules = []
         
         # 分组处理评分规则
         for rule in scoring_rules:
-            # 查找价格评分规则
-            if rule.is_price_criteria:
-                price_rule = rule
+            # 收集价格评分规则
+            if getattr(rule, 'is_price_criteria', False):
+                price_rules.append(rule)
                 continue
                 
-            # 过滤掉只有Parent_Item_Name而Child_Item_Name为空的规则
-            if not rule.Child_Item_Name:
+            # 获取Child_Item_Name，确保非空
+            child_item_name = getattr(rule, 'Child_Item_Name', None)
+            if not child_item_name:
                 continue
                 
-            parent_name = rule.Parent_Item_Name
-            if not parent_name:
+            # 获取Parent_Item_Name
+            Parent_Item_Name = getattr(rule, 'Parent_Item_Name', None)
+            if not Parent_Item_Name:
                 continue
                 
             # 初始化父项组
-            if parent_name not in parent_groups:
-                parent_groups[parent_name] = {
-                    'name': parent_name,
+            if Parent_Item_Name not in parent_groups:
+                parent_groups[Parent_Item_Name] = {
+                    'name': Parent_Item_Name,
                     'max_score': 0,
                     'children': []
                 }
             
+            # 获取子项分数和描述
+            child_max_score = getattr(rule, 'Child_max_score', 0) or 0
+            description = getattr(rule, 'description', '')
+            
             # 添加子项
             child_item = {
-                'name': rule.Child_Item_Name,
-                'max_score': rule.Child_max_score or 0,
-                'description': rule.description or ''
+                'name': child_item_name,
+                'max_score': float(child_max_score),
+                'description': description
             }
-            parent_groups[parent_name]['children'].append(child_item)
+            parent_groups[Parent_Item_Name]['children'].append(child_item)
             
             # 累计父项满分（所有子项满分之和）
-            parent_groups[parent_name]['max_score'] += rule.Child_max_score or 0
+            parent_groups[Parent_Item_Name]['max_score'] += float(child_max_score)
         
         # 转换为列表形式
         rules_tree = list(parent_groups.values())
         
-        # 如果有价格规则，添加到末尾
-        if price_rule:
+        # 处理价格评分规则
+        for rule in price_rules:
             rules_tree.append({
-                'name': price_rule.Parent_Item_Name or "价格评分",
-                'max_score': price_rule.Parent_max_score,
+                'name': getattr(rule, 'Parent_Item_Name', None) or "价格评分",
+                'max_score': float(getattr(rule, 'Parent_max_score', 0) or 0),
                 'children': [{
                     'name': '价格分',
-                    'max_score': price_rule.Parent_max_score,
-                    'description': price_rule.description
+                    'max_score': float(getattr(rule, 'Parent_max_score', 0) or 0),
+                    'description': getattr(rule, 'description', '')
                 }]
             })
             
@@ -169,7 +175,9 @@ class ResultDisplay:
             if children:
                 # 有子项的父项 - 添加每个子项名称作为表头
                 for child_item in children:
-                    header_row.append(child_item['name'])  # 只显示子项名称
+                    # 特殊处理价格评分项，不添加到子项列表中
+                    if child_item.get('name') != '价格分':
+                        header_row.append(child_item['name'])  # 只显示子项名称
         
         # 添加价格分和总分列
         header_row.append("价格分")
@@ -192,7 +200,9 @@ class ResultDisplay:
         # 获取所有投标方的总分用于排序
         bidder_scores_with_total = []
         for doc in bid_documents:
-            if doc.analysis_result:
+            # 确保分析结果存在且属于当前项目
+            if (doc.analysis_result and 
+                doc.analysis_result.project_id == self.project_id):
                 total_score = doc.analysis_result.total_score or 0
                 bidder_scores_with_total.append((doc.bidder_name, total_score))
         
@@ -205,7 +215,14 @@ class ResultDisplay:
             
             # 获取该投标方的得分
             scores = bidder_scores.get(bidder_name, {})
-            bid_doc = bid_doc_map.get(bidder_name)
+            # 确保bid_doc存在且分析结果属于当前项目
+            bid_doc = None
+            for doc in bid_documents:
+                if (doc.bidder_name == bidder_name and 
+                    doc.analysis_result and 
+                    doc.analysis_result.project_id == self.project_id):
+                    bid_doc = doc
+                    break
             
             # 按规则树顺序填充数据（只处理子项）
             for parent_item in rules_tree:
@@ -213,8 +230,10 @@ class ResultDisplay:
                 if children:
                     # 有子项的父项 - 添加每个子项的得分
                     for child_item in children:
-                        score = scores.get(child_item['name'], 0)
-                        row.append(round(score, 2))
+                        # 特殊处理价格评分项，不从scores中获取
+                        if child_item.get('name') != '价格分':
+                            score = scores.get(child_item['name'], 0)
+                            row.append(round(score, 2))
             
             # 添加价格分
             price_score = 0
@@ -234,7 +253,7 @@ class ResultDisplay:
         获取汇总数据，包括各投标方的总分排名
         """
         try:
-            # 获取投标文档
+            # 获取投标文档，确保只获取当前项目的文档
             bid_documents = self.session.query(BidDocument).filter(
                 BidDocument.project_id == self.project_id
             ).all()
@@ -242,7 +261,9 @@ class ResultDisplay:
             # 构建汇总数据
             summary_data = []
             for bid_doc in bid_documents:
-                if bid_doc.analysis_result:
+                # 确保分析结果存在且属于当前项目
+                if (bid_doc.analysis_result and 
+                    bid_doc.analysis_result.project_id == self.project_id):
                     summary_data.append({
                         'bidder_name': bid_doc.bidder_name,
                         'total_score': bid_doc.analysis_result.total_score or 0,

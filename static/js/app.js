@@ -290,7 +290,7 @@ document.addEventListener('DOMContentLoaded', function () {
                                 const childName = child.name || 'N/A';
                                 const maxScore = child.max_score || 0;
                                 headerRow += `<th title="${childName}">${truncateText(childName, 8)}<br>(${maxScore}分)</th>`;
-                                allChildHeaders.push(child.name);
+                                allChildHeaders.push(childName);
                             });
                         }
                     }

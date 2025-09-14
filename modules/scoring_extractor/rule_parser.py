@@ -6,6 +6,7 @@
 import re
 import logging
 from typing import List, Dict, Any, Tuple
+from modules.local_ai_analyzer import LocalAIAnalyzer
 
 
 class ScoringRuleParser:
@@ -13,6 +14,7 @@ class ScoringRuleParser:
     
     def __init__(self):
         self.logger = logging.getLogger(__name__)
+        self.ai_analyzer = LocalAIAnalyzer()
     
     def parse_scoring_rules_from_table_data(self, structured_tables: List[Dict]) -> List[Dict[str, Any]]:
         """
@@ -147,7 +149,9 @@ class ScoringRuleParser:
                     # 特别处理价格评分规则
                     price_formula = None
                     if is_price_criteria:
-                        price_formula = self._extract_price_formula(standard_value)
+                        # 对于价格规则，我们需要从整行数据中提取完整的价格评价规则
+                        price_evaluation_rule = self._extract_full_price_evaluation_rule(row_values)
+                        price_formula = self._generate_price_formula_with_ai(price_evaluation_rule)
                     
                     # 创建评分规则（父项）
                     rule = {
@@ -187,7 +191,9 @@ class ScoringRuleParser:
                         # 子项继承父项的价格公式（如果是价格项）
                         price_formula = None
                         if is_detail_price_criteria:
-                            price_formula = self._extract_price_formula(standard_value)
+                            # 对于价格规则，我们需要从整行数据中提取完整的价格评价规则
+                            price_evaluation_rule = self._extract_full_price_evaluation_rule(row_values)
+                            price_formula = self._generate_price_formula_with_ai(price_evaluation_rule)
                         
                         child_rule = {
                             "criteria_name": detail_value,
@@ -204,7 +210,113 @@ class ScoringRuleParser:
                 continue
         
         return rules
-    
+
+    def _extract_full_price_evaluation_rule(self, row_values: List[str]) -> str:
+        """
+        从表格行的所有单元格中提取完整的价格评价规则
+        根据项目需求，需要从存储评标规则的表格中的最后一行的全部单元格的内容合成一个完整的价格评价规则
+        
+        Args:
+            row_values: 表格行的所有单元格值
+            
+        Returns:
+            str: 完整的价格评价规则
+        """
+        # 将所有单元格的内容连接起来形成完整的价格评价规则
+        full_rule = " ".join([str(value).strip() for value in row_values if value and str(value).strip()])
+        self.logger.info(f"提取到完整的价格评价规则: {full_rule}")
+        return full_rule
+
+    def _generate_price_formula_with_ai(self, price_evaluation_rule: str) -> str:
+        """
+        将价格评价规则发送给AI大模型，要求生成价格计算公式
+        
+        Args:
+            price_evaluation_rule: 完整的价格评价规则
+            
+        Returns:
+            str: AI生成的价格计算公式
+        """
+        if not price_evaluation_rule:
+            self.logger.warning("价格评价规则为空，无法生成价格计算公式")
+            return ""
+            
+        # 构造发送给AI的prompt
+        prompt = f"""
+你是一个专业的评标专家，请根据以下价格评分规则，提取或推断出明确的价格计算公式。
+
+价格评分规则:
+{price_evaluation_rule}
+
+请严格按照以下格式输出结果:
+价格计算公式: [具体的计算公式]
+
+例如:
+价格计算公式: 满足招标文件要求且投标报价最低的投标报价为评标基准价，其价格分为满分。其他投标人的价格分统一按照下列公式计算：投标报价得分＝（评标基准价/投标报价）×价格分值
+
+只输出公式，不要包含其他解释性文字。
+"""
+
+        # 在发送给AI大模型前打印价格评价规则
+        self.logger.info(f"发送给AI大模型的价格评价规则: {price_evaluation_rule}")
+        self.logger.info(f"发送给AI大模型的完整prompt: {prompt}")
+        
+        try:
+            # 调用AI大模型生成价格计算公式
+            ai_response = self.ai_analyzer.analyze_text(prompt)
+            
+            # 从AI响应中提取价格计算公式
+            price_formula = self._extract_formula_from_ai_response(ai_response)
+            
+            # 在AI大模型返回公式后打印价格计算公式
+            self.logger.info(f"AI大模型返回的价格计算公式: {price_formula}")
+            self.logger.info(f"完整的AI大模型响应: {ai_response}")
+            
+            return price_formula
+        except Exception as e:
+            self.logger.error(f"调用AI大模型生成价格计算公式时出错: {e}")
+            return ""
+
+    def _extract_formula_from_ai_response(self, ai_response: str) -> str:
+        """
+        从AI响应中提取价格计算公式
+        
+        Args:
+            ai_response: AI大模型的响应
+            
+        Returns:
+            str: 提取到的价格计算公式
+        """
+        if not ai_response:
+            return ""
+            
+        # 首先尝试提取"价格计算公式:"后的内容
+        if "价格计算公式:" in ai_response:
+            parts = ai_response.split("价格计算公式:", 1)  # 只分割一次
+            if len(parts) > 1:
+                formula = parts[1].strip()
+                # 如果公式中包含换行符，只取第一行
+                if '\n' in formula:
+                    formula = formula.split('\n', 1)[0]
+                return formula
+                
+        # 如果没有找到特定格式，尝试提取包含数学符号的内容作为公式
+        possible_formulas = []
+        formula_patterns = [
+            r'投标报价得分\s*[:：]?\s*[=＝][^;\n]*',
+            r'价格分\s*[:：]?\s*[=＝][^;\n]*',
+            r'得分\s*[:：]?\s*[=＝][^;\n]*',
+            r'评标基准价\s*[:：]?\s*[=＝][^;\n]*'
+        ]
+        
+        for pattern in formula_patterns:
+            match = re.search(pattern, ai_response, re.IGNORECASE)
+            if match:
+                possible_formulas.append(match.group(0))
+        
+        # 返回最可能的公式，否则返回前200个字符
+        return possible_formulas[0] if possible_formulas else ai_response[:200]
+
     def _clean_text(self, text: str) -> str:
         """
         清理文本，移除多余的空格和换行符
@@ -289,7 +401,8 @@ class ScoringRuleParser:
             r'得分[^\n]*?[=＝][^\n]*?投标.*?价.*?\/.*?投标.*?价.*?[\*×].*?100',  # 得分=...投标价/投标价*100
             r'评标基准价[^\n]*?[=＝][^\n]*',    # 评标基准价=...
             r'基准价[^\n]*?[=＝][^\n]*',       # 基准价=...
-            r'投标报价得分.*?＝.*?评标基准价.*?／.*?投标报价.*?×.*?价格分值',  # 完整公式模式
+            r'投标报价得分.*?＝.*?评标基准价.*?／.*?投标报价.*?×.*?价格分값',  # 完整公式模式
+            r'满足招标文件要求且投标报价最低的投标报价为评标基准价，其价格分为满分。其他投标人的价格分统一按照下列公式计算：投标报价得分＝（评标基准价/投标报价）\*40%*100',  # 完整的标准公式
         ]
         
         for pattern in formula_patterns:
@@ -297,5 +410,11 @@ class ScoringRuleParser:
             if match:
                 return match.group(0)
         
-        # 如果未找到特定公式，返回整个标准文本（限制长度）
-        return standard_text[:100] if len(standard_text) > 100 else standard_text
+        # 如果未找到特定公式，检查是否包含价格计算相关关键词
+        price_keywords = ["评标基准价", "投标报价", "价格分", "得分", "满分", "最低"]
+        if any(keyword in standard_text for keyword in price_keywords):
+            # 返回整个标准文本作为公式
+            return standard_text[:200] if len(standard_text) > 200 else standard_text
+            
+        # 如果没有找到任何相关公式，返回空字符串
+        return ""

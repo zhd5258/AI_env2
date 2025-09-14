@@ -136,21 +136,21 @@ class IntelligentBidAnalyzer(BidAnalyzerHelpers):
                 
                 # 保存分析结果到列表
                 analyzed_rule = {
-                    'criteria_name': rule.Child_Item_Name,
+                    'Child_Item_Name': rule.Child_Item_Name,
                     'max_score': rule.Child_max_score,
                     'score': score,
                     'reason': reason,
-                    'parent_name': rule.Parent_Item_Name
+                    'Parent_Item_Name': rule.Parent_Item_Name
                 }
                 analyzed_scores.append(analyzed_rule)
                 
                 # 为进度更新创建一个单独的列表
                 analyzed_rule_for_progress = {
-                    'criteria_name': rule.Child_Item_Name,
+                    'Child_Item_Name': rule.Child_Item_Name,
                     'max_score': rule.Child_max_score,
                     'score': score,
                     'reason': reason,
-                    'parent_name': rule.Parent_Item_Name
+                    'Parent_Item_Name': rule.Parent_Item_Name
                 }
                 analyzed_scores_for_progress.append(analyzed_rule_for_progress)
                 
