@@ -273,44 +273,34 @@ document.addEventListener('DOMContentLoaded', function () {
         fetch(`/api/projects/${projectId}/dynamic-summary`)
             .then(response => response.json())
             .then(summaryData => {
-                // 2. Build Header HTML
-                let headerRow1 = '<tr>';
-                headerRow1 += '<th rowspan="2">排名</th>';
-                headerRow1 += '<th rowspan="2" class="sticky-col bidder-col">投标人</th>';
-                
-                // 构建表头第二行
-                let headerRow2 = '<tr>';
+                // 2. Build Header HTML (单行表头)
+                let headerRow = '<tr>';
+                headerRow += '<th>排名</th>';
+                headerRow += '<th class="sticky-col bidder-col">投标人</th>';
                 
                 // 用于跟踪所有子项标题，以便在数据行中按顺序查找
                 const allChildHeaders = [];
                 
                 if (summaryData && summaryData.scoring_items) {
-                    // 遍历评分项构建多层表头
+                    // 遍历评分项构建表头（只使用子项）
                     for (const [parentName, children] of Object.entries(summaryData.scoring_items)) {
                         if (children && children.length > 0) {
-                            // 有子项的父项 - 合并列
-                            headerRow1 += `<th colspan="${children.length}" title="${parentName}">${truncateText(parentName, 8)}</th>`;
-                            
-                            // 构建表头第二行 - 子项
+                            // 添加每个子项作为表头
                             children.forEach(child => {
                                 const childName = child.name || 'N/A';
                                 const maxScore = child.max_score || 0;
-                                headerRow2 += `<th title="${childName}">${truncateText(childName, 8)}<br>(${maxScore}分)</th>`;
+                                headerRow += `<th title="${childName}">${truncateText(childName, 8)}<br>(${maxScore}分)</th>`;
                                 allChildHeaders.push(child.name);
                             });
-                        } else {
-                            // 没有子项的父项（如价格分）- 跨两行显示
-                            headerRow1 += `<th rowspan="2" title="${parentName}">${truncateText(parentName, 8)}</th>`;
-                            // 注意：这里不需要在第二行添加任何内容
                         }
                     }
                     
-                    // 添加总分列
-                    headerRow1 += '<th rowspan="2" title="总分">总分</th>';
+                    // 添加价格分和总分列
+                    headerRow += '<th title="价格分">价格分</th>';
+                    headerRow += '<th title="总分">总分</th>';
                 }
                 
-                headerRow1 += '</tr>';
-                headerRow2 += '</tr>';
+                headerRow += '</tr>';
 
                 // 3. Build Body HTML
                 let tableRows = results.map((result, index) => {
@@ -357,35 +347,16 @@ document.addEventListener('DOMContentLoaded', function () {
                         }
                     }
                     
-                    // 确保正确处理价格分，无论它是否已经在detailed_scores中
-                    if (result.price_score !== undefined && result.price_score !== null) {
-                        scoresMap.set('价格分', result.price_score);
-                    } else {
-                        // 如果price_score为null或undefined，检查是否在detailed_scores中
-                        if (Array.isArray(detailedScores)) {
-                            // 在数组中查找价格评分项
-                            for (const item of detailedScores) {
-                                if (item.is_price_criteria || (item.Child_Item_Name && item.Child_Item_Name.includes('价格'))) {
-                                    scoresMap.set('价格分', item.score);
-                                    break;
-                                }
-                            }
-                        } else if (typeof detailedScores === 'object' && detailedScores !== null) {
-                            // 查找可能的价格评分项
-                            for (const [name, score] of Object.entries(detailedScores)) {
-                                if (name.includes('价格') || name.includes('Price')) {
-                                    scoresMap.set('价格分', score);
-                                    break;
-                                }
-                            }
-                        }
-                    }
-                    
                     // 按顺序添加子项得分
                     allChildHeaders.forEach(childName => {
                         const score = scoresMap.get(childName);
                         row += `<td>${score !== undefined && score !== null ? parseFloat(score).toFixed(2) : '—'}</td>`;
                     });
+                    
+                    // 添加价格分
+                    const priceScore = result.price_score !== undefined && result.price_score !== null ? 
+                        parseFloat(result.price_score).toFixed(2) : '—';
+                    row += `<td>${priceScore}</td>`;
                     
                     // 添加总分
                     const totalScore = result.total_score !== undefined && result.total_score !== null ? 
@@ -416,8 +387,7 @@ document.addEventListener('DOMContentLoaded', function () {
                             <div class="table-responsive">
                                 <table class="table table-bordered table-hover">
                                     <thead class="table-dark align-middle text-center">
-                                        ${headerRow1}
-                                        ${headerRow2}
+                                        ${headerRow}
                                     </thead>
                                     <tbody class="text-center">
                                         ${tableRows}

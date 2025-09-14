@@ -158,45 +158,31 @@ class ResultDisplay:
     
     def _generate_headers(self, rules_tree: List[Dict[str, Any]]) -> List[List[str]]:
         """
-        生成多层表头
-        第一行：父项名称（合并单元格）
-        第二行：子项名称
+        生成单行表头
+        表头只有一行，内容为：排名、投标方、各Child_Item_Name、价格分、总分
         """
-        header_row1 = ['排名', '投标方']  # 第一行表头
-        header_row2 = ['', '投标方']  # 第二行表头，第一列留空对应排名
-        col_positions = [0]  # 记录每个父项开始的列位置
-        current_col = 2  # 从第3列开始（前两列是排名和投标方）
+        header_row = ['排名', '投标方']  # 表头行
         
+        # 添加所有子项名称作为表头
         for parent_item in rules_tree:
             children = parent_item['children']
-            # 记录这个父项开始的列位置
-            col_positions.append(current_col)
-            
             if children:
-                # 有子项的父项 - 在第一行添加父项名称（不包含分数），在第二行添加子项名称
-                header_row1.append(parent_item['name'])  # 第一行只显示父项名称，不包含分数
-                # 为父项下的每个子项在第二行添加子项名称
+                # 有子项的父项 - 添加每个子项名称作为表头
                 for child_item in children:
-                    header_row2.append(f"{child_item['name']}({child_item['max_score']}分)")
-                    current_col += 1
-            else:
-                # 没有子项的父项（如价格分）- 跨两行显示
-                header_row1.append(parent_item['name'])
-                header_row2.append('')  # 第二行留空
-                current_col += 1
-                
-        # 添加总分列
-        header_row1.append("总分")
-        header_row2.append("总分")
+                    header_row.append(child_item['name'])  # 只显示子项名称
         
-        return [header_row1, header_row2]
+        # 添加价格分和总分列
+        header_row.append("价格分")
+        header_row.append("总分")
+        
+        return [header_row]  # 返回单行表头
     
     def _generate_data(self, bid_documents: List[BidDocument], 
                       bidder_scores: Dict[str, Dict[str, float]], 
                       rules_tree: List[Dict[str, Any]]) -> List[List[Any]]:
         """
         生成数据行
-        包含排名、投标方名称、各评分项得分、总分
+        包含排名、投标方名称、各Child_Item_Name对应的得分、价格分、总分
         """
         data_rows = []
         
@@ -221,8 +207,7 @@ class ResultDisplay:
             scores = bidder_scores.get(bidder_name, {})
             bid_doc = bid_doc_map.get(bidder_name)
             
-            # 按规则树顺序填充数据
-            calculated_total = 0
+            # 按规则树顺序填充数据（只处理子项）
             for parent_item in rules_tree:
                 children = parent_item['children']
                 if children:
@@ -230,25 +215,15 @@ class ResultDisplay:
                     for child_item in children:
                         score = scores.get(child_item['name'], 0)
                         row.append(round(score, 2))
-                        calculated_total += score
-                else:
-                    # 没有子项的父项（如价格分）- 直接添加该项得分
-                    parent_name = parent_item['name']
-                    if parent_name == '价格评分' and bid_doc and bid_doc.analysis_result and bid_doc.analysis_result.price_score is not None:
-                        score = bid_doc.analysis_result.price_score
-                    else:
-                        score = scores.get(parent_name, 0)
-                    row.append(round(score, 2))
-                    calculated_total += score
             
-            # 添加总分（所有子项得分和价格分的总和）
-            # 使用数据库中的总分但确保计算一致性
-            if bid_doc and bid_doc.analysis_result and bid_doc.analysis_result.total_score is not None:
-                stored_total = bid_doc.analysis_result.total_score
-            else:
-                stored_total = calculated_total
-                
-            row.append(round(stored_total, 2))
+            # 添加价格分
+            price_score = 0
+            if bid_doc and bid_doc.analysis_result and bid_doc.analysis_result.price_score is not None:
+                price_score = bid_doc.analysis_result.price_score
+            row.append(round(price_score, 2))
+            
+            # 添加总分
+            row.append(round(total_score, 2))
                 
             data_rows.append(row)
             
