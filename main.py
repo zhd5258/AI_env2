@@ -1,4 +1,3 @@
-# pyright: ignore[reportGeneralTypeIssues,reportOperatorIssue,reportIndexIssue,reportUnnecessaryComparison,reportUnnecessaryCondition,reportAttributeAccessIssue,reportOptionalMemberAccess,reportAssignmentType,reportArgumentType,reportUnnecessaryCondition,reportUnnecessaryComparison]
 import uvicorn
 import os
 import shutil
@@ -29,7 +28,6 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 import concurrent.futures  # 添加线程相关导入
-import threading
 
 from modules.database import (
     SessionLocal,
@@ -187,34 +185,36 @@ def save_upload_file(upload_file: UploadFile, destination: str) -> str:
         # 确保目标目录存在
         dest_path = Path(destination)
         safe_makedirs(dest_path.parent)
-        
+
         with open(destination, 'wb') as buffer:
             shutil.copyfileobj(upload_file.file, buffer)
     finally:
         upload_file.file.close()
     return destination
 
+
 # 添加一个新的函数用于在后台提取PDF文本
 def extract_pdf_text_background(file_path: str, bidder_name: str):
     """
     在后台提取PDF文本的函数，用于多线程处理
-    
+
     Args:
         file_path: PDF文件路径
         bidder_name: 投标方名称
-        
+
     Returns:
         tuple: (bidder_name, pages_text, success)
     """
     try:
-        logging.info(f"开始后台提取 {bidder_name} 的PDF文本")
+        logging.info(f'开始后台提取 {bidder_name} 的PDF文本')
         from modules.pdf_processor import PDFProcessor
+
         processor = PDFProcessor(file_path)
         pages_text = processor.process_pdf_per_page()
-        logging.info(f"完成 {bidder_name} 的PDF文本提取，共 {len(pages_text)} 页")
+        logging.info(f'完成 {bidder_name} 的PDF文本提取，共 {len(pages_text)} 页')
         return (bidder_name, pages_text, True)
     except Exception as e:
-        logging.error(f"提取 {bidder_name} 的PDF文本时出错: {e}")
+        logging.error(f'提取 {bidder_name} 的PDF文本时出错: {e}')
         return (bidder_name, [], False)
 
 
@@ -357,6 +357,15 @@ def analysis_task(project_id: int, bid_document_id: int):
         if price_score == 0 and detailed_scores:
             price_score = _extract_price_score_from_detailed_scores(detailed_scores)
 
+        # 确保同一项目下同一投标文件（或同一投标人）不会产生重复结果
+        try:
+            db.query(AnalysisResult).filter(
+                AnalysisResult.project_id == project_id,
+                AnalysisResult.bid_document_id == bid_document_id,
+            ).delete()
+        except Exception:
+            pass
+
         analysis_result = AnalysisResult(
             project_id=project_id,
             bid_document_id=bid_document_id,
@@ -458,44 +467,48 @@ def run_analysis_and_calculate_prices(project_id: int, bid_files_info: list):
                         ScoringRule.project_id == project_id
                     ).delete()
 
-                    def save_rule_recursive(rule_data, project_id, parent_id=None):
-                        """递归保存评分规则"""
-                        # 创建评分规则对象
-                        db_rule = ScoringRule(
-                            project_id=project_id,
-                            Parent_Item_Name=rule_data.get('criteria_name'),
-                            Parent_max_score=rule_data.get('max_score'),
-                            description=rule_data.get('description', ''),
-                            is_price_criteria='价格'
-                            in rule_data.get('criteria_name', '')
-                            or 'price' in rule_data.get('criteria_name', '').lower(),
-                        )
+                    def save_rule_recursive(rule_data, project_id, parent_name=None):
+                        """递归保存评分规则（父项填 Parent_Item_Name，子项填 Child_Item_Name）"""
+                        is_price = bool(rule_data.get('is_price_criteria', False))
+                        children = rule_data.get('children') or []
 
-                        # 如果是价格规则，设置价格公式字段
-                        if db_rule.is_price_criteria:
-                            db_rule.price_formula = None  # 可以根据需要设置具体公式
+                        if children or is_price:
+                            # 保存父项（或价格父项）
+                            db_rule = ScoringRule(
+                                project_id=project_id,
+                                Parent_Item_Name=rule_data.get('criteria_name'),
+                                Parent_max_score=rule_data.get('max_score'),
+                                description=rule_data.get('description', ''),
+                                is_price_criteria=is_price,
+                            )
+                            if is_price:
+                                db_rule.price_formula = rule_data.get('price_formula')
                             db_rule.Child_Item_Name = None
                             db_rule.Child_max_score = None
-                        else:
-                            # 对于非价格规则，如果有子项，需要特殊处理
-                            if 'children' in rule_data and rule_data['children']:
-                                # 父项规则，子项信息将在子项规则中保存
-                                db_rule.Child_Item_Name = None
-                                db_rule.Child_max_score = None
-                            else:
-                                # 叶子节点规则（没有子项）
-                                db_rule.Child_Item_Name = rule_data.get('criteria_name')
-                                db_rule.Child_max_score = rule_data.get('max_score')
 
-                        db.add(db_rule)
-                        db.flush()  # 获取生成的ID
+                            db.add(db_rule)
+                            db.flush()
 
-                        # 递归保存子项
-                        if 'children' in rule_data and rule_data['children']:
-                            for child_rule in rule_data['children']:
+                            # 递归保存子项，传递父项名称
+                            for child_rule in children:
                                 save_rule_recursive(
-                                    child_rule, project_id, parent_id=db_rule.id
+                                    child_rule,
+                                    project_id,
+                                    parent_name=rule_data.get('criteria_name'),
                                 )
+                        else:
+                            # 保存子项（叶子）
+                            db_rule = ScoringRule(
+                                project_id=project_id,
+                                Parent_Item_Name=parent_name,
+                                Parent_max_score=None,
+                                Child_Item_Name=rule_data.get('criteria_name'),
+                                Child_max_score=rule_data.get('max_score'),
+                                description=rule_data.get('description', ''),
+                                is_price_criteria=False,
+                            )
+                            db.add(db_rule)
+                            db.flush()
 
                     for rule_data in scoring_rules:
                         save_rule_recursive(rule_data, project_id)
@@ -532,7 +545,11 @@ def run_analysis_and_calculate_prices(project_id: int, bid_files_info: list):
 
         if price_scores_result:
             # 重新获取分析结果以计算更新了多少个投标人
-            analysis_results = db.query(AnalysisResult).filter(AnalysisResult.project_id == project_id).all()
+            analysis_results = (
+                db.query(AnalysisResult)
+                .filter(AnalysisResult.project_id == project_id)
+                .all()
+            )
             logging.info(
                 f'项目 {project_id} 价格分计算完成，更新了 {len(analysis_results)} 个投标方。'
             )
@@ -596,10 +613,24 @@ async def analyze_immediately(
     project.tender_file_path = tender_file_path
     db.commit()
 
+    # 清理当前项目的历史分析结果，防止遗留数据干扰本次分析
+    try:
+        deleted_rows = (
+            db.query(AnalysisResult)
+            .filter(AnalysisResult.project_id == project.id)
+            .delete()
+        )
+        db.commit()
+        logging.info(
+            '已清空项目 %s 的历史分析结果，共删除 %s 条记录', project.id, deleted_rows
+        )
+    except Exception as e:
+        logging.error('清空项目 %s 的历史分析结果时出错: %s', project.id, str(e))
+
     # 用于存储投标文件信息的列表
     bid_documents = []
     bid_files_info = []
-    
+
     # 先保存所有文件
     for bid_file in bid_files:
         bid_file_path = save_upload_file(
@@ -615,7 +646,8 @@ async def analyze_immediately(
         bidder_name = extracted_name
         if not bidder_name:
             bidder_name = (
-                Path(bid_file.filename).stem if bid_file.filename
+                Path(bid_file.filename).stem
+                if bid_file.filename
                 else f'unnamed_bid_{bid_file.size}'
             )
             logging.warning(
@@ -635,22 +667,28 @@ async def analyze_immediately(
         db.add(bid_document)
         db.commit()
         db.refresh(bid_document)
-        
+
         bid_documents.append(bid_document)
-        bid_files_info.append({'id': bid_document.id, 'path': bid_file_path, 'bidder_name': bidder_name})
+        bid_files_info.append(
+            {'id': bid_document.id, 'path': bid_file_path, 'bidder_name': bidder_name}
+        )
 
     # 使用多线程同步进行PDF文本提取
-    logging.info("开始多线程同步提取投标文件文本...")
+    logging.info('开始多线程同步提取投标文件文本...')
     text_extraction_results = {}
-    
+
     # 创建线程池执行器
-    with concurrent.futures.ThreadPoolExecutor(max_workers=min(len(bid_files_info), 4)) as executor:
+    with concurrent.futures.ThreadPoolExecutor(
+        max_workers=min(len(bid_files_info), 4)
+    ) as executor:
         # 提交所有文本提取任务
         future_to_bidder = {
-            executor.submit(extract_pdf_text_background, bid_info['path'], bid_info['bidder_name']): bid_info 
+            executor.submit(
+                extract_pdf_text_background, bid_info['path'], bid_info['bidder_name']
+            ): bid_info
             for bid_info in bid_files_info
         }
-        
+
         # 等待所有任务完成并收集结果
         for future in concurrent.futures.as_completed(future_to_bidder):
             bid_info = future_to_bidder[future]
@@ -659,21 +697,25 @@ async def analyze_immediately(
                 text_extraction_results[bidder_name] = {
                     'pages_text': pages_text,
                     'success': success,
-                    'bid_info': bid_info
+                    'bid_info': bid_info,
                 }
                 if success:
-                    logging.info(f"成功提取 {bidder_name} 的文本，共 {len(pages_text)} 页")
+                    logging.info(
+                        f'成功提取 {bidder_name} 的文本，共 {len(pages_text)} 页'
+                    )
                 else:
-                    logging.error(f"提取 {bidder_name} 的文本失败")
+                    logging.error(f'提取 {bidder_name} 的文本失败')
             except Exception as e:
-                logging.error(f"处理 {bid_info['bidder_name']} 的文本提取结果时出错: {e}")
+                logging.error(
+                    f'处理 {bid_info["bidder_name"]} 的文本提取结果时出错: {e}'
+                )
                 text_extraction_results[bid_info['bidder_name']] = {
                     'pages_text': [],
                     'success': False,
-                    'bid_info': bid_info
+                    'bid_info': bid_info,
                 }
 
-    logging.info("完成所有投标文件的文本提取")
+    logging.info('完成所有投标文件的文本提取')
 
     # 更新数据库中的投标文档信息（如果需要的话）
     # 这里可以根据提取的文本进行进一步处理
@@ -727,9 +769,7 @@ async def get_analysis_status(project_id: int, db: Session = Depends(get_db)):
         if doc.processing_status == 'error':
             has_errors = True
 
-    if all_completed and project.status != 'completed':
-        project.status = 'completed_with_errors' if has_errors else 'completed'
-        db.commit()
+    # 状态更新由后台统一流程在价格分计算完成后设置，避免前端过早认为已完成
 
     return JSONResponse(content={'project_status': project.status, 'bids': status_data})
 
@@ -791,7 +831,7 @@ async def get_analysis_results(project_id: int, db: Session = Depends(get_db)):
                 else res.detailed_scores,
                 'dynamic_scores': json.loads(res.dynamic_scores)
                 if isinstance(res.dynamic_scores, str)
-                else res.detailed_scores or {},
+                else (res.dynamic_scores or {}),
                 'ai_model': res.ai_model,
             }
         )
@@ -1059,13 +1099,12 @@ async def extract_scoring_rules_api(
                     Parent_Item_Name=rule_data.get('criteria_name'),
                     Parent_max_score=rule_data.get('max_score'),
                     description=rule_data.get('description', ''),
-                    is_price_criteria='价格' in rule_data.get('criteria_name', '')
-                    or 'price' in rule_data.get('criteria_name', '').lower(),
+                    is_price_criteria=bool(rule_data.get('is_price_criteria', False)),
                 )
 
-                # 如果是价格规则，设置价格公式字段
+                # 如果是价格规则，设置价格公式字段（保留解析器生成的公式）
                 if db_rule.is_price_criteria:
-                    db_rule.price_formula = None  # 可以根据需要设置具体公式
+                    db_rule.price_formula = rule_data.get('price_formula')
                     db_rule.Child_Item_Name = None
                     db_rule.Child_max_score = None
                 else:

@@ -94,14 +94,30 @@ def _filter_bidder_name(bidder_name: str) -> str:
         if phrase in bidder_name:
             bidder_name = bidder_name.split(phrase)[0].strip()
 
-    # Remove any remaining parenthesized text
-    bidder_name = re.sub(r'[\(（].*?[\)）]', '', bidder_name).strip()
+    # Remove any remaining parenthesized or bracketed text
+    bidder_name = re.sub(r'[\(（\[【〔].*?[\)）\]】〕]', '', bidder_name).strip()
+
+    # Remove orphan leading/trailing bracket characters
+    bidder_name = bidder_name.strip('()（）[]【】〔〕')
+
+    # Remove stray unmatched single brackets inside
+    bidder_name = (
+        bidder_name.replace('[', '')
+        .replace(']', '')
+        .replace('（', '')
+        .replace('）', '')
+        .replace('(', '')
+        .replace(')', '')
+    )
 
     # Final check for common suffixes that are not part of the name
     unwanted_suffixes = ['公司章', '公章', '单位章']
     for suffix in unwanted_suffixes:
         if bidder_name.endswith(suffix):
             bidder_name = bidder_name[: -len(suffix)].strip()
+
+    # Normalize whitespace
+    bidder_name = re.sub(r'\s+', ' ', bidder_name).strip()
 
     return bidder_name
 

@@ -20,7 +20,7 @@ document.addEventListener('DOMContentLoaded', function () {
     let pollInterval = null;
 
     // 添加WebSocket错误处理
-    window.addEventListener('error', function(event) {
+    window.addEventListener('error', function (event) {
         // 检查是否为WebSocket相关错误
         if (event.message && event.message.includes('A listener indicated an asynchronous response by returning true, but the message channel closed before a response was received')) {
             // 这通常是浏览器扩展干扰导致的，不影响应用功能，静默处理
@@ -51,7 +51,7 @@ document.addEventListener('DOMContentLoaded', function () {
         await startAnalysis();
     });
 
-    function updateFileList() {
+    function updateFileList () {
         if (!uploadedFiles.tender && uploadedFiles.bids.length === 0) {
             fileList.innerHTML = '<div class="text-muted"><i class="fas fa-info-circle me-2"></i>尚未选择任何文件</div>';
             return;
@@ -68,7 +68,7 @@ document.addEventListener('DOMContentLoaded', function () {
         fileList.innerHTML = html;
     }
 
-    function createFileListItem(file, title, color) {
+    function createFileListItem (file, title, color) {
         return `
             <div class="col-md-6 mb-2">
                 <div class="card border-start border-4 border-${color} h-100">
@@ -84,7 +84,7 @@ document.addEventListener('DOMContentLoaded', function () {
         `;
     }
 
-    async function startAnalysis() {
+    async function startAnalysis () {
         progressContainer.style.display = 'block';
         progressBar.style.width = '0%';
         progressText.innerHTML = '<i class="fas fa-upload me-2"></i>正在上传文件...';
@@ -120,9 +120,9 @@ document.addEventListener('DOMContentLoaded', function () {
         }
     }
 
-    function startPolling(projectId) {
+    function startPolling (projectId) {
         progressText.innerHTML = '<i class="fas fa-sync-alt fa-spin me-2"></i>正在初始化分析...';
-        
+
         if (pollInterval) {
             clearInterval(pollInterval);
         }
@@ -131,7 +131,7 @@ document.addEventListener('DOMContentLoaded', function () {
         pollProgress(projectId); // Initial poll
     }
 
-    async function pollProgress(projectId) {
+    async function pollProgress (projectId) {
         try {
             const response = await fetch(`/api/projects/${projectId}/analysis-status`);
             if (!response.ok) {
@@ -157,7 +157,7 @@ document.addEventListener('DOMContentLoaded', function () {
         }
     }
 
-    function updateProgressDisplay(data) {
+    function updateProgressDisplay (data) {
         let overallProgress = 0;
         let totalBids = data.bids ? data.bids.length : 0;
         let completedBids = 0;
@@ -173,8 +173,8 @@ document.addEventListener('DOMContentLoaded', function () {
                 detailedProgress.innerHTML += createBidProgressItem(bid, bidProgress);
             });
         }
-        
-        if(totalBids > 0) {
+
+        if (totalBids > 0) {
             overallProgress = (completedBids / totalBids) * 100;
         }
 
@@ -183,7 +183,7 @@ document.addEventListener('DOMContentLoaded', function () {
         progressText.textContent = `总体进度: ${data.project_status} (${completedBids}/${totalBids} 个文件完成)`;
     }
 
-    function createBidProgressItem(bid, progress) {
+    function createBidProgressItem (bid, progress) {
         let statusIcon = '';
         let statusClass = '';
         switch (bid.status) {
@@ -220,7 +220,7 @@ document.addEventListener('DOMContentLoaded', function () {
         `;
     }
 
-    async function fetchAndDisplayResults(projectId) {
+    async function fetchAndDisplayResults (projectId) {
         try {
             const [resultsResponse, rulesResponse] = await Promise.all([
                 fetch(`/api/projects/${projectId}/results`),
@@ -245,14 +245,14 @@ document.addEventListener('DOMContentLoaded', function () {
         }
     }
 
-    function truncateText(text, maxLength) {
+    function truncateText (text, maxLength) {
         if (text.length > maxLength) {
             return text.substring(0, maxLength) + '...';
         }
         return text;
     }
 
-    function displayResults(projectId, results, rules) {
+    function displayResults (projectId, results, rules) {
         progressContainer.style.display = 'none';
         if (!results || results.length === 0) {
             resultArea.innerHTML = '<div class="alert alert-info">暂无分析结果</div>';
@@ -273,50 +273,53 @@ document.addEventListener('DOMContentLoaded', function () {
         fetch(`/api/projects/${projectId}/dynamic-summary`)
             .then(response => response.json())
             .then(summaryData => {
-                // 2. Build Header HTML (单行表头)
-                let headerRow = '<tr>';
-                headerRow += '<th>排名</th>';
-                headerRow += '<th class="sticky-col bidder-col">投标人</th>';
-                
+                // 2. Build Header HTML (双层表头)
+                let headerTop = '<tr>';
+                let headerBottom = '<tr>';
+                headerTop += '<th rowspan="2">排名</th>';
+                headerTop += '<th rowspan="2" class="sticky-col bidder-col">投标人</th>';
+
                 // 用于跟踪所有子项标题，以便在数据行中按顺序查找
                 const allChildHeaders = [];
-                
+
                 if (summaryData && summaryData.scoring_items) {
-                    // 遍历评分项构建表头（只使用子项）
                     for (const [parentName, children] of Object.entries(summaryData.scoring_items)) {
                         if (children && children.length > 0) {
-                            // 添加每个子项作为表头
+                            // 顶层父项列合并
+                            headerTop += `<th colspan="${children.length}" class="text-center">${parentName}</th>`;
+                            // 第二行子项列
                             children.forEach(child => {
                                 const childName = child.name || 'N/A';
                                 const maxScore = child.max_score || 0;
-                                headerRow += `<th title="${childName}">${truncateText(childName, 8)}<br>(${maxScore}分)</th>`;
+                                headerBottom += `<th title="${childName}">${truncateText(childName, 8)}<br>(${maxScore}分)</th>`;
                                 allChildHeaders.push(childName);
                             });
                         }
                     }
-                    
-                    // 添加价格分和总分列
-                    headerRow += '<th title="价格分">价格分</th>';
-                    headerRow += '<th title="总分">总分</th>';
+
+                    // 价格分与总分列
+                    headerTop += '<th rowspan="2" title="价格分">价格分</th>';
+                    headerTop += '<th rowspan="2" title="总分">总分</th>';
                 }
-                
-                headerRow += '</tr>';
+
+                headerTop += '</tr>';
+                headerBottom += '</tr>';
 
                 // 3. Build Body HTML
                 let tableRows = results.map((result, index) => {
                     let row = '<tr>';
                     row += `<td class="sticky-col"><span class="badge bg-primary rounded-pill">${index + 1}</span></td>`;
-                    
+
                     const bidderName = result.bidder_name || 'N/A';
                     const truncatedName = bidderName.length > 5 ? bidderName.substring(0, 5) + '...' : bidderName;
                     row += `<td class="sticky-col bidder-col" title="${bidderName}">${truncatedName}</td>`;
-                    
+
                     const scoresMap = new Map();
-                    
+
                     // 正确处理detailed_scores，根据新规范处理数据结构
                     // detailed_scores是一个数组，每个元素包含Child_Item_Name、score、reason、Parent_Item_Name
                     let detailedScores = result.detailed_scores || [];
-                    
+
                     // 处理数组格式的detailed_scores
                     if (Array.isArray(detailedScores)) {
                         // 新格式: 数组中的每个元素是一个包含Child_Item_Name、score、reason、Parent_Item_Name的字典
@@ -327,7 +330,7 @@ document.addEventListener('DOMContentLoaded', function () {
                                 scoresMap.set(childItemName, item.score);
                             }
                         }
-                    } 
+                    }
                     // 处理旧的键值对字典结构（兼容性考虑）
                     else if (typeof detailedScores === 'object' && detailedScores !== null) {
                         // 旧格式: { '评分项名称': 分数, ... }
@@ -335,7 +338,7 @@ document.addEventListener('DOMContentLoaded', function () {
                             scoresMap.set(name, score);
                         }
                     }
-                    
+
                     // 处理dynamic_scores
                     if (result.dynamic_scores && typeof result.dynamic_scores === 'object') {
                         for (const [name, score] of Object.entries(result.dynamic_scores)) {
@@ -346,20 +349,20 @@ document.addEventListener('DOMContentLoaded', function () {
                             }
                         }
                     }
-                    
+
                     // 按顺序添加子项得分
                     allChildHeaders.forEach(childName => {
                         const score = scoresMap.get(childName);
                         row += `<td>${score !== undefined && score !== null ? parseFloat(score).toFixed(2) : '—'}</td>`;
                     });
-                    
+
                     // 添加价格分
-                    const priceScore = result.price_score !== undefined && result.price_score !== null ? 
+                    const priceScore = result.price_score !== undefined && result.price_score !== null ?
                         parseFloat(result.price_score).toFixed(2) : '—';
                     row += `<td>${priceScore}</td>`;
-                    
+
                     // 添加总分
-                    const totalScore = result.total_score !== undefined && result.total_score !== null ? 
+                    const totalScore = result.total_score !== undefined && result.total_score !== null ?
                         parseFloat(result.total_score).toFixed(2) : '—';
                     row += `<td><strong>${totalScore}</strong></td>`;
 
@@ -387,7 +390,8 @@ document.addEventListener('DOMContentLoaded', function () {
                             <div class="table-responsive">
                                 <table class="table table-bordered table-hover">
                                     <thead class="table-dark align-middle text-center">
-                                        ${headerRow}
+                                        ${headerTop}
+                                        ${headerBottom}
                                     </thead>
                                     <tbody class="text-center">
                                         ${tableRows}
@@ -404,7 +408,7 @@ document.addEventListener('DOMContentLoaded', function () {
             });
     }
 
-    function displaySimpleResults(results) {
+    function displaySimpleResults (results) {
         let tableRows = results.map((result, index) => `
             <tr>
                 <td><span class="badge bg-primary rounded-pill">${index + 1}</span></td>
