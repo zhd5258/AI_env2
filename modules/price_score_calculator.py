@@ -114,12 +114,27 @@ class PriceScoreCalculator(PriceScoreCalculatorHelpers):
                 )
                 self.logger.info(f'计算出价格分: {price_scores}')
 
-                # 若无法计算价格分（例如缺少有效公式或AI失败），则直接报错并终止更新
+                # 若无法计算价格分（例如缺少有效公式或AI失败），使用默认计算方法
                 if not price_scores:
-                    self.logger.error(
-                        '价格分未计算：缺少有效的价格计算公式或AI计算失败。根据规范，禁止使用默认公式，终止价格分更新。'
+                    self.logger.warning(
+                        '价格分未通过AI计算，使用默认计算方法。'
                     )
-                    return False
+                    # 使用默认计算方法：满足招标文件要求且投标报价最低的投标报价为评标基准价，其价格分为满分
+                    if bidder_prices:
+                        min_price = min(bidder_prices.values())
+                        price_scores = {}
+                        for bidder, price in bidder_prices.items():
+                            if price == min_price:
+                                # 最低报价得满分
+                                price_scores[bidder] = price_rule.Parent_max_score
+                                self.logger.info(
+                                    f'投标人 {bidder} 报价为最低价 {price}，得满分 {price_rule.Parent_max_score}'
+                                )
+                            else:
+                                # 按照评标规则公式计算：投标报价得分＝（评标基准价/投标报价）*满分
+                                score = (min_price / price) * price_rule.Parent_max_score
+                                price_scores[bidder] = round(score, 2)
+                                self.logger.info(f'投标人 {bidder} 报价 {price}，得分 {price_scores[bidder]}')
 
                 # 6. 更新每个投标人的价格分和总分
                 updated_count = 0

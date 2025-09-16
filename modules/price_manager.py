@@ -15,6 +15,14 @@ class PriceManager:
     def select_best_price(
         self, prices: List[Dict[str, Any]], pages: List[str]
     ) -> float:
+        # 首先检查是否有来自"投标一览表"页面的高置信度价格
+        summary_page_prices = [p for p in prices if '价格一览表' in p.get('reason', '') and p.get('confidence', 0) >= 90]
+        if summary_page_prices:
+            # 从"投标一览表"中选择置信度最高的价格
+            summary_page_prices.sort(key=lambda x: x['confidence'], reverse=True)
+            return summary_page_prices[0]['value']
+
+        # 然后检查智能判断的价格
         intelligent_prices = []
         for price_info in prices:
             page_index = price_info['page']

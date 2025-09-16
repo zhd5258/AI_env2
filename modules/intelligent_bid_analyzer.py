@@ -102,7 +102,9 @@ class IntelligentBidAnalyzer(BidAnalyzerHelpers):
 
             # 3. 提取价格
             prices = self.price_manager.extract_prices_from_content(bid_pages)
+            self.logger.info(f"投标人 {self.bidder_name} 提取到的所有价格: {prices}")
             best_price = self.price_manager.select_best_price(prices, bid_pages)
+            self.logger.info(f"投标人 {self.bidder_name} 选择的最佳价格: {best_price}")
 
             # 4. 执行AI分析 - 首先分析子项规则
             # 获取所有子项规则（非价格规则且有Child_Item_Name的规则）

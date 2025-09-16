@@ -152,12 +152,15 @@ class OCRmyPDFProcessor:
             output_text,  # sidecar文本文件路径
             '--tesseract-timeout',
             '120',  # 增加超时时间到120秒，以提高识别质量
+            '--jobs', 
+            str(os.cpu_count() or 1),  # 使用所有可用CPU核心
             temp_pdf,  # 输入PDF文件（临时文件）
             output_pdf  # 输出PDF文件
         ]
 
         self.logger.info('执行命令: %s', ' '.join(cmd))
         self.logger.info('正在执行OCR处理，这可能需要几分钟...')
+        self.logger.info('使用 %d 个CPU核心进行并行处理', os.cpu_count() or 1)
 
         try:
             # 执行OCRmyPDF命令

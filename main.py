@@ -161,6 +161,64 @@ BidDocument.metadata.create_all(bind=engine)
 AnalysisResult.metadata.create_all(bind=engine)
 
 
+class UpdateBidderNameRequest(BaseModel):
+    """请求体：更新投标方名称
+
+    所有字段中文注释，限制：新名称长度>=2，且应包含“公司/有限/股份/集团”等关键词
+    """
+
+    new_name: str
+
+
+@app.patch('/api/bids/{bid_id}/name')
+async def update_bidder_name(
+    bid_id: int, payload: UpdateBidderNameRequest, db: Session = Depends(get_db)
+):
+    """修改指定投标文件的投标方名称。
+
+    - 校验名称有效性（基本关键词、长度、去空格）
+    - 更新`bid_document.bidder_name`以及对应`analysis_result.bidder_name`
+    - 返回更新后的记录信息
+    """
+    try:
+        new_name = (payload.new_name or '').strip()
+        if len(new_name) < 2:
+            return JSONResponse(status_code=400, content={'error': '名称过短'})
+
+        company_keywords = ['公司', '有限', '股份', '集团', '厂', '院', '所', '中心']
+        if not any(k in new_name for k in company_keywords):
+            return JSONResponse(
+                status_code=400, content={'error': '名称缺少公司关键词'}
+            )
+
+        bid = db.query(BidDocument).filter(BidDocument.id == bid_id).first()
+        if not bid:
+            return JSONResponse(status_code=404, content={'error': 'Bid not found'})
+
+        old_name = bid.bidder_name
+        bid.bidder_name = new_name
+        db.commit()
+
+        ar = (
+            db.query(AnalysisResult)
+            .filter(AnalysisResult.bid_document_id == bid.id)
+            .first()
+        )
+        if ar:
+            ar.bidder_name = new_name
+            db.commit()
+
+        logging.info(
+            f'已将投标方名称由 "{old_name}" 更新为 "{new_name}" (bid_id={bid_id})'
+        )
+        return JSONResponse(
+            content={'id': bid.id, 'old_name': old_name, 'new_name': new_name}
+        )
+    except Exception as e:
+        logging.error(f'修改投标方名称失败: {e}')
+        return JSONResponse(status_code=500, content={'error': str(e)})
+
+
 # 首页
 @app.get('/', response_class=HTMLResponse)
 async def read_root(request: Request):
@@ -677,10 +735,11 @@ async def analyze_immediately(
     logging.info('开始多线程同步提取投标文件文本...')
     text_extraction_results = {}
 
-    # 创建线程池执行器
-    with concurrent.futures.ThreadPoolExecutor(
-        max_workers=min(len(bid_files_info), 4)
-    ) as executor:
+    # 创建线程池执行器，根据CPU核心数确定最大并发数
+    max_workers = min(len(bid_files_info), os.cpu_count() or 1)
+    logging.info(f'使用 {max_workers} 个工作线程进行并行文本提取')
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
         # 提交所有文本提取任务
         future_to_bidder = {
             executor.submit(

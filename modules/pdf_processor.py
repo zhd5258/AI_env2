@@ -10,6 +10,7 @@ import sys
 import os
 import json
 import hashlib
+import concurrent.futures
 from .pdf_processor_helpers import PDFProcessorHelpers
 from .ocrmypdf_processor import OCRmyPDFProcessor
 
@@ -184,54 +185,37 @@ class PDFProcessor(PDFProcessorHelpers):
                 total_pages = len(pdf.pages)
                 self.logger.info(f'PDF文件共 {total_pages} 页')
 
-                for i, page in enumerate(pdf.pages):
-                    try:
-                        self.logger.info(f'正在处理第 {i + 1}/{total_pages} 页')
+                # 获取CPU核心数，确定最大并发数
+                max_workers = min(total_pages, os.cpu_count() or 1)
+                self.logger.info(f'使用 {max_workers} 个工作线程进行并行OCR处理')
 
-                        # 转换为图像
-                        image = page.to_image(resolution=200)  # 设置合适的分辨率
+                # 使用线程池并行处理所有页面
+                with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
+                    # 提交所有页面的OCR任务
+                    future_to_page = {
+                        executor.submit(self._ocr_single_page, page, i): i 
+                        for i, page in enumerate(pdf.pages)
+                    }
 
-                        # 调整图像参数以提高OCR质量
-                        # 确保reset()和scale()方法存在并且正确调用
-                        if hasattr(image, 'reset') and callable(image.reset):
-                            image = image.reset()
-                        if hasattr(image, 'scale') and callable(image.scale):
-                            image = image.scale(2.0)  # 放大图像
-                        if hasattr(image, 'enhance') and callable(image.enhance):
-                            image = image.enhance()  # 增强对比度
+                    # 收集结果
+                    results = {}
+                    for future in concurrent.futures.as_completed(future_to_page):
+                        page_index = future_to_page[future]
+                        try:
+                            result = future.result()
+                            results[page_index] = result
+                        except Exception as page_e:
+                            self.logger.error(f'处理第 {page_index + 1} 页时出错: {page_e}')
+                            results[page_index] = ''
+                            # 记录失败页面
+                            self.failed_pages.append({
+                                'page_number': page_index + 1,
+                                'reason': f'OCR处理失败: {str(page_e)}',
+                                'error_type': 'ocr_page_failed',
+                            })
 
-                        # 进行OCR识别，使用更准确的配置
-                        self.logger.debug(f'对第 {i + 1} 页进行OCR识别')
-                        text = (
-                            pytesseract.image_to_string(
-                                image.original,
-                                lang='chi_sim+eng',
-                                config='--psm 3 --oem 3'  # 使用更准确的识别模式
-                            )
-                            or ''
-                        )
-
-                        # 清理OCR结果
-                        text = self._clean_text(text)
-
-                        if text.strip():
-                            self.logger.debug(
-                                f'第 {i + 1} 页OCR成功，识别出 {len(text)} 个字符'
-                            )
-                        else:
-                            self.logger.warning(f'第 {i + 1} 页OCR未识别出文本')
-
-                        pages_text.append(text)
-
-                    except Exception as page_e:
-                        self.logger.error(f'处理第 {i + 1} 页时出错: {page_e}')
-                        pages_text.append('')
-                        # 记录失败页面
-                        self.failed_pages.append({
-                            'page_number': i + 1,
-                            'reason': f'OCR处理失败: {str(page_e)}',
-                            'error_type': 'ocr_page_failed',
-                        })
+                    # 按页面顺序排列结果
+                    pages_text = [results[i] for i in sorted(results.keys())]
 
         except Exception as e:
             self.logger.error(f'OCR处理失败: {e}')
@@ -252,6 +236,59 @@ class PDFProcessor(PDFProcessorHelpers):
             self.logger.error('OCR未能识别出任何文本')
 
         return pages_text
+
+    def _ocr_single_page(self, page, page_index: int) -> str:
+        """
+        对单个页面进行OCR处理
+        
+        Args:
+            page: pdfplumber页面对象
+            page_index: 页面索引
+            
+        Returns:
+            str: OCR识别的文本
+        """
+        try:
+            self.logger.info(f'正在处理第 {page_index + 1} 页')
+
+            # 转换为图像
+            image = page.to_image(resolution=200)  # 设置合适的分辨率
+
+            # 调整图像参数以提高OCR质量
+            # 确保reset()和scale()方法存在并且正确调用
+            if hasattr(image, 'reset') and callable(image.reset):
+                image = image.reset()
+            if hasattr(image, 'scale') and callable(image.scale):
+                image = image.scale(2.0)  # 放大图像
+            if hasattr(image, 'enhance') and callable(image.enhance):
+                image = image.enhance()  # 增强对比度
+
+            # 进行OCR识别，使用更准确的配置
+            self.logger.debug(f'对第 {page_index + 1} 页进行OCR识别')
+            text = (
+                pytesseract.image_to_string(
+                    image.original,
+                    lang='chi_sim+eng',
+                    config='--psm 3 --oem 3'  # 使用更准确的识别模式
+                )
+                or ''
+            )
+
+            # 清理OCR结果
+            text = self._clean_text(text)
+
+            if text.strip():
+                self.logger.debug(
+                    f'第 {page_index + 1} 页OCR成功，识别出 {len(text)} 个字符'
+                )
+            else:
+                self.logger.warning(f'第 {page_index + 1} 页OCR未识别出文本')
+
+            return text
+
+        except Exception as page_e:
+            self.logger.error(f'处理第 {page_index + 1} 页时出错: {page_e}')
+            raise page_e
 
     def enhanced_ocr_processing(self) -> List[str]:
         """
