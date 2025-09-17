@@ -144,11 +144,7 @@ class EnhancedPriceExtractor:
         price_doc_pages = self._identify_sections(pages, ['价格文件', '报价部分'])
 
         for i, page_text in enumerate(pages):
-            context = page_text.replace(
-                '\
-',
-                ' ',
-            )
+            context = page_text.replace('\n', ' ')
 
             # 2. 特别处理价格一览表页面
             if i in price_summary_pages:
@@ -480,3 +476,122 @@ class EnhancedPriceExtractor:
             return True
 
         return False
+
+    # ================= 追加：保证金提取（避免与总价混读） =================
+    def _extract_bid_bonds_from_summary_page(
+        self, page_text: str, page_index: int
+    ) -> List[Dict[str, Any]]:
+        """
+        从一览表页面提取投标/履约等保证金金额（支持阿拉伯数字与中文大写）。
+        """
+        bonds: List[Dict[str, Any]] = []
+
+        bid_bond_summary_patterns = [
+            r'(保证金|投标保证金|履约保证金)[:：\s]*￥?\s*(\d[\d,]*\.?\d*)',
+            r'(保证金|投标保证金|履约保证金)[:：\s]*([壹贰叁肆伍陆柒捌玖拾佰仟万亿零一二三四五六七八九十百千万亿\s]+)',
+        ]
+
+        # 阿拉伯数字
+        m = re.search(bid_bond_summary_patterns[0], page_text, re.IGNORECASE)
+        if m:
+            line_start = page_text.rfind('\n', 0, m.start()) + 1
+            line_end = page_text.find('\n', m.end())
+            if line_end == -1:
+                line_end = len(page_text)
+            line_text = page_text[line_start:line_end]
+            # 若该行含有总价关键词，则跳过，避免混读
+            total_keywords = ['总价', '总报价', '投标报价', '合计', '总计']
+            if not any(k in line_text for k in total_keywords):
+                try:
+                    value = float(m.group(2).replace(',', ''))
+                except Exception:
+                    value = None
+                if value is not None and value > 0:
+                    bonds.append(
+                        {
+                            'value': value,
+                            'page': page_index,
+                            'confidence': 80,
+                            'reason': '保证金阿拉伯数字',
+                            'type': 'bid_bond',
+                        }
+                    )
+
+        # 中文大写
+        if not bonds:
+            m2 = re.search(bid_bond_summary_patterns[1], page_text, re.IGNORECASE)
+            if m2:
+                line_start = page_text.rfind('\n', 0, m2.start()) + 1
+                line_end = page_text.find('\n', m2.end())
+                if line_end == -1:
+                    line_end = len(page_text)
+                line_text = page_text[line_start:line_end]
+                total_keywords = ['总价', '总报价', '投标报价', '合计', '总计']
+                if not any(k in line_text for k in total_keywords):
+                    cn = re.sub(r'[^\u4e00-\u9fa5]', '', m2.group(2) or '')
+                    value = ChineseNumberConverter().chinese_to_number(cn)
+                    if value is not None and value > 0:
+                        bonds.append(
+                            {
+                                'value': value,
+                                'page': page_index,
+                                'confidence': 70,
+                                'reason': '保证金中文大写',
+                                'type': 'bid_bond',
+                            }
+                        )
+
+        return bonds
+
+    def extract_bid_bonds(self, pages: List[str]) -> List[Dict[str, Any]]:
+        """
+        公共方法：提取保证金候选金额列表（带置信度），避免与总价混读。
+        """
+        all_bonds: List[Dict[str, Any]] = []
+        bond_pages = self._identify_sections(pages, ['一览表', '保证金', '保函'])
+        for i, page_text in enumerate(pages):
+            if i in bond_pages:
+                all_bonds.extend(
+                    self._extract_bid_bonds_from_summary_page(page_text, i)
+                )
+            else:
+                # 通用窗口匹配
+                context = page_text.replace('\n', ' ')
+                bid_bond_keywords = [
+                    '保证金',
+                    '投标保证金',
+                    '履约保证金',
+                    '质量保证金',
+                    '投标保函',
+                    '履约保函',
+                    '银行保函',
+                    '押金',
+                    '投标押金',
+                    '担保金额',
+                ]
+                for kw in bid_bond_keywords:
+                    for m in re.finditer(rf'{kw}[:：\s]*([\d,]+\.?\d*)', context):
+                        window_start = max(0, m.start() - 30)
+                        window_end = min(len(context), m.end() + 30)
+                        window_text = context[window_start:window_end]
+                        if any(
+                            k in window_text
+                            for k in ['总价', '总报价', '投标报价', '合计', '总计']
+                        ):
+                            continue
+                        try:
+                            val = float(m.group(1).replace(',', ''))
+                        except Exception:
+                            val = None
+                        if val is not None and val > 0:
+                            all_bonds.append(
+                                {
+                                    'value': val,
+                                    'page': i,
+                                    'confidence': 60,
+                                    'reason': f'保证金窗口匹配({kw})',
+                                    'type': 'bid_bond',
+                                }
+                            )
+                        break
+        return all_bonds

@@ -11,6 +11,13 @@ document.addEventListener('DOMContentLoaded', function () {
     const resultArea = document.getElementById('resultArea');
     const resultDetailsModal = new bootstrap.Modal(document.getElementById('resultDetailsModal'));
     const modalBody = document.getElementById('modalBody');
+    const btnOpenSettings = document.getElementById('btnOpenSettings');
+    const runtimeConfigModal = new bootstrap.Modal(document.getElementById('runtimeConfigModal'));
+    const cfgWorkers = document.getElementById('cfg_page_workers');
+    const cfgPageTimeout = document.getElementById('cfg_page_timeout');
+    const cfgOverallMinTimeout = document.getElementById('cfg_overall_min_timeout');
+    const btnSaveConfig = document.getElementById('btnSaveConfig');
+    const cfgFeedback = document.getElementById('cfg_feedback');
 
     let uploadedFiles = {
         tender: null,
@@ -50,6 +57,55 @@ document.addEventListener('DOMContentLoaded', function () {
         }
         await startAnalysis();
     });
+
+    // 打开系统设置
+    btnOpenSettings.addEventListener('click', async () => {
+        await loadRuntimeConfig();
+        const modalElement = document.getElementById('runtimeConfigModal');
+        const modal = new bootstrap.Modal(modalElement);
+        modal.show();
+    });
+
+    async function loadRuntimeConfig () {
+        try {
+            const resp = await fetch('/api/runtime-config');
+            if (!resp.ok) throw new Error(`HTTP error! status: ${resp.status}`);
+            const cfg = await resp.json();
+            cfgWorkers.value = cfg.pdf_page_max_workers ?? '';
+            cfgPageTimeout.value = cfg.pdf_page_timeout_sec ?? '';
+            cfgOverallMinTimeout.value = cfg.pdf_overall_min_timeout_sec ?? '';
+            cfgFeedback.textContent = '';
+        } catch (e) {
+            console.error('加载配置失败:', e);
+            cfgFeedback.textContent = '加载当前配置失败: ' + (e.message || e);
+        }
+    }
+
+    btnSaveConfig.addEventListener('click', async () => {
+        try {
+            const payload = {
+                pdf_page_max_workers: numOrNull(cfgWorkers.value),
+                pdf_page_timeout_sec: numOrNull(cfgPageTimeout.value),
+                pdf_overall_min_timeout_sec: numOrNull(cfgOverallMinTimeout.value)
+            };
+            const resp = await fetch('/api/runtime-config', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(payload)
+            });
+            if (!resp.ok) throw new Error('保存失败');
+            const saved = await resp.json();
+            cfgFeedback.textContent = '保存成功：' + JSON.stringify(saved);
+            setTimeout(() => runtimeConfigModal.hide(), 800);
+        } catch (e) {
+            cfgFeedback.textContent = '保存失败：' + (e.message || e);
+        }
+    });
+
+    function numOrNull (v) {
+        const n = parseInt(v, 10);
+        return Number.isFinite(n) ? n : null;
+    }
 
     function updateFileList () {
         if (!uploadedFiles.tender && uploadedFiles.bids.length === 0) {
@@ -96,7 +152,8 @@ document.addEventListener('DOMContentLoaded', function () {
         uploadedFiles.bids.forEach(file => formData.append('bid_files', file));
 
         try {
-            const response = await fetch('/api/analyze-immediately', {
+            // 第一步：初始化上传，返回候选投标人名称
+            const response = await fetch('/api/init-upload', {
                 method: 'POST',
                 body: formData
             });
@@ -106,18 +163,104 @@ document.addEventListener('DOMContentLoaded', function () {
                 throw new Error(`服务器错误: ${response.status} ${response.statusText}\n${errorText}`);
             }
 
-            const result = await response.json();
-            if (result.error) {
-                throw new Error(result.error);
+            const initData = await response.json();
+            if (initData.error) {
+                throw new Error(initData.error);
             }
 
-            currentProjectId = result.project_id;
-            startPolling(currentProjectId);
+            currentProjectId = initData.project_id;
+            progressText.innerHTML = '<i class="fas fa-user-edit me-2"></i>请确认各投标方名称后开始分析';
+
+            // 打开确认投标方名称的模态框
+            await showConfirmBiddersModal(initData);
 
         } catch (error) {
-            console.error('上传或分析启动失败:', error);
+            console.error('初始化上传失败:', error);
             progressText.innerHTML = `<div class="alert alert-danger mb-0"><i class="fas fa-exclamation-circle me-2"></i>上传失败: ${error.message}</div>`;
         }
+    }
+
+    async function showConfirmBiddersModal (initData) {
+        const modalHtml = `
+        <div class="modal fade" id="confirmBiddersModal" tabindex="-1" aria-labelledby="confirmBiddersLabel" aria-hidden="true">
+          <div class="modal-dialog modal-lg">
+            <div class="modal-content">
+              <div class="modal-header">
+                <h5 class="modal-title" id="confirmBiddersLabel"><i class="fas fa-users me-2"></i>确认投标方名称</h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+              </div>
+              <div class="modal-body">
+                <div class="table-responsive">
+                  <table class="table table-striped align-middle">
+                    <thead class="table-dark">
+                      <tr>
+                        <th style="width: 120px;">文件名</th>
+                        <th>建议名称</th>
+                        <th>确认名称</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      ${initData.bidders.map(b => `
+                        <tr>
+                          <td title="${b.file_name}">${(b.file_name || '').slice(0, 20)}${(b.file_name || '').length > 20 ? '...' : ''}</td>
+                          <td>${b.suggested_name || ''}</td>
+                          <td>
+                            <input type="text" class="form-control bidder-input" data-bid-id="${b.id}" value="${b.suggested_name || ''}">
+                          </td>
+                        </tr>`).join('')}
+                    </tbody>
+                  </table>
+                </div>
+                <div class="small text-muted">请核对并修改不规范的公司名称（需包含“公司/有限/股份/集团”等关键词）。</div>
+              </div>
+              <div class="modal-footer">
+                <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">取消</button>
+                <button type="button" class="btn btn-primary" id="btnConfirmBidders"><i class="fas fa-play me-1"></i>开始分析</button>
+              </div>
+            </div>
+          </div>
+        </div>`;
+
+        document.body.insertAdjacentHTML('beforeend', modalHtml);
+        const modalElement = document.getElementById('confirmBiddersModal');
+        const modal = new bootstrap.Modal(modalElement);
+        modal.show();
+
+        document.getElementById('btnConfirmBidders').addEventListener('click', async () => {
+            try {
+                const inputs = Array.from(document.querySelectorAll('.bidder-input'));
+                const bidders = inputs.map(inp => ({ id: parseInt(inp.getAttribute('data-bid-id'), 10), confirmed_name: inp.value.trim() }));
+
+                // 简单校验
+                const companyKeywords = ['公司', '有限', '股份', '集团', '厂', '院', '所', '中心'];
+                for (const b of bidders) {
+                    if (!b.confirmed_name || b.confirmed_name.length < 2 || !companyKeywords.some(k => b.confirmed_name.includes(k))) {
+                        alert('名称无效，请检查：' + (b.confirmed_name || '空'));
+                        return;
+                    }
+                }
+
+                const resp = await fetch(`/api/projects/${currentProjectId}/start-analysis`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ bidders })
+                });
+                if (!resp.ok) {
+                    const err = await resp.text();
+                    throw new Error(err || '启动分析失败');
+                }
+
+                modal.hide();
+                // 启动轮询
+                startPolling(currentProjectId);
+            } catch (e) {
+                alert('启动分析失败：' + (e.message || e));
+            }
+        });
+
+        modalElement.addEventListener('hidden.bs.modal', function () {
+            document.body.removeChild(modalElement);
+        });
     }
 
     function startPolling (projectId) {
@@ -312,7 +455,13 @@ document.addEventListener('DOMContentLoaded', function () {
 
                     const bidderName = result.bidder_name || 'N/A';
                     const truncatedName = bidderName.length > 5 ? bidderName.substring(0, 5) + '...' : bidderName;
-                    row += `<td class="sticky-col bidder-col" title="${bidderName}">${truncatedName}</td>`;
+                    // 添加可编辑的投标方名称单元格
+                    row += `<td class="sticky-col bidder-col" title="${bidderName}">
+                                <span class="bidder-name-text">${truncatedName}</span>
+                                <button class="btn btn-sm btn-outline-primary edit-bidder-name ms-2" data-bid="${result.id}" data-current-name="${bidderName}">
+                                    <i class="fas fa-edit"></i>
+                                </button>
+                            </td>`;
 
                     const scoresMap = new Map();
 
@@ -401,6 +550,15 @@ document.addEventListener('DOMContentLoaded', function () {
                         </div>
                     </div>
                 `;
+
+                // 添加事件监听器用于编辑投标方名称
+                document.querySelectorAll('.edit-bidder-name').forEach(button => {
+                    button.addEventListener('click', function () {
+                        const bidId = this.getAttribute('data-bid');
+                        const currentName = this.getAttribute('data-current-name');
+                        editBidderName(bidId, currentName);
+                    });
+                });
             })
             .catch(error => {
                 console.error("获取动态汇总表数据时出错:", error);
@@ -440,3 +598,106 @@ document.addEventListener('DOMContentLoaded', function () {
         `;
     }
 });
+
+// 编辑投标方名称函数
+async function editBidderName (bidId, currentName) {
+    // 创建模态框HTML
+    const modalHtml = `
+        <div class="modal fade" id="editBidderNameModal" tabindex="-1" aria-labelledby="editBidderNameModalLabel" aria-hidden="true">
+            <div class="modal-dialog">
+                <div class="modal-content">
+                    <div class="modal-header">
+                        <h5 class="modal-title" id="editBidderNameModalLabel">编辑投标方名称</h5>
+                        <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+                    </div>
+                    <div class="modal-body">
+                        <form id="editBidderNameForm">
+                            <div class="mb-3">
+                                <label for="newBidderName" class="form-label">新的投标方名称</label>
+                                <input type="text" class="form-control" id="newBidderName" value="${currentName}" required>
+                                <div class="form-text">请输入有效的公司名称，必须包含"公司"、"有限"、"股份"、"集团"等关键词。</div>
+                            </div>
+                            <div id="editNameFeedback" class="small text-danger"></div>
+                        </form>
+                    </div>
+                    <div class="modal-footer">
+                        <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">取消</button>
+                        <button type="button" class="btn btn-primary" id="saveBidderNameBtn">保存</button>
+                    </div>
+                </div>
+            </div>
+        </div>
+    `;
+
+    // 添加模态框到页面
+    document.body.insertAdjacentHTML('beforeend', modalHtml);
+
+    // 显示模态框
+    const modalElement = document.getElementById('editBidderNameModal');
+    const modal = new bootstrap.Modal(modalElement);
+    modal.show();
+
+    // 保存按钮事件监听器
+    document.getElementById('saveBidderNameBtn').addEventListener('click', async function () {
+        const newName = document.getElementById('newBidderName').value.trim();
+        const feedbackElement = document.getElementById('editNameFeedback');
+
+        // 简单验证
+        if (newName.length < 2) {
+            feedbackElement.textContent = '名称长度不能少于2个字符';
+            return;
+        }
+
+        // 检查是否包含公司关键词
+        const companyKeywords = ['公司', '有限', '股份', '集团', '厂', '院', '所', '中心'];
+        if (!companyKeywords.some(keyword => newName.includes(keyword))) {
+            feedbackElement.textContent = '名称必须包含公司关键词，如"公司"、"有限"、"股份"、"集团"等';
+            return;
+        }
+
+        try {
+            // 发送请求更新投标方名称
+            const response = await fetch(`/api/bids/${bidId}/name`, {
+                method: 'PATCH',
+                headers: {
+                    'Content-Type': 'application/json'
+                },
+                body: JSON.stringify({ new_name: newName })
+            });
+
+            if (!response.ok) {
+                const errorData = await response.json();
+                throw new Error(errorData.error || '更新失败');
+            }
+
+            const result = await response.json();
+
+            // 更新表格中的显示
+            const nameElements = document.querySelectorAll(`.edit-bidder-name[data-bid="${bidId}"]`);
+            nameElements.forEach(element => {
+                const nameSpan = element.closest('td').querySelector('.bidder-name-text');
+                if (nameSpan) {
+                    const truncatedName = newName.length > 5 ? newName.substring(0, 5) + '...' : newName;
+                    nameSpan.textContent = truncatedName;
+                    nameSpan.setAttribute('title', newName);
+                    // 更新按钮的data-current-name属性
+                    element.setAttribute('data-current-name', newName);
+                }
+            });
+
+            // 关闭模态框
+            modal.hide();
+
+            // 显示成功消息
+            alert('投标方名称更新成功');
+        } catch (error) {
+            console.error('更新投标方名称失败:', error);
+            feedbackElement.textContent = '更新失败: ' + (error.message || '未知错误');
+        }
+    });
+
+    // 模态框关闭后移除DOM元素
+    modalElement.addEventListener('hidden.bs.modal', function () {
+        document.body.removeChild(modalElement);
+    });
+}

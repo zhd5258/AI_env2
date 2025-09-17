@@ -5,7 +5,7 @@ PDF处理辅助模块
 
 import re
 import PyPDF2
-import pdfplumber
+import fitz  # PyMuPDF
 import pikepdf
 from PIL import Image
 import pytesseract
@@ -63,44 +63,42 @@ class PDFProcessorHelpers:
         
         return text
 
-    def _extract_text_with_ocr(self, page, page_number: int) -> str:
+    def _extract_text_with_ocr(self, file_path: str, page_number: int) -> str:
         """
         使用OCR从页面提取文本
         
         Args:
-            page: pdfplumber页面对象
-            page_number: 页码
+            file_path: PDF文件路径
+            page_number: 页码 (1-indexed)
             
         Returns:
             str: OCR提取的文本
         """
         try:
-            # 尝试获取页面图像，使用合适的分辨率
-            image = page.to_image(resolution=200)
-            
-            # 调整图像参数以提高OCR质量
-            if hasattr(image, 'reset') and callable(image.reset):
-                image = image.reset()
-            if hasattr(image, 'scale') and callable(image.scale):
-                image = image.scale(2.0)  # 放大图像
-            if hasattr(image, 'enhance') and callable(image.enhance):
-                image = image.enhance()  # 增强对比度
-            
-            pil_image = image.original
-            
-            # 使用pytesseract进行OCR，使用更好的配置
-            text = pytesseract.image_to_string(
-                pil_image, 
-                lang='chi_sim+eng',
-                config='--psm 3 --oem 3'  # 使用更准确的识别模式
-            )
-            
-            if text.strip():
-                self.logger.debug(f'第 {page_number} 页OCR成功，识别出 {len(text)} 个字符')
-                return self._clean_text(text)
-            else:
-                self.logger.debug(f'第 {page_number} 页OCR未提取到文本')
-                return ''
+            with fitz.open(file_path) as doc:
+                page = doc.load_page(page_number - 1) # 0-indexed
+                
+                # 尝试获取页面图像，使用合适的分辨率
+                zoom = 2.0  # 放大2倍以提高分辨率
+                mat = fitz.Matrix(zoom, zoom)
+                pix = page.get_pixmap(matrix=mat)
+                
+                # 从pixmap创建PIL图像
+                pil_image = Image.frombytes("RGB", [pix.width, pix.height], pix.samples)
+                
+                # 使用pytesseract进行OCR，使用更好的配置
+                text = pytesseract.image_to_string(
+                    pil_image, 
+                    lang='chi_sim+eng',
+                    config='--psm 3 --oem 3'  # 使用更准确的识别模式
+                )
+                
+                if text.strip():
+                    self.logger.debug(f'第 {page_number} 页OCR成功，识别出 {len(text)} 个字符')
+                    return self._clean_text(text)
+                else:
+                    self.logger.debug(f'第 {page_number} 页OCR未提取到文本')
+                    return ''
         except Exception as e:
             self.logger.error(f'第 {page_number} 页OCR处理出错: {e}')
             return ''

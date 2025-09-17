@@ -164,8 +164,10 @@ def _search_bidder_name_in_special_sections(pages: list[str]) -> str | None:
         '法定代表人授权书',
         '投标一览表',
         '投标报价一览表',
+        '开标一览表',
         '投标函',
         '资格审查',
+        '制造商名称',
     ]
     candidate_indices = []
     for idx, text in enumerate(pages):
@@ -183,6 +185,9 @@ def _search_bidder_name_in_special_sections(pages: list[str]) -> str | None:
         r'(?:投标人|投标单位|供应商|单位名称)[:：\s]*([^\n]+?公司)',
         r'([\u4e00-\u9fa5a-zA-Z0-9（）()·．\.]+?有限公司)',
         r'^\s*([^\n]+?有限公司)\s*$',
+        # 制造商名称字段（用于回退提取投标方/制造商公司名）
+        r'(?:制造商名称|制造厂家|生产厂家)\s*[:：]\s*([^\n]+?公司)',
+        r'(?:制造商名称|制造厂家|生产厂家)\s*[:：]\s*([^\n]+?有限公司)',
     ]
 
     # 尝试在每个候选页面中查找投标方名称
@@ -271,7 +276,9 @@ def _extract_bidder_name_by_ai(text_to_search: str) -> str | None:
 
             filtered_name = _filter_bidder_name(potential_name)
 
-            if _is_valid_company_name(filtered_name) and not _looks_garbled_or_incomplete(filtered_name):
+            if _is_valid_company_name(
+                filtered_name
+            ) and not _looks_garbled_or_incomplete(filtered_name):
                 logger.info(f"Valid bidder name found via AI: '{filtered_name}'")
                 return filtered_name
             else:
@@ -313,21 +320,78 @@ def extract_bidder_name_from_file(file_path: str) -> str | None:
 
         # 2. Attempt extraction with Regex
         bidder_name = _extract_bidder_name_by_regex(text_to_search)
-        if bidder_name and _is_valid_company_name(bidder_name) and not _looks_garbled_or_incomplete(bidder_name):
+        if (
+            bidder_name
+            and _is_valid_company_name(bidder_name)
+            and not _looks_garbled_or_incomplete(bidder_name)
+        ):
             logger.info(f"Valid bidder name found via regex: '{bidder_name}'")
             return bidder_name
 
         # 3. 回退到AI提取
         logger.info('Regex extraction failed, falling back to AI.')
         bidder_name = _extract_bidder_name_by_ai(text_to_search)
-        if bidder_name and _is_valid_company_name(bidder_name) and not _looks_garbled_or_incomplete(bidder_name):
+        if (
+            bidder_name
+            and _is_valid_company_name(bidder_name)
+            and not _looks_garbled_or_incomplete(bidder_name)
+        ):
             logger.info(f"Valid bidder name found via AI: '{bidder_name}'")
             return bidder_name
 
-        # 4. 若名称疑似乱码或不完整，则在关键章节继续检索
+        # 4. 基于表格的回退提取（整合）：优先从“制造商名称/投标人名称”列获取
+        try:
+            from .table_analyzer import TableAnalyzer  # 延迟导入，避免循环依赖
+
+            analyzer = TableAnalyzer(file_path)
+            merged = analyzer.extract_and_merge_tables()
+            tables = analyzer.convert_to_structured_format(merged)
+
+            candidate_headers = ['制造商名称', '投标人名称', '供应商名称', '单位名称']
+            for table in tables:
+                headers = table.get('headers') or []
+                rows = table.get('rows') or []
+                # 直接按中文表头匹配
+                header_to_idx = {h: i for i, h in enumerate(headers)}
+                hit_header = next(
+                    (
+                        h
+                        for h in candidate_headers
+                        if any(h in (hh or '') for hh in headers)
+                    ),
+                    None,
+                )
+                if hit_header and rows:
+                    # 找到包含该关键列的真实列名
+                    real_header = next(
+                        (hh for hh in headers if hit_header in (hh or '')), None
+                    )
+                    if real_header:
+                        for row in rows:
+                            raw_val = row.get(real_header) or ''
+                            name = _filter_bidder_name(raw_val)
+                            if _is_valid_company_name(
+                                name
+                            ) and not _looks_garbled_or_incomplete(name):
+                                logger.info(
+                                    "Valid bidder name found via tables(%s): '%s'",
+                                    real_header,
+                                    name,
+                                )
+                                return name
+        except Exception as e:
+            logger.debug('表格回退提取失败: %s', e)
+
+        # 5. 若名称疑似乱码或不完整，则在关键章节继续检索
         fallback_name = _search_bidder_name_in_special_sections(pages)
-        if fallback_name and _is_valid_company_name(fallback_name) and not _looks_garbled_or_incomplete(fallback_name):
-            logger.info(f"Valid bidder name found in special sections: '{fallback_name}'")
+        if (
+            fallback_name
+            and _is_valid_company_name(fallback_name)
+            and not _looks_garbled_or_incomplete(fallback_name)
+        ):
+            logger.info(
+                f"Valid bidder name found in special sections: '{fallback_name}'"
+            )
             return fallback_name
 
         logger.warning(f'Failed to extract bidder name from {file_path}')

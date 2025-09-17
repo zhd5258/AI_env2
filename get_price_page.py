@@ -9,7 +9,7 @@
 #
 # Copyright (c) 2025 by 中车眉山车辆有限公司/KingFreeDom, All Rights Reserved.
 #
-import pdfplumber
+import fitz  # PyMuPDF
 import json
 
 
@@ -17,18 +17,19 @@ class BiddingEvaluationFinder:
     def __init__(self, pdf_path, qwen_api_url=None):
         self.pdf_path = pdf_path
         self.qwen_api_url = qwen_api_url
-        self.pdf = pdfplumber.open(pdf_path)
+        self.pdf = fitz.open(pdf_path)
 
     def find_sections_by_text(self):
         """基于文本定位可能的页面"""
         sections = []
-        for page_num, page in enumerate(self.pdf.pages, 1):
-            text = page.extract_text()
+        for page_num, page in enumerate(self.pdf, 1):
+            text = page.get_text()
             if '评标办法' in text or '评分标准' in text or '评标标准' in text:
+                tables = page.find_tables()
                 sections.append(
                     {
                         'page': page_num,
-                        'has_tables': len(page.extract_tables()) > 0,
+                        'has_tables': len(tables) > 0,
                         'text_length': len(text),
                         'keywords': self._count_keywords(text),
                     }
@@ -90,16 +91,16 @@ class BiddingEvaluationFinder:
         # 分析每个可能的页面
         for section in results['text_based_pages']:
             page_num = section['page']
-            page = self.pdf.pages[page_num - 1]
+            page = self.pdf.load_page(page_num - 1)
 
-            text = page.extract_text()
-            tables = page.extract_tables()
+            text = page.get_text()
+            tables = page.find_tables()
 
             # 对包含表格的页面进行详细分析
             if tables:
                 for table_index, table in enumerate(tables):
-                    if table:
-                        analysis = self.analyze_with_qwen(text, table)
+                    if table.extract():
+                        analysis = self.analyze_with_qwen(text, table.extract())
                         if '是否包含评标办法详细信息：是' in analysis:
                             results['qwen_analyzed_tables'].append(
                                 {
@@ -107,7 +108,7 @@ class BiddingEvaluationFinder:
                                     'table_index': table_index,
                                     'analysis': analysis,
                                     'table_preview': [
-                                        row[:3] for row in table[:5]
+                                        row[:3] for row in table.extract()[:5]
                                     ],  # 预览前5行前3列
                                 }
                             )

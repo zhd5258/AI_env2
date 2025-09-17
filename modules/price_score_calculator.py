@@ -104,6 +104,17 @@ class PriceScoreCalculator(PriceScoreCalculatorHelpers):
 
                 # 4. 仅提取当前项目的投标人报价
                 bidder_prices = self._extract_bidder_prices(analysis_results)
+                # 可选：记录保证金候选（不参与总价计算，便于调试与后续使用）
+                try:
+                    from modules.enhanced_price_extractor import EnhancedPriceExtractor
+
+                    extractor = EnhancedPriceExtractor()
+                    # 这里无法直接拿到每家PDF文本，保持接口稳定，仅打印提示
+                    self.logger.info(
+                        '已加载保证金提取器（仅用于后续接入文本源时区分总价/保证金）。'
+                    )
+                except Exception as _:
+                    pass
                 self.logger.info(
                     f'提取到 {len(bidder_prices)} 个投标人的报价: {bidder_prices}'
                 )
@@ -116,9 +127,7 @@ class PriceScoreCalculator(PriceScoreCalculatorHelpers):
 
                 # 若无法计算价格分（例如缺少有效公式或AI失败），使用默认计算方法
                 if not price_scores:
-                    self.logger.warning(
-                        '价格分未通过AI计算，使用默认计算方法。'
-                    )
+                    self.logger.warning('价格分未通过AI计算，使用默认计算方法。')
                     # 使用默认计算方法：满足招标文件要求且投标报价最低的投标报价为评标基准价，其价格分为满分
                     if bidder_prices:
                         min_price = min(bidder_prices.values())
@@ -132,9 +141,13 @@ class PriceScoreCalculator(PriceScoreCalculatorHelpers):
                                 )
                             else:
                                 # 按照评标规则公式计算：投标报价得分＝（评标基准价/投标报价）*满分
-                                score = (min_price / price) * price_rule.Parent_max_score
+                                score = (
+                                    min_price / price
+                                ) * price_rule.Parent_max_score
                                 price_scores[bidder] = round(score, 2)
-                                self.logger.info(f'投标人 {bidder} 报价 {price}，得分 {price_scores[bidder]}')
+                                self.logger.info(
+                                    f'投标人 {bidder} 报价 {price}，得分 {price_scores[bidder]}'
+                                )
 
                 # 6. 更新每个投标人的价格分和总分
                 updated_count = 0

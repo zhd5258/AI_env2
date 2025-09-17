@@ -1,0 +1,108 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>测试页面</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
+</head>
+<body>
+    <div class="container mt-5">
+        <h1>测试系统设置和投标方名称编辑功能</h1>
+        
+        <div class="mb-3">
+            <button class="btn btn-primary" id="testSettings">测试系统设置</button>
+        </div>
+        
+        <div class="mb-3">
+            <button class="btn btn-success" id="testEditName">测试编辑投标方名称</button>
+        </div>
+    </div>
+
+    <script>
+        document.getElementById('testSettings').addEventListener('click', function() {
+            // 模拟系统设置按钮点击
+            const event = new Event('click');
+            document.getElementById('btnOpenSettings').dispatchEvent(event);
+        });
+
+        document.getElementById('testEditName').addEventListener('click', function() {
+            // 模拟编辑投标方名称
+            editBidderName(1, "原投标方名称");
+        });
+
+        // 从app.js复制editBidderName函数用于测试
+        async function editBidderName(bidId, currentName) {
+            // 创建模态框HTML
+            const modalHtml = `
+                <div class="modal fade" id="editBidderNameModal" tabindex="-1" aria-labelledby="editBidderNameModalLabel" aria-hidden="true">
+                    <div class="modal-dialog">
+                        <div class="modal-content">
+                            <div class="modal-header">
+                                <h5 class="modal-title" id="editBidderNameModalLabel">编辑投标方名称</h5>
+                                <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+                            </div>
+                            <div class="modal-body">
+                                <form id="editBidderNameForm">
+                                    <div class="mb-3">
+                                        <label for="newBidderName" class="form-label">新的投标方名称</label>
+                                        <input type="text" class="form-control" id="newBidderName" value="${currentName}" required>
+                                        <div class="form-text">请输入有效的公司名称，必须包含"公司"、"有限"、"股份"、"集团"等关键词。</div>
+                                    </div>
+                                    <div id="editNameFeedback" class="small text-danger"></div>
+                                </form>
+                            </div>
+                            <div class="modal-footer">
+                                <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">取消</button>
+                                <button type="button" class="btn btn-primary" id="saveBidderNameBtn">保存</button>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            `;
+
+            // 添加模态框到页面
+            document.body.insertAdjacentHTML('beforeend', modalHtml);
+
+            // 显示模态框
+            const modalElement = document.getElementById('editBidderNameModal');
+            const modal = new bootstrap.Modal(modalElement);
+            modal.show();
+
+            // 保存按钮事件监听器
+            document.getElementById('saveBidderNameBtn').addEventListener('click', async function () {
+                const newName = document.getElementById('newBidderName').value.trim();
+                const feedbackElement = document.getElementById('editNameFeedback');
+
+                // 简单验证
+                if (newName.length < 2) {
+                    feedbackElement.textContent = '名称长度不能少于2个字符';
+                    return;
+                }
+
+                // 检查是否包含公司关键词
+                const companyKeywords = ['公司', '有限', '股份', '集团', '厂', '院', '所', '中心'];
+                if (!companyKeywords.some(keyword => newName.includes(keyword))) {
+                    feedbackElement.textContent = '名称必须包含公司关键词，如"公司"、"有限"、"股份"、"集团"等';
+                    return;
+                }
+
+                // 模拟API调用
+                console.log(`更新投标方名称: bidId=${bidId}, newName=${newName}`);
+                
+                // 关闭模态框
+                modal.hide();
+                
+                // 显示成功消息
+                alert('投标方名称更新成功');
+            });
+
+            // 模态框关闭后移除DOM元素
+            modalElement.addEventListener('hidden.bs.modal', function () {
+                document.body.removeChild(modalElement);
+            });
+        }
+    </script>
+</body>
+</html>

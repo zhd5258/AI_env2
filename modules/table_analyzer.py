@@ -25,7 +25,7 @@ except ImportError:
     except ImportError:
         PDFProcessor = None
 
-import pdfplumber
+import fitz  # PyMuPDF
 
 
 class TableAnalyzer:
@@ -69,16 +69,21 @@ class TableAnalyzer:
         tables_info = []
 
         try:
-            with pdfplumber.open(self.pdf_path) as pdf:
-                for page_num, page in enumerate(pdf.pages, 1):
+            with fitz.open(self.pdf_path) as doc:
+                for page_num, page in enumerate(doc, 1):
                     try:
-                        tables = page.extract_tables()
+                        tables = page.find_tables()
                         for table_index, table in enumerate(tables):
-                            if table and len(table) > 0:
+                            extracted_table = table.extract()
+                            if extracted_table and len(extracted_table) > 0:
                                 # 基本信息
-                                rows = len(table)
-                                cols = max(len(row) for row in table) if table else 0
-                                headers = table[0] if table else []
+                                rows = len(extracted_table)
+                                cols = (
+                                    max(len(row) for row in extracted_table)
+                                    if extracted_table
+                                    else 0
+                                )
+                                headers = extracted_table[0] if extracted_table else []
 
                                 tables_info.append(
                                     {
@@ -87,14 +92,14 @@ class TableAnalyzer:
                                         'rows': rows,
                                         'cols': cols,
                                         'headers': headers,
-                                        'data': table,
+                                        'data': extracted_table,
                                     }
                                 )
                     except Exception as page_e:
                         self.logger.warning(f'处理第{page_num}页表格时出错: {page_e}')
                         continue
         except Exception as e:
-            self.logger.error(f'使用pdfplumber提取表格时出错: {e}')
+            self.logger.error(f'使用PyMuPDF提取表格时出错: {e}')
 
         return tables_info
 
@@ -491,64 +496,4 @@ class TableAnalyzer:
             self.logger.error(f'保存表格到 {output_path} 时出错: {e}')
 
 
-# 使用示例
-if __name__ == '__main__':
-    # 示例用法
-    # if len(sys.argv) < 2:
-    #     print('用法: python table_analyzer.py <pdf文件路径> [输出文件路径]')
-    #     sys.exit(1)
-
-    pdf_path = r'D:\user\设备管理\招标评标资料\2025\旧油漆线改造\集装箱\招标文件正文.pdf'  # sys.argv[1]
-    analyzer = TableAnalyzer(pdf_path)
-
-    # 提取并合并表格
-    print('开始提取表格...')
-    tables = analyzer.extract_and_merge_tables()
-    print(f'提取到 {len(tables)} 个目标表格')
-
-    # 转换为结构化格式
-    print('转换为结构化格式...')
-    structured_tables = analyzer.convert_to_structured_format(tables)
-
-    # 确定输出文件名
-    output_path = sys.argv[2] if len(sys.argv) > 2 else 'target_tables.json'
-
-    # 保存结果
-    analyzer.save_tables(structured_tables, output_path)
-    print(f'结果已保存到 {output_path}')
-
-    # 显示部分结果
-    if structured_tables:
-        print('\n表格信息预览:')
-        for i, table in enumerate(structured_tables, 1):
-            print(f'\n表格 {i}:')
-
-            if table['headers']:
-                headers_preview = [
-                    h[:20] for h in table['headers'][:3]
-                ]  # 显示前3个表头的前20个字符
-                print(f'  - 表头: {headers_preview}')
-
-            if table['rows']:
-                print(f'  - 数据行数: {len(table["rows"])}')
-                # 显示第一行数据的预览
-                first_row = table['rows'][0]
-                row_preview = {
-                    k: v[:30] for k, v in list(first_row.items())[:3]
-                }  # 每个值显示前30个字符
-                print(f'  - 第一行预览: {row_preview}')
-
-            if table['headers']:
-                headers_preview = [
-                    h[:20] for h in table['headers'][:3]
-                ]  # 显示前3个表头的前20个字符
-                print(f'  - 表头: {headers_preview}')
-
-            if table['rows']:
-                print(f'  - 数据行数: {len(table["rows"])}')
-                # 显示第一行数据的预览
-                first_row = table['rows'][0]
-                row_preview = {
-                    k: v[:30] for k, v in list(first_row.items())[:3]
-                }  # 每个值显示前30个字符
-                print(f'  - 第一行预览: {row_preview}')
+# 使用示例已移除，避免部署环境误运行脚本
