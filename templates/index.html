@@ -78,7 +78,7 @@
             <!-- 分析结果将在这里显示 -->
         </div>
 
-        <!-- 添加结果详情模态框 -->
+        <!-- 结果详情模态框 -->
         <div class="modal fade" id="resultDetailsModal" tabindex="-1" aria-labelledby="resultDetailsModalLabel" aria-hidden="true">
             <div class="modal-dialog modal-xl modal-dialog-scrollable">
                 <div class="modal-content">
@@ -116,6 +116,28 @@
                     </div>
                     <div class="modal-footer">
                         <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">关闭</button>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- 新增：确认投标方名称模态框 -->
+        <div class="modal fade" id="confirmNamesModal" data-bs-backdrop="static" data-bs-keyboard="false" tabindex="-1" aria-labelledby="confirmNamesModalLabel" aria-hidden="true">
+            <div class="modal-dialog modal-lg">
+                <div class="modal-content">
+                    <div class="modal-header">
+                        <h5 class="modal-title" id="confirmNamesModalLabel"><i class="fas fa-user-check me-2"></i>确认投标方名称</h5>
+                    </div>
+                    <div class="modal-body">
+                        <p class="text-muted">系统已自动识别出以下投标方名称，请在开始分析前进行核对与修正。</p>
+                        <form id="confirmNamesForm">
+                            <!-- 投标方名称列表将动态插入此处 -->
+                        </form>
+                    </div>
+                    <div class="modal-footer">
+                        <button type="button" class="btn btn-primary" id="startAnalysisBtn">
+                            <i class="fas fa-cogs me-2"></i>确认并开始分析
+                        </button>
                     </div>
                 </div>
             </div>

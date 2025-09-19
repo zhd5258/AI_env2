@@ -211,7 +211,7 @@ document.addEventListener('DOMContentLoaded', function () {
                     </tbody>
                   </table>
                 </div>
-                <div class="small text-muted">请核对并修改不规范的公司名称（需包含“公司/有限/股份/集团”等关键词）。</div>
+                <div class="small text-muted">请核对并修改不规范的公司名称（需包含"公司/有限/股份/集团"等关键词）。</div>
               </div>
               <div class="modal-footer">
                 <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">取消</button>
@@ -671,13 +671,13 @@ async function editBidderName (bidId, currentName) {
             }
 
             const result = await response.json();
-
+            
             // 更新表格中的显示
             const nameElements = document.querySelectorAll(`.edit-bidder-name[data-bid="${bidId}"]`);
             nameElements.forEach(element => {
                 const nameSpan = element.closest('td').querySelector('.bidder-name-text');
                 if (nameSpan) {
-                    const truncatedName = newName.length > 5 ? newName.substring(0, 5) + '...' : newName;
+                    const truncatedName = newName.length > 10 ? newName.substring(0, 10) + '...' : newName;
                     nameSpan.textContent = truncatedName;
                     nameSpan.setAttribute('title', newName);
                     // 更新按钮的data-current-name属性
@@ -687,7 +687,7 @@ async function editBidderName (bidId, currentName) {
 
             // 关闭模态框
             modal.hide();
-
+            
             // 显示成功消息
             alert('投标方名称更新成功');
         } catch (error) {

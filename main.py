@@ -233,7 +233,7 @@ async def update_bidder_name(
 
         bid = db.query(BidDocument).filter(BidDocument.id == bid_id).first()
         if not bid:
-            return JSONResponse(status_code=404, content={'error': 'Bid not found'})
+            return JSONResponse(status_code=404, content={'error': '投标文件未找到'})
 
         old_name = bid.bidder_name
         bid.bidder_name = new_name  # type: ignore[assignment]
@@ -262,7 +262,7 @@ async def update_bidder_name(
         )
     except Exception as e:
         logging.error(f'修改投标方名称失败: {e}')
-        return JSONResponse(status_code=500, content={'error': str(e)})
+        return JSONResponse(status_code=500, content={'error': f'服务器内部错误: {str(e)}'})
 
 
 # 首页
@@ -373,12 +373,31 @@ def analysis_task(project_id: int, bid_document_id: int):
         bid_document.progress_current_rule = '初始化分析...'
         db.commit()
 
+        # 优化：在分析前预加载PDF文本（这将从缓存中快速读取）
+        try:
+            from modules.pdf_processor import PDFProcessor
+            logging.info(f'为分析任务预加载PDF文本: {bid_document.file_path}')
+            pdf_processor = PDFProcessor(bid_document.file_path)
+            # 调用extract_text_per_page会优先从缓存加载，速度很快
+            extracted_pages = pdf_processor.extract_text_per_page(use_cache=True)
+            if not extracted_pages or not any(extracted_pages):
+                raise ValueError('未能从缓存或文件中加载有效的PDF文本内容。')
+            logging.info(f'成功预加载 {len(extracted_pages)} 页文本')
+        except Exception as e:
+            logging.error(f'在分析前加载PDF文本失败: {e}')
+            bid_document.processing_status = 'error'
+            bid_document.error_message = f'加载PDF文本失败: {e}'
+            bid_document.progress_current_rule = '分析失败'
+            db.commit()
+            return
+
         analyzer = IntelligentBidAnalyzer(
             tender_file_path,
             bid_document.file_path,
             db_session=db,
             bid_document_id=bid_document.id,
             project_id=project_id,
+            extracted_text=extracted_pages,  # 传入已提取的文本
         )
 
         result_data = None
@@ -696,155 +715,135 @@ def run_analysis_and_calculate_prices(project_id: int, bid_files_info: list):
         loop.close()
 
 
-@app.post('/api/analyze-immediately')
-async def analyze_immediately(
-    background_tasks: BackgroundTasks,
+@app.post('/api/upload')
+async def upload_files(
     tender_file: UploadFile = File(...),
     bid_files: List[UploadFile] = File(...),
     db: Session = Depends(get_db),
 ):
-    logging.info(
-        "Received request to analyze tender '%s' with %s bid files.",
-        tender_file.filename,
-        len(bid_files),
-    )
+    """
+    接收上传的文件，创建项目和文档记录，并立即提取投标方名称。
+    返回项目ID和包含建议名称的投标方列表，等待前端确认。
+    """
+    # 1. 创建项目
     project_code = f'PRJ-{datetime.datetime.now().strftime("%Y%m%d-%H%M%S")}'
     project = TenderProject(
         project_code=project_code,
-        name=f'Project {project_code}',
-        description=f'Tender: {tender_file.filename}',
-        status='processing',
+        name=f'项目-{tender_file.filename}',
+        description=f'招标文件: {tender_file.filename}',
+        status='awaiting_confirmation',  # 等待用户确认名称的状态
     )
     db.add(project)
     db.commit()
     db.refresh(project)
-    logging.info('Created project with id: %s', project.id)
+    logging.info(f'创建新项目，ID: {project.id}')
 
+    # 2. 保存招标文件
     tender_file_path = save_upload_file(
         tender_file,
-        get_platform_safe_path(
-            UPLOADS_DIR, f'{project.id}_tender_{tender_file.filename}'
-        ),
+        get_platform_safe_path(UPLOADS_DIR, f'{project.id}_tender_{tender_file.filename}')
     )
     project.tender_file_path = tender_file_path
     db.commit()
 
-    # 清理当前项目的历史分析结果，防止遗留数据干扰本次分析
-    try:
-        deleted_rows = (
-            db.query(AnalysisResult)
-            .filter(AnalysisResult.project_id == project.id)
-            .delete()
-        )
-        db.commit()
-        logging.info(
-            '已清空项目 %s 的历史分析结果，共删除 %s 条记录', project.id, deleted_rows
-        )
-    except Exception as e:
-        logging.error('清空项目 %s 的历史分析结果时出错: %s', project.id, str(e))
-
-    # 用于存储投标文件信息的列表
-    bid_documents = []
-    bid_files_info = []
-
-    # 先保存所有文件
+    # 3. 处理每个投标文件
+    bidders_info = []
     for bid_file in bid_files:
-        bid_file_path = save_upload_file(
+        # 保存文件
+        file_path = save_upload_file(
             bid_file,
-            get_platform_safe_path(
-                UPLOADS_DIR, f'{project.id}_bid_{bid_file.filename}'
-            ),
+            get_platform_safe_path(UPLOADS_DIR, f'{project.id}_bid_{bid_file.filename}')
         )
 
-        # 提取投标方名称
-        extracted_name = extract_bidder_name_from_file(bid_file_path)
+        # 立即、同步地提取投标方名称
+        logging.info(f'正在从 {bid_file.filename} 提取投标方名称...')
+        suggested_name = extract_bidder_name_from_file(file_path)
+        if not suggested_name:
+            suggested_name = Path(bid_file.filename).stem if bid_file.filename else "未知投标方"
+            logging.warning(f'提取失败，使用文件名作为备用: {suggested_name}')
 
-        bidder_name = extracted_name
-        if not bidder_name:
-            bidder_name = (
-                Path(bid_file.filename).stem
-                if bid_file.filename
-                else f'unnamed_bid_{bid_file.size}'
-            )
-            logging.warning(
-                f"无法从 {bid_file.filename} 中提取投标方名称，将使用文件名 '{bidder_name}' 作为备用。"
-            )
-
+        # 创建数据库记录
         bid_document = BidDocument(
             project_id=project.id,
-            bidder_name=bidder_name,
-            file_path=bid_file_path,
+            bidder_name=suggested_name,  # 保存建议的名称
+            file_path=file_path,
             file_size=bid_file.size,
-            processing_status='pending',
-            progress_total_rules=0,
-            progress_completed_rules=0,
-            progress_current_rule='准备中...',
+            processing_status='awaiting_confirmation',
+            progress_current_rule='等待名称确认'
         )
         db.add(bid_document)
         db.commit()
         db.refresh(bid_document)
 
-        bid_documents.append(bid_document)
-        bid_files_info.append(
-            {'id': bid_document.id, 'path': bid_file_path, 'bidder_name': bidder_name}
+        bidders_info.append({
+            'id': bid_document.id,
+            'file_name': bid_file.filename,
+            'suggested_name': suggested_name
+        })
+
+    # 4. 返回响应给前端
+    return JSONResponse(content={
+        'project_id': project.id,
+        'bidders': bidders_info
+    })
+
+
+@app.post('/api/projects/{project_id}/confirm-names-and-start-analysis')
+async def confirm_names_and_start_analysis(
+    project_id: int,
+    background_tasks: BackgroundTasks,
+    request: Request,
+    db: Session = Depends(get_db)
+):
+    """
+    接收前端确认后的投标方名称，更新数据库，并启动后台分析流程。
+    """
+    try:
+        data = await request.json()
+        bidders_updates = data.get('bidders')
+        
+        if not bidders_updates:
+            return JSONResponse(status_code=400, content={'error': '缺少投标方信息'})
+
+        project = db.query(TenderProject).filter(TenderProject.id == project_id).first()
+        if not project:
+            return JSONResponse(status_code=404, content={'error': '项目未找到'})
+
+        bid_files_info = []
+        for bidder_update in bidders_updates:
+            bid_id = bidder_update.get('id')
+            confirmed_name = bidder_update.get('name')
+            
+            doc = db.query(BidDocument).filter(BidDocument.id == bid_id).first()
+            if doc and confirmed_name:
+                # 更新名称和状态
+                doc.bidder_name = confirmed_name
+                doc.processing_status = 'pending'
+                doc.progress_current_rule = '准备中...'
+                bid_files_info.append({
+                    'id': doc.id,
+                    'path': doc.file_path,
+                    'bidder_name': doc.bidder_name
+                })
+        
+        project.status = 'processing'
+        db.commit()
+        
+        logging.info(f'项目 {project_id} 名称已确认，即将开始后台分析...')
+        
+        # 启动后台分析任务
+        background_tasks.add_task(
+            run_analysis_and_calculate_prices,
+            project.id,
+            bid_files_info,
         )
 
-    # 使用多线程同步进行PDF文本提取
-    logging.info('开始多线程同步提取投标文件文本...')
-    text_extraction_results = {}
+        return JSONResponse(content={'project_id': project.id, 'message': '分析已成功启动'})
 
-    # 创建线程池执行器，根据CPU核心数确定最大并发数
-    max_workers = min(len(bid_files_info), os.cpu_count() or 1)
-    logging.info(f'使用 {max_workers} 个工作线程进行并行文本提取')
+    except Exception as e:
+        logging.error(f'启动分析时出错: {e}')
+        return JSONResponse(status_code=500, content={'error': '服务器内部错误'})
 
-    with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
-        # 提交所有文本提取任务
-        future_to_bidder = {
-            executor.submit(
-                extract_pdf_text_background, bid_info['path'], bid_info['bidder_name']
-            ): bid_info
-            for bid_info in bid_files_info
-        }
-
-        # 等待所有任务完成并收集结果
-        for future in concurrent.futures.as_completed(future_to_bidder):
-            bid_info = future_to_bidder[future]
-            try:
-                bidder_name, pages_text, success = future.result()
-                text_extraction_results[bidder_name] = {
-                    'pages_text': pages_text,
-                    'success': success,
-                    'bid_info': bid_info,
-                }
-                if success:
-                    logging.info(
-                        f'成功提取 {bidder_name} 的文本，共 {len(pages_text)} 页'
-                    )
-                else:
-                    logging.error(f'提取 {bidder_name} 的文本失败')
-            except Exception as e:
-                logging.error(
-                    f'处理 {bid_info["bidder_name"]} 的文本提取结果时出错: {e}'
-                )
-                text_extraction_results[bid_info['bidder_name']] = {
-                    'pages_text': [],
-                    'success': False,
-                    'bid_info': bid_info,
-                }
-
-    logging.info('完成所有投标文件的文本提取')
-
-    # 更新数据库中的投标文档信息（如果需要的话）
-    # 这里可以根据提取的文本进行进一步处理
-
-    background_tasks.add_task(
-        run_analysis_and_calculate_prices,
-        project.id,
-        bid_files_info,
-    )
-    logging.info('已为项目 %s 安排后台分析和价格计算任务。', project.id)
-
-    return JSONResponse(content={'project_id': project.id})
 
 
 @app.get('/api/projects/{project_id}/analysis-status')
@@ -1269,37 +1268,65 @@ async def start_analysis(
     db: Session = Depends(get_db),
 ):
     """根据前端确认后的名称启动分析，名称写回数据库并用于后续流程。"""
-    project = db.query(TenderProject).filter(TenderProject.id == project_id).first()
-    if not project:
-        return JSONResponse(status_code=404, content={'error': '项目不存在'})
+    try:
+        project = db.query(TenderProject).filter(TenderProject.id == project_id).first()
+        if not project:
+            return JSONResponse(status_code=404, content={'error': '项目不存在'})
 
-    # 更新投标方名称
-    ids = {
-        item.get('id'): (item.get('confirmed_name') or '').strip()
-        for item in payload.bidders
-    }
-    bid_documents = (
-        db.query(BidDocument).filter(BidDocument.project_id == project_id).all()
-    )
-    for doc in bid_documents:
-        if doc.id in ids and ids[doc.id]:
-            doc.bidder_name = ids[doc.id]  # type: ignore[assignment]
-        # 切换状态为待处理
-        doc.processing_status = 'pending'
-        doc.progress_current_rule = '准备中...'
-    project.status = 'processing'
-    db.commit()
+        # 更新投标方名称
+        ids = {
+            item.get('id'): (item.get('confirmed_name') or '').strip()
+            for item in payload.bidders
+        }
+        
+        # 验证名称有效性
+        company_keywords = ['公司', '有限', '股份', '集团', '厂', '院', '所', '中心']
+        for item in payload.bidders:
+            confirmed_name = (item.get('confirmed_name') or '').strip()
+            if len(confirmed_name) < 2:
+                return JSONResponse(status_code=400, content={'error': f'名称过短: {confirmed_name}'})
+            
+            if not any(k in confirmed_name for k in company_keywords):
+                return JSONResponse(
+                    status_code=400, content={'error': f'名称缺少公司关键词: {confirmed_name}'}
+                )
 
-    # 启动后台分析
-    bid_files_info = [
-        {'id': d.id, 'path': d.file_path, 'bidder_name': d.bidder_name}
-        for d in bid_documents
-    ]
-    background_tasks.add_task(
-        run_analysis_and_calculate_prices, project_id, bid_files_info
-    )
+        bid_documents = (
+            db.query(BidDocument).filter(BidDocument.project_id == project_id).all()
+        )
+        
+        if not bid_documents:
+            return JSONResponse(status_code=404, content={'error': '未找到投标文件'})
 
-    return JSONResponse(content={'message': '分析已启动', 'project_id': project_id})
+        updated_count = 0
+        for doc in bid_documents:
+            if doc.id in ids and ids[doc.id]:
+                old_name = doc.bidder_name
+                doc.bidder_name = ids[doc.id]  # type: ignore[assignment]
+                logging.info(f'更新投标方名称: {old_name} -> {ids[doc.id]}')
+                updated_count += 1
+                
+            # 切换状态为待处理
+            doc.processing_status = 'pending'
+            doc.progress_current_rule = '准备中...'
+            
+        project.status = 'processing'
+        db.commit()
+        logging.info(f'项目 {project_id} 已更新 {updated_count} 个投标方名称，开始分析')
+
+        # 启动后台分析
+        bid_files_info = [
+            {'id': d.id, 'path': d.file_path, 'bidder_name': d.bidder_name}
+            for d in bid_documents
+        ]
+        background_tasks.add_task(
+            run_analysis_and_calculate_prices, project_id, bid_files_info
+        )
+
+        return JSONResponse(content={'message': '分析已启动', 'project_id': project_id})
+    except Exception as e:
+        logging.error(f'启动分析时出错: {e}')
+        return JSONResponse(status_code=500, content={'error': f'服务器内部错误: {str(e)}'})
 
 
 @app.post('/api/analysis-results/bulk-update-scores')

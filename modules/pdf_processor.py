@@ -424,12 +424,10 @@ class PDFProcessor(PDFProcessorHelpers):
             return []
 
     def process_pdf_per_page(self) -> List[str]:
-        self.logger.info(f'开始处理PDF文件: {self.file_path}')
         # 重置失败页面记录
         self.failed_pages = []
 
         # 首先尝试直接提取文本
-        self.logger.info('尝试直接提取PDF文本...')
         pages_text = self.extract_text_per_page()
 
         # 检查提取的文本质量

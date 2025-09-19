@@ -16,6 +16,7 @@ class IntelligentBidAnalyzer(BidAnalyzerHelpers):
         db_session=None,
         bid_document_id=None,
         project_id=None,
+        extracted_text: list = None,
     ):
         super().__init__()
         self.tender_file_path = tender_file_path
@@ -33,9 +34,16 @@ class IntelligentBidAnalyzer(BidAnalyzerHelpers):
         else:
             self.bidder_name = '未知投标方'
 
-        # 初始化PDF处理器并预加载缓存
-        self.bid_processor = PDFProcessor(self.bid_file_path)
-        self.bid_pages = None
+        # 优化：如果已提供提取好的文本，则直接使用
+        if extracted_text is not None:
+            self.bid_pages = extracted_text
+            self.bid_processor = None  # 不需要再创建PDF处理器
+            self.logger.info(f'IntelligentBidAnalyzer initialized with pre-extracted text for {self.bid_file_path}.')
+        else:
+            # 保持旧的兼容性，如果未提供文本，则初始化处理器以便后续提取
+            self.logger.warning(f'No pre-extracted text provided for {self.bid_file_path}. PDFProcessor will be used.')
+            self.bid_processor = PDFProcessor(self.bid_file_path)
+            self.bid_pages = None
 
     def _update_progress(self, completed, total, current_rule, partial_results=None):
         if not (self.db and self.bid_document_id):
@@ -75,11 +83,21 @@ class IntelligentBidAnalyzer(BidAnalyzerHelpers):
         return tree
 
     def _get_bid_pages(self):
-        """获取投标文件页面内容，带缓存支持"""
-        if self.bid_pages is None:
+        """获取投标文件页面内容，优先使用已加载的文本。"""
+        # 如果文本已在初始化时提供，直接返回
+        if self.bid_pages is not None:
+            return self.bid_pages
+
+        # 作为后备方案，如果文本未提供，则调用PDF处理器
+        if self.bid_processor:
+            self.logger.info(f"No pre-extracted text found, processing PDF for {self.bid_file_path} on demand.")
             self.bid_pages = self.bid_processor.process_pdf_per_page()
             self._save_failed_pages_info(self.bid_processor)
-        return self.bid_pages
+            return self.bid_pages
+        
+        # 如果既没有预提取的文本，也没有处理器，则返回错误
+        self.logger.error(f"Cannot get bid pages: No pre-extracted text and no PDF processor available for {self.bid_file_path}.")
+        return []
 
     def analyze(self):
         try:
