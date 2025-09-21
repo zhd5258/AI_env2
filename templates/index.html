@@ -23,7 +23,7 @@
                 <button class="btn btn-outline-secondary" id="btnOpenSettings">
                     <i class="fas fa-sliders-h me-1"></i>系统设置
                 </button>
-                <button class="btn btn-outline-primary ms-2" onclick="location.href='/history'">
+                <button class="btn btn-outline-primary ms-2" id="btnHistory">
                     <i class="fas fa-history me-1"></i>历史项目
                 </button>
             </div>
@@ -99,18 +99,9 @@
 
                         <!-- Section for Detailed Scores Table -->
                         <div>
-                            <div class="d-flex justify-content-between align-items-center mb-3">
-                                <h4><i class="fas fa-list-ul me-2"></i>详细评分结果</h4>
-                                <div class="btn-group" role="group" id="viewToggle">
-                                    <input type="radio" class="btn-check" name="viewType" id="childView" value="child" autocomplete="off" checked>
-                                    <label class="btn btn-outline-primary" for="childView">按子项显示</label>
-
-                                    <input type="radio" class="btn-check" name="viewType" id="parentView" value="parent" autocomplete="off">
-                                    <label class="btn btn-outline-primary" for="parentView">按父项汇总</label>
-                                </div>
-                            </div>
-                            <div id="detailedTableContainer" class="table-responsive">
-                                <!-- Detailed table will be rendered here by JavaScript -->
+                            <h4><i class="fas fa-list me-2"></i>详细评分表</h4>
+                            <div class="table-responsive" id="detailedScoresTable">
+                                <!-- Detailed scores table will be inserted here -->
                             </div>
                         </div>
                     </div>
@@ -120,72 +111,88 @@
                 </div>
             </div>
         </div>
-
-        <!-- 新增：确认投标方名称模态框 -->
-        <div class="modal fade" id="confirmNamesModal" data-bs-backdrop="static" data-bs-keyboard="false" tabindex="-1" aria-labelledby="confirmNamesModalLabel" aria-hidden="true">
-            <div class="modal-dialog modal-lg">
+        
+        <!-- 系统设置模态框 -->
+        <div class="modal fade" id="settingsModal" tabindex="-1" aria-labelledby="settingsModalLabel" aria-hidden="true">
+            <div class="modal-dialog">
                 <div class="modal-content">
                     <div class="modal-header">
-                        <h5 class="modal-title" id="confirmNamesModalLabel"><i class="fas fa-user-check me-2"></i>确认投标方名称</h5>
+                        <h5 class="modal-title" id="settingsModalLabel">系统设置</h5>
+                        <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
                     </div>
                     <div class="modal-body">
-                        <p class="text-muted">系统已自动识别出以下投标方名称，请在开始分析前进行核对与修正。</p>
-                        <form id="confirmNamesForm">
-                            <!-- 投标方名称列表将动态插入此处 -->
+                        <form id="settingsForm">
+                            <div class="mb-3">
+                                <label for="pdfPageMaxWorkers" class="form-label">PDF页面处理最大并发数</label>
+                                <input type="number" class="form-control" id="pdfPageMaxWorkers" min="1" max="32">
+                                <div class="form-text">建议值: 4-8 (根据CPU核心数调整)</div>
+                            </div>
+                            <div class="mb-3">
+                                <label for="pdfPageTimeoutSec" class="form-label">单页PDF处理超时(秒)</label>
+                                <input type="number" class="form-control" id="pdfPageTimeoutSec" min="5" max="300">
+                                <div class="form-text">建议值: 60-120</div>
+                            </div>
+                            <div class="mb-3">
+                                <label for="pdfOverallMinTimeoutSec" class="form-label">整体PDF处理最小超时(秒)</label>
+                                <input type="number" class="form-control" id="pdfOverallMinTimeoutSec" min="30" max="3600">
+                                <div class="form-text">建议值: 180-600</div>
+                            </div>
+                            <div class="mb-3">
+                                <label class="form-label">OCR配置</label>
+                                <div class="form-check">
+                                    <input class="form-check-input" type="checkbox" id="useGpu">
+                                    <label class="form-check-label" for="useGpu">
+                                        启用GPU加速 (需要支持CUDA的显卡)
+                                    </label>
+                                </div>
+                            </div>
+                            <div id="cfg_feedback" class="form-text text-success"></div>
                         </form>
                     </div>
                     <div class="modal-footer">
-                        <button type="button" class="btn btn-primary" id="startAnalysisBtn">
-                            <i class="fas fa-cogs me-2"></i>确认并开始分析
-                        </button>
+                        <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">取消</button>
+                        <button type="button" class="btn btn-primary" id="saveSettings">保存设置</button>
                     </div>
                 </div>
             </div>
         </div>
-        
-        <footer>
-            <p>AI智能投标文件评价系统 &copy; 2025 | 基于本地AI模型的智能评标解决方案</p>
-        </footer>
     </div>
 
-    <!-- 系统设置弹窗 -->
-    <div class="modal fade" id="runtimeConfigModal" tabindex="-1" aria-labelledby="runtimeConfigModalLabel" aria-hidden="true">
-        <div class="modal-dialog">
-            <div class="modal-content">
-                <div class="modal-header">
-                    <h5 class="modal-title" id="runtimeConfigModalLabel"><i class="fas fa-sliders-h me-2"></i>系统运行参数</h5>
-                    <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
-                </div>
-                <div class="modal-body">
-                    <form id="runtimeConfigForm">
-                        <div class="mb-3">
-                            <label class="form-label">单PDF页级并发上限（1-32）</label>
-                            <input type="number" min="1" max="32" class="form-control" id="cfg_page_workers" placeholder="4">
-                            <div class="form-text">并发过高可能导致磁盘/CPU争用，建议4~8。</div>
-                        </div>
-                        <div class="mb-3">
-                            <label class="form-label">单页超时（秒，5-300）</label>
-                            <input type="number" min="5" max="300" class="form-control" id="cfg_page_timeout" placeholder="20">
-                        </div>
-                        <div class="mb-3">
-                            <label class="form-label">单文件最小总超时（秒，30-3600）</label>
-                            <input type="number" min="30" max="3600" class="form-control" id="cfg_overall_min_timeout" placeholder="60">
-                        </div>
-                    </form>
-                    <div id="cfg_feedback" class="small text-muted"></div>
-                </div>
-                <div class="modal-footer">
-                    <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">关闭</button>
-                    <button type="button" class="btn btn-primary" id="btnSaveConfig"><i class="fas fa-save me-1"></i>保存</button>
-                </div>
-            </div>
-        </div>
-    </div>
-
-    <!-- 加载 Popper.js 和 Bootstrap JS -->
-    <script src="https://cdn.jsdelivr.net/npm/@popperjs/core@2.11.8/dist/umd/popper.min.js"></script>
+    <!-- 引入 Bootstrap JS -->
     <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
+    <!-- 引入 Chart.js -->
     <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <!-- 引入自定义 JS -->
+    <script src="/static/js/main.js"></script>
     <script src="/static/js/app.js"></script>
+    <script>
+        // 页面加载完成后添加按钮事件监听
+        document.addEventListener('DOMContentLoaded', function() {
+            // 系统设置按钮事件
+            const btnOpenSettings = document.getElementById('btnOpenSettings');
+            if (btnOpenSettings) {
+                btnOpenSettings.addEventListener('click', function() {
+                    // 触发app.js中的设置功能
+                    if (typeof loadRuntimeConfig === 'function') {
+                        loadRuntimeConfig().then(() => {
+                            const modalElement = document.getElementById('settingsModal');
+                            if (modalElement) {
+                                const modal = new bootstrap.Modal(modalElement);
+                                modal.show();
+                            }
+                        });
+                    }
+                });
+            }
+            
+            // 历史项目按钮事件
+            const btnHistory = document.getElementById('btnHistory');
+            if (btnHistory) {
+                btnHistory.addEventListener('click', function() {
+                    window.location.href = '/history';
+                });
+            }
+        });
+    </script>
 </body>
 </html>

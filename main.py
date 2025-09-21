@@ -4,7 +4,9 @@ import uvicorn
 import os
 import shutil
 import datetime
+from datetime import timezone
 import json
+import re
 import asyncio
 import logging
 import sys
@@ -13,6 +15,7 @@ import time
 import threading
 from typing import List, Optional, Dict, Any, cast
 from concurrent.futures import ProcessPoolExecutor
+import concurrent.futures
 from pathlib import Path
 
 from fastapi import (
@@ -29,7 +32,7 @@ from fastapi.templating import Jinja2Templates
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
-import concurrent.futures  # 添加线程相关导入
+from sqlalchemy import func
 
 from modules.database import (
     SessionLocal,
@@ -44,6 +47,18 @@ from modules.price_score_calculator import PriceScoreCalculator
 from modules.bidder_name_extractor import extract_bidder_name_from_file
 from modules.summary_generator import generate_summary_data
 from modules.runtime_config import load_config, save_config
+from modules.pdf_processor import PDFProcessor
+
+# 导出功能需要的模块
+import pandas as pd
+from io import BytesIO
+from fastapi.responses import StreamingResponse
+import io
+import xlsxwriter
+from docx import Document
+from docx.shared import Inches
+from docx.enum.text import WD_ALIGN_PARAGRAPH
+from docx.oxml.ns import qn
 
 
 # 评分规则提取器
@@ -145,6 +160,58 @@ def get_db():
         db.close()
 
 
+def initialize_project_analysis(project_id: int):
+    """
+    初始化项目分析，处理招标文件并提取评分规则
+    """
+    db = SessionLocal()
+    try:
+        logging.info(f'开始初始化项目分析，项目ID: {project_id}')
+
+        project = db.query(TenderProject).filter(TenderProject.id == project_id).first()
+        if not project:
+            logging.error(f'项目不存在: {project_id}')
+            return False
+
+        tender_file_path = project.tender_file_path
+        if not tender_file_path or not Path(tender_file_path).exists():
+            logging.error(f'招标文件不存在: {tender_file_path}')
+            return False
+
+        # 导入招标文件分析器
+        from modules.tender_analyzer import TenderAnalyzer
+
+        # 创建分析器实例
+        tender_analyzer = TenderAnalyzer(
+            tender_file_path=tender_file_path, db_session=db, project_id=project_id
+        )
+
+        # 1. 提取招标文件文本并保存到temp_word目录
+        pages_text = tender_analyzer.extract_and_save_tender_text()
+
+        # 2. 从招标文件中提取评分规则
+        scoring_rules = tender_analyzer.extract_scoring_rules(pages_text)
+
+        # 3. 将评分规则保存到数据库
+        if scoring_rules:
+            success = tender_analyzer.save_scoring_rules_to_db(scoring_rules)
+            if success:
+                logging.info(f'项目 {project_id} 的评分规则初始化完成')
+                return True
+            else:
+                logging.error(f'保存项目 {project_id} 的评分规则到数据库失败')
+                return False
+        else:
+            logging.warning(f'项目 {project_id} 未提取到评分规则')
+            return False
+
+    except Exception as e:
+        logging.error(f'初始化项目分析时出错: {e}', exc_info=True)
+        return False
+    finally:
+        db.close()
+
+
 # 创建一个进程池
 executor = ProcessPoolExecutor(max_workers=os.cpu_count())
 
@@ -210,6 +277,48 @@ async def update_runtime_config(payload: UpdateRuntimeConfigRequest):
     return JSONResponse(content=RUNTIME_CONFIG)
 
 
+class OCRConfigRequest(BaseModel):
+    """OCR配置请求模型"""
+
+    use_gpu: Optional[bool] = None
+    use_paddle: Optional[bool] = None
+
+
+@app.get('/api/ocr-config')
+async def get_ocr_config():
+    """获取当前OCR配置"""
+    return JSONResponse(
+        content={
+            'use_gpu': os.getenv('USE_GPU', 'false').lower() == 'true',
+            'use_paddle': True,  # 默认使用PaddleOCR
+            'available_engines': ['paddle', 'onnx'],
+            'current_engine': 'paddle',
+        }
+    )
+
+
+@app.post('/api/ocr-config')
+async def update_ocr_config(payload: OCRConfigRequest):
+    """更新OCR配置"""
+    try:
+        if payload.use_gpu is not None:
+            os.environ['USE_GPU'] = str(payload.use_gpu).lower()
+            logging.info('OCR GPU设置已更新: %s', payload.use_gpu)
+
+        return JSONResponse(
+            content={
+                'message': 'OCR配置已更新',
+                'use_gpu': os.getenv('USE_GPU', 'false').lower() == 'true',
+                'use_paddle': payload.use_paddle
+                if payload.use_paddle is not None
+                else True,
+            }
+        )
+    except Exception as e:
+        logging.error('更新OCR配置失败: %s', e)
+        return JSONResponse(status_code=500, content={'error': f'更新OCR配置失败: {e}'})
+
+
 @app.patch('/api/bids/{bid_id}/name')
 async def update_bidder_name(
     bid_id: int, payload: UpdateBidderNameRequest, db: Session = Depends(get_db)
@@ -262,7 +371,9 @@ async def update_bidder_name(
         )
     except Exception as e:
         logging.error(f'修改投标方名称失败: {e}')
-        return JSONResponse(status_code=500, content={'error': f'服务器内部错误: {str(e)}'})
+        return JSONResponse(
+            status_code=500, content={'error': f'服务器内部错误: {str(e)}'}
+        )
 
 
 # 首页
@@ -286,15 +397,20 @@ async def history_page(request: Request):
 
 def save_upload_file(upload_file: UploadFile, destination: str) -> str:
     try:
+        # 将文件保存到临时目录
+        temp_dir = get_platform_safe_path('temp_uploads')
+        safe_makedirs(temp_dir)
+        temp_destination = get_platform_safe_path(temp_dir, destination)
+
         # 确保目标目录存在
-        dest_path = Path(destination)
+        dest_path = Path(temp_destination)
         safe_makedirs(dest_path.parent)
 
-        with open(destination, 'wb') as buffer:
+        with open(temp_destination, 'wb') as buffer:
             shutil.copyfileobj(upload_file.file, buffer)
     finally:
         upload_file.file.close()
-    return destination
+    return temp_destination
 
 
 # 添加一个新的函数用于在后台提取PDF文本
@@ -313,10 +429,16 @@ def extract_pdf_text_background(file_path: str, bidder_name: str):
         logging.info(f'开始后台提取 {bidder_name} 的PDF文本')
         from modules.pdf_processor import PDFProcessor
 
-        processor = PDFProcessor(file_path)
+        # 检查是否启用GPU（从环境变量或配置中读取）
+        use_gpu = os.getenv('USE_GPU', 'false').lower() == 'true'
+        processor = PDFProcessor(
+            file_path, use_gpu=use_gpu, file_type='bid'
+        )  # 投标文件使用ONNX
         # 使用单线程执行器为PDF提取增加超时保护，避免卡死
         local_executor = concurrent.futures.ThreadPoolExecutor(max_workers=1)
-        future = local_executor.submit(processor.process_pdf_per_page)
+        future = local_executor.submit(
+            processor.process_pdf_per_page
+        )  # 自动选择OCR引擎
         try:
             pages_text = future.result(timeout=180)
         except concurrent.futures.TimeoutError:
@@ -332,205 +454,116 @@ def extract_pdf_text_background(file_path: str, bidder_name: str):
         return (bidder_name, [], False)
 
 
-def analysis_task(project_id: int, bid_document_id: int):
+def analysis_task(
+    project_id: int, bid_document_id: int, tender_file_path: str, bid_file_path: str
+):
     """
-    This function runs in a separate process.
-    It creates its own database session.
+    分析任务：分析单个投标文件，支持流式处理
     """
     db = SessionLocal()
     bid_document = None
     try:
-        logging.info(
-            'Starting analysis for bid_id: %s in project_id: %s',
-            bid_document_id,
-            project_id,
-        )
+        logging.info(f'开始分析任务: 项目ID={project_id}, 投标文件ID={bid_document_id}')
 
+        # 获取投标文件记录
         bid_document = (
             db.query(BidDocument).filter(BidDocument.id == bid_document_id).first()
         )
         if not bid_document:
-            logging.error('投标文件不存在: %s', bid_document_id)
+            logging.error(f'未找到投标文件记录: {bid_document_id}')
             return
 
-        project = db.query(TenderProject).filter(TenderProject.id == project_id).first()
-        if not project:
-            logging.error('项目不存在: %s', project_id)
-            return
-
-        tender_file_path = project.tender_file_path
-        if not tender_file_path or not Path(tender_file_path).exists():
-            logging.error('招标文件不存在: %s', tender_file_path)
-            bid_document.processing_status = 'error'
-            bid_document.error_message = '招标文件不存在'
-            bid_document.progress_current_rule = '分析失败'
-            db.commit()
-            return
-
+        # 更新处理状态
         bid_document.processing_status = 'processing'
-        bid_document.progress_completed_rules = 0
-        bid_document.progress_total_rules = 0
-        bid_document.progress_current_rule = '初始化分析...'
+        bid_document.progress_current_rule = '开始处理'
         db.commit()
 
-        # 优化：在分析前预加载PDF文本（这将从缓存中快速读取）
-        try:
-            from modules.pdf_processor import PDFProcessor
-            logging.info(f'为分析任务预加载PDF文本: {bid_document.file_path}')
-            pdf_processor = PDFProcessor(bid_document.file_path)
-            # 调用extract_text_per_page会优先从缓存加载，速度很快
-            extracted_pages = pdf_processor.extract_text_per_page(use_cache=True)
-            if not extracted_pages or not any(extracted_pages):
-                raise ValueError('未能从缓存或文件中加载有效的PDF文本内容。')
-            logging.info(f'成功预加载 {len(extracted_pages)} 页文本')
-        except Exception as e:
-            logging.error(f'在分析前加载PDF文本失败: {e}')
-            bid_document.processing_status = 'error'
-            bid_document.error_message = f'加载PDF文本失败: {e}'
-            bid_document.progress_current_rule = '分析失败'
-            db.commit()
-            return
-
+        # 使用流式处理方式提取投标文件文本内容
+        pdf_processor = PDFProcessor(bid_file_path, file_type='bid')
+        # 创建分析器实例，不传递预提取的文本，让分析器在流式处理过程中自行处理
         analyzer = IntelligentBidAnalyzer(
             tender_file_path,
             bid_document.file_path,
             db_session=db,
-            bid_document_id=bid_document.id,
-            project_id=project_id,
-            extracted_text=extracted_pages,  # 传入已提取的文本
-        )
-
-        result_data = None
-        analysis_error = None
-
-        def run_analysis():
-            nonlocal result_data, analysis_error
-            try:
-                result_data = analyzer.analyze()
-            except Exception as e:
-                analysis_error = e
-
-        analysis_thread = threading.Thread(target=run_analysis)
-        analysis_thread.daemon = True
-
-        try:
-            logging.info('开始分析投标文件 %s', bid_document_id)
-            start_time = time.time()
-            analysis_thread.start()
-            analysis_thread.join(timeout=1800)
-            end_time = time.time()
-            analysis_duration = end_time - start_time
-
-            if analysis_thread.is_alive():
-                logging.error('分析超时 for bid_id %s', bid_document.id)
-                bid_document.processing_status = 'error'
-                bid_document.error_message = '分析超时，请重试'
-                bid_document.progress_current_rule = '分析超时'
-                db.commit()
-                return
-            elif analysis_error:
-                logging.error(
-                    '分析过程中发生异常 for bid_id %s: %s',
-                    bid_document.id,
-                    str(analysis_error),
-                )
-                bid_document.processing_status = 'error'
-                bid_document.error_message = f'分析异常: {str(analysis_error)}'
-                bid_document.progress_current_rule = '分析异常'
-                db.commit()
-                return
-            else:
-                logging.info('分析完成，耗时 %.2f 秒', analysis_duration)
-
-        except Exception as e:
-            logging.error(
-                '分析过程中发生异常 for bid_id %s: %s', bid_document_id, str(e)
-            )
-            bid_document.processing_status = 'error'
-            bid_document.error_message = f'分析异常: {str(e)}'
-            bid_document.progress_current_rule = '分析异常'
-            db.commit()
-            return
-
-        if result_data is None:
-            logging.error('分析结果为空 for bid_id %s', bid_document_id)
-            bid_document.processing_status = 'error'
-            bid_document.error_message = '分析结果为空'
-            bid_document.progress_current_rule = '分析失败'
-            db.commit()
-            return
-
-        if not isinstance(result_data, dict):
-            logging.error('分析结果格式错误 for bid_id %s', bid_document_id)
-            bid_document.processing_status = 'error'
-            bid_document.error_message = '分析结果格式错误'
-            bid_document.progress_current_rule = '分析失败'
-            db.commit()
-            return
-
-        assert isinstance(result_data, dict)
-
-        if 'error' in result_data:
-            logging.error(
-                'Analysis failed for bid_id %s: %s',
-                bid_document_id,
-                result_data['error'],
-            )
-            bid_document.processing_status = 'error'
-            bid_document.error_message = result_data['error']
-            bid_document.progress_current_rule = '分析出错'
-            db.commit()
-            return
-
-        total_score = result_data.get('total_score', 0)
-        price_score = result_data.get('price_score', 0)
-        detailed_scores = result_data.get('detailed_scores', {})
-        extracted_price = result_data.get('extracted_price')
-
-        if price_score == 0 and detailed_scores:
-            price_score = _extract_price_score_from_detailed_scores(detailed_scores)
-
-        # 确保同一项目下同一投标文件（或同一投标人）不会产生重复结果
-        try:
-            db.query(AnalysisResult).filter(
-                AnalysisResult.project_id == project_id,
-                AnalysisResult.bid_document_id == bid_document_id,
-            ).delete()
-        except Exception:
-            pass
-
-        analysis_result = AnalysisResult(
-            project_id=project_id,
             bid_document_id=bid_document_id,
-            bidder_name=bid_document.bidder_name,
-            total_score=total_score,
-            price_score=price_score,
-            extracted_price=extracted_price,
-            detailed_scores=json.dumps(detailed_scores, ensure_ascii=False),
-            analysis_summary=result_data.get('analysis_summary', 'Analysis complete.'),
-            ai_model=result_data.get('ai_model', 'Unknown'),
-            scoring_method=result_data.get('scoring_method', 'AI'),
-            is_modified=False,
-            modification_count=0,
+            project_id=project_id,
+            extracted_text=None,  # 不传递预提取的文本，启用流式处理
         )
 
-        db.add(analysis_result)
-        bid_document.processing_status = 'completed'
-        db.commit()
-        logging.info('Successfully completed analysis for bid_id: %s', bid_document_id)
-    except Exception as e:
-        logging.error(
-            'A critical error occurred in analysis_task for bid_id %s:',
-            bid_document_id,
-        )
-        logging.error(traceback.format_exc())
-        if db and bid_document:
+        # 执行分析（流式处理会在分析过程中自动进行）
+        analysis_result = analyzer.analyze_bidding_document()
+
+        # 更新处理状态
+        if analysis_result['status'] == 'success':
+            bid_document.processing_status = 'completed'
+            bid_document.progress_current_rule = '分析完成'
+            # 记录提取到的投标人名称和投标总价
+            if 'details' in analysis_result:
+                details = analysis_result['details']
+                if 'bidder_name' in details and details['bidder_name'] != '待分析确认':
+                    bid_document.bidder_name = details['bidder_name']
+                if 'total_price' in details and details['total_price'] != '未提取':
+                    try:
+                        # 尝试保存投标总价到数据库
+                        price_str = str(details['total_price'])
+                        # 移除常见的非数字字符并转换为浮点数
+                        price_value = _extract_numeric_price(price_str)
+                        if price_value is not None:
+                            # 价格信息将在AnalysisResult中保存
+                            pass
+                    except (ValueError, TypeError) as e:
+                        logging.warning(
+                            f'无法解析投标总价: {details["total_price"]}, 错误: {e}'
+                        )
+            logging.info(f'投标文件分析完成: {bid_document.bidder_name}')
+        else:
             bid_document.processing_status = 'error'
-            bid_document.error_message = f'Critical error: {str(e)}'
+            bid_document.error_message = analysis_result['message']
+            bid_document.progress_current_rule = '分析失败'
+            logging.error(f'投标文件分析失败: {analysis_result["message"]}')
+
+        db.commit()
+
+    except Exception as e:
+        logging.error(f'分析任务执行过程中发生意外错误: {e}', exc_info=True)
+        if bid_document:
+            bid_document.processing_status = 'error'
+            bid_document.error_message = f'分析过程中发生意外错误: {str(e)}'
+            bid_document.progress_current_rule = '分析失败'
             db.commit()
     finally:
-        if db:
-            db.close()
+        db.close()
+
+
+def _extract_numeric_price(price_str):
+    """
+    从价格字符串中提取数值，支持汉字大写数字转换
+    """
+    if not price_str or price_str == '未提取':
+        return None
+
+    # 如果是数值字符串，直接转换
+    try:
+        # 移除常见的非数字字符
+        cleaned_price = re.sub(r'[^\d\.万元亿]', '', str(price_str))
+        # 处理万元、亿元等单位
+        multiplier = 1
+        if '万' in cleaned_price:
+            multiplier = 10000
+            cleaned_price = cleaned_price.replace('万', '')
+        elif '亿' in cleaned_price:
+            multiplier = 100000000
+            cleaned_price = cleaned_price.replace('亿', '')
+
+        # 转换为浮点数
+        if cleaned_price:
+            numeric_price = float(cleaned_price) * multiplier
+            return numeric_price
+    except (ValueError, TypeError):
+        pass
+
+    # 返回None表示无法解析
+    return None
 
 
 def _extract_price_score_from_detailed_scores(detailed_scores):
@@ -659,11 +692,27 @@ def run_analysis_and_calculate_prices(project_id: int, bid_files_info: list):
     finally:
         db.close()
 
+    # 获取项目信息
+    db = SessionLocal()
+    project = db.query(TenderProject).filter(TenderProject.id == project_id).first()
+    if not project:
+        logging.error(f'项目 {project_id} 未找到')
+        return
+    tender_file_path = project.tender_file_path
+    db.close()
+
     loop = asyncio.new_event_loop()
     asyncio.set_event_loop(loop)
 
     futures = [
-        loop.run_in_executor(executor, analysis_task, project_id, bid_info['id'])
+        loop.run_in_executor(
+            executor,
+            analysis_task,
+            project_id,
+            bid_info['id'],
+            tender_file_path,
+            bid_info['path'],
+        )
         for bid_info in bid_files_info
     ]
 
@@ -715,85 +764,12 @@ def run_analysis_and_calculate_prices(project_id: int, bid_files_info: list):
         loop.close()
 
 
-@app.post('/api/upload')
-async def upload_files(
-    tender_file: UploadFile = File(...),
-    bid_files: List[UploadFile] = File(...),
-    db: Session = Depends(get_db),
-):
-    """
-    接收上传的文件，创建项目和文档记录，并立即提取投标方名称。
-    返回项目ID和包含建议名称的投标方列表，等待前端确认。
-    """
-    # 1. 创建项目
-    project_code = f'PRJ-{datetime.datetime.now().strftime("%Y%m%d-%H%M%S")}'
-    project = TenderProject(
-        project_code=project_code,
-        name=f'项目-{tender_file.filename}',
-        description=f'招标文件: {tender_file.filename}',
-        status='awaiting_confirmation',  # 等待用户确认名称的状态
-    )
-    db.add(project)
-    db.commit()
-    db.refresh(project)
-    logging.info(f'创建新项目，ID: {project.id}')
-
-    # 2. 保存招标文件
-    tender_file_path = save_upload_file(
-        tender_file,
-        get_platform_safe_path(UPLOADS_DIR, f'{project.id}_tender_{tender_file.filename}')
-    )
-    project.tender_file_path = tender_file_path
-    db.commit()
-
-    # 3. 处理每个投标文件
-    bidders_info = []
-    for bid_file in bid_files:
-        # 保存文件
-        file_path = save_upload_file(
-            bid_file,
-            get_platform_safe_path(UPLOADS_DIR, f'{project.id}_bid_{bid_file.filename}')
-        )
-
-        # 立即、同步地提取投标方名称
-        logging.info(f'正在从 {bid_file.filename} 提取投标方名称...')
-        suggested_name = extract_bidder_name_from_file(file_path)
-        if not suggested_name:
-            suggested_name = Path(bid_file.filename).stem if bid_file.filename else "未知投标方"
-            logging.warning(f'提取失败，使用文件名作为备用: {suggested_name}')
-
-        # 创建数据库记录
-        bid_document = BidDocument(
-            project_id=project.id,
-            bidder_name=suggested_name,  # 保存建议的名称
-            file_path=file_path,
-            file_size=bid_file.size,
-            processing_status='awaiting_confirmation',
-            progress_current_rule='等待名称确认'
-        )
-        db.add(bid_document)
-        db.commit()
-        db.refresh(bid_document)
-
-        bidders_info.append({
-            'id': bid_document.id,
-            'file_name': bid_file.filename,
-            'suggested_name': suggested_name
-        })
-
-    # 4. 返回响应给前端
-    return JSONResponse(content={
-        'project_id': project.id,
-        'bidders': bidders_info
-    })
-
-
 @app.post('/api/projects/{project_id}/confirm-names-and-start-analysis')
 async def confirm_names_and_start_analysis(
     project_id: int,
     background_tasks: BackgroundTasks,
     request: Request,
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
 ):
     """
     接收前端确认后的投标方名称，更新数据库，并启动后台分析流程。
@@ -801,7 +777,7 @@ async def confirm_names_and_start_analysis(
     try:
         data = await request.json()
         bidders_updates = data.get('bidders')
-        
+
         if not bidders_updates:
             return JSONResponse(status_code=400, content={'error': '缺少投标方信息'})
 
@@ -813,24 +789,26 @@ async def confirm_names_and_start_analysis(
         for bidder_update in bidders_updates:
             bid_id = bidder_update.get('id')
             confirmed_name = bidder_update.get('name')
-            
+
             doc = db.query(BidDocument).filter(BidDocument.id == bid_id).first()
             if doc and confirmed_name:
                 # 更新名称和状态
                 doc.bidder_name = confirmed_name
                 doc.processing_status = 'pending'
                 doc.progress_current_rule = '准备中...'
-                bid_files_info.append({
-                    'id': doc.id,
-                    'path': doc.file_path,
-                    'bidder_name': doc.bidder_name
-                })
-        
+                bid_files_info.append(
+                    {
+                        'id': doc.id,
+                        'path': doc.file_path,
+                        'bidder_name': doc.bidder_name,
+                    }
+                )
+
         project.status = 'processing'
         db.commit()
-        
+
         logging.info(f'项目 {project_id} 名称已确认，即将开始后台分析...')
-        
+
         # 启动后台分析任务
         background_tasks.add_task(
             run_analysis_and_calculate_prices,
@@ -838,12 +816,13 @@ async def confirm_names_and_start_analysis(
             bid_files_info,
         )
 
-        return JSONResponse(content={'project_id': project.id, 'message': '分析已成功启动'})
+        return JSONResponse(
+            content={'project_id': project.id, 'message': '分析已成功启动'}
+        )
 
     except Exception as e:
         logging.error(f'启动分析时出错: {e}')
         return JSONResponse(status_code=500, content={'error': '服务器内部错误'})
-
 
 
 @app.get('/api/projects/{project_id}/analysis-status')
@@ -1013,17 +992,35 @@ async def get_scoring_rules(project_id: int, db: Session = Depends(get_db)):
 async def get_all_projects(db: Session = Depends(get_db)):
     projects = db.query(TenderProject).all()
 
+    # 使用单次查询获取所有相关的投标文件和分析结果信息
+    project_ids = [project.id for project in projects]
+
+    # 批量查询投标文件数量
+    bid_counts = {}
+    if project_ids:
+        bid_count_results = (
+            db.query(BidDocument.project_id, func.count(BidDocument.id))
+            .filter(BidDocument.project_id.in_(project_ids))
+            .group_by(BidDocument.project_id)
+            .all()
+        )
+        bid_counts = {project_id: count for project_id, count in bid_count_results}
+
+    # 批量查询分析结果数量
+    result_counts = {}
+    if project_ids:
+        result_count_results = (
+            db.query(AnalysisResult.project_id, func.count(AnalysisResult.id))
+            .filter(AnalysisResult.project_id.in_(project_ids))
+            .group_by(AnalysisResult.project_id)
+            .all()
+        )
+        result_counts = {
+            project_id: count for project_id, count in result_count_results
+        }
+
     response_data = []
     for project in projects:
-        bid_count = (
-            db.query(BidDocument).filter(BidDocument.project_id == project.id).count()
-        )
-        result_count = (
-            db.query(AnalysisResult)
-            .filter(AnalysisResult.project_id == project.id)
-            .count()
-        )
-
         response_data.append(
             {
                 'id': project.id,
@@ -1034,8 +1031,8 @@ async def get_all_projects(db: Session = Depends(get_db)):
                 if project.created_at
                 else None,
                 'status': project.status,
-                'bid_count': bid_count,
-                'result_count': result_count,
+                'bid_count': bid_counts.get(project.id, 0),
+                'result_count': result_counts.get(project.id, 0),
             }
         )
 
@@ -1151,6 +1148,13 @@ class ScoreUpdateItem(BaseModel):
     total_score: float
 
 
+# 添加临时文件清理的请求模型
+class CleanupRequest(BaseModel):
+    delete_uploads: Optional[bool] = True
+    delete_cache: Optional[bool] = True
+    delete_temp_word: Optional[bool] = True
+
+
 # ========== 新增：分步上传与名称确认 API ==========
 
 
@@ -1168,78 +1172,158 @@ class StartAnalysisRequest(BaseModel):
     bidders: List[Dict[str, Any]]  # 每项包含 id 和 confirmed_name
 
 
-@app.post('/api/init-upload')
-async def init_upload(
-    tender_file: UploadFile = File(...),
-    bid_files: List[UploadFile] = File(...),
-    db: Session = Depends(get_db),
+@app.post('/api/projects/{project_id}/cleanup')
+async def cleanup_temp_files(
+    project_id: int, payload: CleanupRequest, db: Session = Depends(get_db)
 ):
-    """初始化上传：创建项目、保存文件、快速提取投标人名称，等待前端确认。"""
-    project_code = f'PRJ-{datetime.datetime.now().strftime("%Y%m%d-%H%M%S")}'
-    project = TenderProject(
-        project_code=project_code,
-        name=f'Project {project_code}',
-        description=f'Tender: {tender_file.filename}',
-        status='awaiting_confirmation',
-    )
-    db.add(project)
-    db.commit()
-    db.refresh(project)
+    """清理项目相关的临时文件"""
+    try:
+        # 获取项目信息
+        project = db.query(TenderProject).filter(TenderProject.id == project_id).first()
+        if not project:
+            return JSONResponse(status_code=404, content={'error': '项目不存在'})
 
-    tender_file_path = save_upload_file(
-        tender_file,
-        get_platform_safe_path(
-            UPLOADS_DIR, f'{project.id}_tender_{tender_file.filename}'
-        ),
-    )
-    project.tender_file_path = tender_file_path
-    db.commit()
+        deleted_paths = []
 
-    bidders_payload: List[Dict[str, Any]] = []
+        # 删除上传的临时文件
+        if payload.delete_uploads:
+            temp_uploads_dir = get_platform_safe_path('temp_uploads')
+            if Path(temp_uploads_dir).exists():
+                # 删除与该项目相关的文件
+                for file_path in Path(temp_uploads_dir).glob('*'):
+                    if file_path.is_file():
+                        try:
+                            file_path.unlink()
+                            deleted_paths.append(str(file_path))
+                        except Exception as e:
+                            logging.warning(f'删除文件失败 {file_path}: {e}')
 
-    for bid_file in bid_files:
-        bid_file_path = save_upload_file(
-            bid_file,
-            get_platform_safe_path(
-                UPLOADS_DIR, f'{project.id}_bid_{bid_file.filename}'
-            ),
-        )
+        # 删除生成的中间文件
+        if payload.delete_cache:
+            temp_cache_dir = get_platform_safe_path('temp_pdf_cache')
+            if Path(temp_cache_dir).exists():
+                for file_path in Path(temp_cache_dir).glob('*'):
+                    if file_path.is_file():
+                        try:
+                            file_path.unlink()
+                            deleted_paths.append(str(file_path))
+                        except Exception as e:
+                            logging.warning(f'删除文件失败 {file_path}: {e}')
 
-        # 快速提取建议名称
-        suggested_name = extract_bidder_name_from_file(bid_file_path) or (
-            Path(bid_file.filename).stem if bid_file.filename else '未命名投标方'
-        )
+        # 删除生成的文本文件
+        if payload.delete_temp_word:
+            temp_word_dir = get_platform_safe_path('temp_word')
+            if Path(temp_word_dir).exists():
+                for file_path in Path(temp_word_dir).glob('*'):
+                    if file_path.is_file():
+                        try:
+                            file_path.unlink()
+                            deleted_paths.append(str(file_path))
+                        except Exception as e:
+                            logging.warning(f'删除文件失败 {file_path}: {e}')
 
-        bid_document = BidDocument(
-            project_id=project.id,
-            bidder_name=suggested_name,
-            file_path=bid_file_path,
-            file_size=bid_file.size,
-            processing_status='awaiting_confirmation',
-            progress_total_rules=0,
-            progress_completed_rules=0,
-            progress_current_rule='等待名称确认',
-        )
-        db.add(bid_document)
-        db.commit()
-        db.refresh(bid_document)
-
-        bidders_payload.append(
-            {
-                'id': bid_document.id,
-                'suggested_name': suggested_name,
-                'file_name': bid_file.filename,
-                'file_size': bid_file.size,
+        logging.info(f'项目 {project_id} 清理了 {len(deleted_paths)} 个临时文件')
+        return JSONResponse(
+            content={
+                'message': f'成功清理 {len(deleted_paths)} 个临时文件',
+                'deleted_count': len(deleted_paths),
+                'deleted_paths': deleted_paths,
             }
         )
 
-    return JSONResponse(
-        content={
-            'project_id': project.id,
-            'tender_file': tender_file.filename,
-            'bidders': bidders_payload,
-        }
-    )
+    except Exception as e:
+        logging.error(f'清理临时文件时出错: {e}')
+        return JSONResponse(
+            status_code=500, content={'error': f'清理临时文件失败: {str(e)}'}
+        )
+
+
+@app.post('/api/init-upload')
+async def init_upload(
+    files: List[UploadFile] = File(...), db: Session = Depends(get_db)
+):
+    """
+    初始化上传接口：接收招标文件和投标文件，快速提取投标人名称供用户确认
+    """
+    try:
+        tender_file = None
+        bid_files = []
+
+        # 分离招标文件和投标文件
+        for file in files:
+            if file.filename and '招标' in file.filename:
+                tender_file = file
+            else:
+                bid_files.append(file)
+
+        if not tender_file:
+            return JSONResponse(status_code=400, content={'error': '未找到招标文件'})
+
+        # 保存招标文件
+        tender_file_path = save_upload_file(
+            tender_file, f'tender_{tender_file.filename}'
+        )
+
+        # 保存投标文件并提取投标人名称
+        bidder_info = []
+        for bid_file in bid_files:
+            if bid_file.filename:
+                # 保存文件
+                bid_file_path = save_upload_file(bid_file, f'bid_{bid_file.filename}')
+
+                # 创建投标文档记录
+                bid_document = BidDocument(
+                    file_path=bid_file_path,
+                    upload_time=datetime.datetime.now(timezone.utc),
+                    processing_status='pending',
+                )
+                db.add(bid_document)
+                db.flush()  # 获取生成的ID
+
+                # 使用文件名作为默认投标人名称
+                default_bidder_name = bid_file.filename or '未知投标人'
+                # 移除文件扩展名
+                if '.' in default_bidder_name:
+                    default_bidder_name = default_bidder_name.rsplit('.', 1)[0]
+
+                bidder_info.append(
+                    {
+                        'id': bid_document.id,
+                        'original_filename': bid_file.filename,
+                        'bidder_name': default_bidder_name,
+                        'file_path': bid_file_path,
+                    }
+                )
+
+        # 创建项目记录
+        project = TenderProject(
+            tender_file_path=tender_file_path,
+            created_at=datetime.datetime.now(timezone.utc),
+        )
+        db.add(project)
+        db.flush()
+
+        # 更新投标文档记录，关联到项目
+        for info in bidder_info:
+            bid_document = (
+                db.query(BidDocument).filter(BidDocument.id == info['id']).first()
+            )
+            if bid_document:
+                bid_document.project_id = project.id
+        db.commit()
+
+        return JSONResponse(
+            content={
+                'project_id': project.id,
+                'tender_file_path': tender_file_path,
+                'bidder_info': bidder_info,
+            }
+        )
+
+    except Exception as e:
+        db.rollback()
+        logging.error(f'初始化上传时出错: {e}')
+        return JSONResponse(status_code=500, content={'error': f'上传失败: {str(e)}'})
 
 
 @app.get('/api/projects/{project_id}/bidders')
@@ -1278,23 +1362,26 @@ async def start_analysis(
             item.get('id'): (item.get('confirmed_name') or '').strip()
             for item in payload.bidders
         }
-        
+
         # 验证名称有效性
         company_keywords = ['公司', '有限', '股份', '集团', '厂', '院', '所', '中心']
         for item in payload.bidders:
             confirmed_name = (item.get('confirmed_name') or '').strip()
             if len(confirmed_name) < 2:
-                return JSONResponse(status_code=400, content={'error': f'名称过短: {confirmed_name}'})
-            
+                return JSONResponse(
+                    status_code=400, content={'error': f'名称过短: {confirmed_name}'}
+                )
+
             if not any(k in confirmed_name for k in company_keywords):
                 return JSONResponse(
-                    status_code=400, content={'error': f'名称缺少公司关键词: {confirmed_name}'}
+                    status_code=400,
+                    content={'error': f'名称缺少公司关键词: {confirmed_name}'},
                 )
 
         bid_documents = (
             db.query(BidDocument).filter(BidDocument.project_id == project_id).all()
         )
-        
+
         if not bid_documents:
             return JSONResponse(status_code=404, content={'error': '未找到投标文件'})
 
@@ -1305,11 +1392,11 @@ async def start_analysis(
                 doc.bidder_name = ids[doc.id]  # type: ignore[assignment]
                 logging.info(f'更新投标方名称: {old_name} -> {ids[doc.id]}')
                 updated_count += 1
-                
+
             # 切换状态为待处理
             doc.processing_status = 'pending'
             doc.progress_current_rule = '准备中...'
-            
+
         project.status = 'processing'
         db.commit()
         logging.info(f'项目 {project_id} 已更新 {updated_count} 个投标方名称，开始分析')
@@ -1326,7 +1413,9 @@ async def start_analysis(
         return JSONResponse(content={'message': '分析已启动', 'project_id': project_id})
     except Exception as e:
         logging.error(f'启动分析时出错: {e}')
-        return JSONResponse(status_code=500, content={'error': f'服务器内部错误: {str(e)}'})
+        return JSONResponse(
+            status_code=500, content={'error': f'服务器内部错误: {str(e)}'}
+        )
 
 
 @app.post('/api/analysis-results/bulk-update-scores')
@@ -1387,57 +1476,57 @@ async def extract_scoring_rules_api(
 
         # 保存到数据库
         if scoring_rules:
-            # Manually save rules to the database
+            # 删除该项目已有的评分规则
             db.query(ScoringRule).filter(ScoringRule.project_id == project_id).delete()
 
-            def save_rule_recursive(rule_data, project_id, parent_id=None):
+            def save_rule_recursive(rule_data, project_id):
                 """递归保存评分规则"""
                 # 创建评分规则对象
                 db_rule = ScoringRule(
                     project_id=project_id,
-                    Parent_Item_Name=rule_data.get('criteria_name'),
-                    Parent_max_score=rule_data.get('max_score'),
+                    Parent_Item_Name=rule_data.get('Parent_Item_Name')
+                    or rule_data.get('criteria_name'),
+                    Parent_max_score=rule_data.get('Parent_max_score')
+                    or rule_data.get('max_score', 0),
+                    Child_Item_Name=rule_data.get('Child_Item_Name'),
+                    Child_max_score=rule_data.get('Child_max_score'),
                     description=rule_data.get('description', ''),
                     is_price_criteria=bool(rule_data.get('is_price_criteria', False)),
+                    is_veto=bool(rule_data.get('is_veto', False)),
+                    price_formula=rule_data.get('price_formula', ''),
                 )
 
-                # 如果是价格规则，设置价格公式字段（保留解析器生成的公式）
+                # 如果是价格规则，设置价格公式字段
                 if db_rule.is_price_criteria:
-                    db_rule.price_formula = rule_data.get('price_formula')
-                    db_rule.Child_Item_Name = None
-                    db_rule.Child_max_score = None
+                    db_rule.price_formula = rule_data.get('price_formula', '')
+                    db_rule.Child_Item_Name = rule_data.get('Child_Item_Name')
+                    db_rule.Child_max_score = rule_data.get('Child_max_score')
                 else:
                     # 对于非价格规则，如果有子项，需要特殊处理
                     if 'children' in rule_data and rule_data['children']:
                         # 父项规则，子项信息将在子项规则中保存
-                        db_rule.Child_Item_Name = None
-                        db_rule.Child_max_score = None
-                    else:
-                        # 叶子节点规则（没有子项）
-                        db_rule.Child_Item_Name = rule_data.get('criteria_name')
-                        db_rule.Child_max_score = rule_data.get('max_score')
+                        db_rule.Child_Item_Name = rule_data.get('Child_Item_Name')
+                        db_rule.Child_max_score = rule_data.get('Child_max_score')
 
-                        db.add(db_rule)
-                        db.flush()  # 获取生成的ID
+                db.add(db_rule)
+                db.flush()  # 获取生成的ID
 
-                        # 递归保存子项
-                        if 'children' in rule_data and rule_data['children']:
-                            for child_rule in rule_data['children']:
-                                save_rule_recursive(
-                                    child_rule, project_id, parent_id=db_rule.id
-                                )
+                # 递归保存子项
+                if 'children' in rule_data and rule_data['children']:
+                    for child_rule in rule_data['children']:
+                        save_rule_recursive(child_rule, project_id)
 
-                    for rule_data in scoring_rules:
-                        save_rule_recursive(rule_data, project_id)
+            for rule_data in scoring_rules:
+                save_rule_recursive(rule_data, project_id)
 
-                    db.commit()
-                    return JSONResponse(
-                        content={
-                            'message': '评分规则提取并保存成功',
-                            'count': len(scoring_rules),
-                            'rules': scoring_rules,
-                        }
-                    )
+            db.commit()
+            return JSONResponse(
+                content={
+                    'message': '评分规则提取并保存成功',
+                    'count': len(scoring_rules),
+                    'rules': scoring_rules,
+                }
+            )
         else:
             return JSONResponse(status_code=500, content={'error': '提取评分规则失败'})
 
@@ -1445,6 +1534,478 @@ async def extract_scoring_rules_api(
         logging.error(f'提取评分规则API出错: {e}')
         return JSONResponse(
             status_code=500, content={'error': f'提取评分规则时发生错误: {str(e)}'}
+        )
+
+
+@app.get('/api/projects/{project_id}/export-excel')
+async def export_project_results_excel(project_id: int, db: Session = Depends(get_db)):
+    """导出项目结果到Excel文件"""
+    try:
+        # 获取项目信息
+        project = db.query(TenderProject).filter(TenderProject.id == project_id).first()
+        if not project:
+            return JSONResponse(status_code=404, content={'error': '项目不存在'})
+
+        # 获取分析结果
+        results = (
+            db.query(AnalysisResult)
+            .filter(AnalysisResult.project_id == project_id)
+            .order_by(AnalysisResult.total_score.desc())
+            .all()
+        )
+
+        if not results:
+            return JSONResponse(status_code=404, content={'error': '未找到分析结果'})
+
+        # 获取动态汇总表数据
+        summary_data = generate_summary_data(project_id, db)
+        if 'error' in summary_data:
+            return JSONResponse(status_code=404, content=summary_data)
+
+        # 创建Excel文件
+        output = BytesIO()
+        with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
+            # 创建汇总表
+            if 'header_rows' in summary_data and len(summary_data['header_rows']) >= 2:
+                # 准备数据
+                rows_data = []
+                for row in summary_data['rows']:
+                    row_data = [row['rank'], row['bidder_name']]
+
+                    # 添加子项得分
+                    for score in row['scores']:
+                        row_data.append(score if score is not None else 0)
+
+                    # 添加价格分和总分
+                    row_data.append(
+                        row['price_score'] if row['price_score'] is not None else 0
+                    )
+                    row_data.append(row['total_score'])
+
+                    rows_data.append(row_data)
+
+                # 创建DataFrame
+                if (
+                    'header_rows' in summary_data
+                    and len(summary_data['header_rows']) >= 2
+                ):
+                    # 构建表头
+                    header_top = summary_data['header_rows'][0]
+                    header_bottom = summary_data['header_rows'][1]
+
+                    # 构建列名
+                    columns = []
+                    for item in header_top:
+                        if 'rowspan' in item and item['rowspan'] == 2:
+                            columns.append(item['name'])
+                        elif 'colspan' in item:
+                            # 父项，跳过
+                            pass
+
+                    # 添加子项列名
+                    for item in header_bottom:
+                        columns.append(item['name'])
+
+                    # 添加价格分和总分列
+                    columns.append('价格分')
+                    columns.append('总分')
+
+                    df = pd.DataFrame(rows_data, columns=columns)
+                else:
+                    # 默认列名
+                    columns = ['排名', '投标人']
+                    # 添加子项列名
+                    if 'scoring_items' in summary_data:
+                        for parent_name, children in summary_data[
+                            'scoring_items'
+                        ].items():
+                            for child in children:
+                                columns.append(child['name'])
+                    columns.extend(['价格分', '总分'])
+
+                    df = pd.DataFrame(rows_data, columns=columns)
+
+                # 写入Excel
+                df.to_excel(writer, sheet_name='评标结果汇总', index=False)
+
+                # 获取工作簿和工作表对象以进行格式化
+                workbook = writer.book
+                worksheet = writer.sheets['评标结果汇总']
+
+                # 设置列宽
+                for i, col in enumerate(df.columns):
+                    max_len = max(
+                        len(str(col)),  # 列名长度
+                        df[col].astype(str).str.len().max(),  # 数据最大长度
+                    )
+                    worksheet.set_column(i, i, min(max_len + 2, 50))  # 最大宽度50
+
+                # 设置表头格式
+                header_format = workbook.add_format(
+                    {
+                        'bold': True,
+                        'text_wrap': True,
+                        'valign': 'top',
+                        'fg_color': '#D7E4BC',
+                        'border': 1,
+                    }
+                )
+
+                # 应用表头格式
+                for col_num, value in enumerate(df.columns.values):
+                    worksheet.write(0, col_num, value, header_format)
+
+            # 为每个投标人创建详细评分表
+            for result in results:
+                # 创建详细评分数据
+                detailed_data = []
+                if result.detailed_scores:
+                    try:
+                        scores = (
+                            json.loads(result.detailed_scores)
+                            if isinstance(result.detailed_scores, str)
+                            else result.detailed_scores
+                        )
+
+                        # 处理不同格式的详细评分
+                        if isinstance(scores, list):
+                            for score_item in scores:
+                                # 新格式：包含Child_Item_Name、score、reason等字段
+                                if 'Child_Item_Name' in score_item:
+                                    detailed_data.append(
+                                        {
+                                            '评分项': score_item.get(
+                                                'Child_Item_Name', ''
+                                            ),
+                                            '满分': score_item.get('max_score', ''),
+                                            '得分': score_item.get('score', ''),
+                                            '评分说明': score_item.get('reason', ''),
+                                        }
+                                    )
+                                # 旧格式：包含criteria_name、max_score、score、reason等字段
+                                elif 'criteria_name' in score_item:
+                                    detailed_data.append(
+                                        {
+                                            '评分项': score_item.get(
+                                                'criteria_name', ''
+                                            ),
+                                            '满分': score_item.get('max_score', ''),
+                                            '得分': score_item.get('score', ''),
+                                            '评分说明': score_item.get('reason', ''),
+                                        }
+                                    )
+                        elif isinstance(scores, dict):
+                            # 旧格式：字典形式
+                            for criteria_name, score_info in scores.items():
+                                if isinstance(score_info, dict):
+                                    detailed_data.append(
+                                        {
+                                            '评分项': criteria_name,
+                                            '满分': score_info.get('max_score', ''),
+                                            '得分': score_info.get('score', ''),
+                                            '评分说明': score_info.get('reason', ''),
+                                        }
+                                    )
+                                else:
+                                    detailed_data.append(
+                                        {
+                                            '评分项': criteria_name,
+                                            '满分': '',
+                                            '得分': score_info,
+                                            '评分说明': '',
+                                        }
+                                    )
+                    except Exception as e:
+                        logging.error(
+                            f'解析投标人 {result.bidder_name} 的详细评分时出错: {e}'
+                        )
+
+                # 创建DataFrame并写入Excel
+                if detailed_data:
+                    df_detailed = pd.DataFrame(detailed_data)
+                    # 限制工作表名称长度
+                    sheet_name = (
+                        result.bidder_name[:31]
+                        if result.bidder_name
+                        else f'投标人_{result.id}'
+                    )
+                    # 确保工作表名称唯一
+                    sheet_name = (
+                        sheet_name.replace(':', '_')
+                        .replace('\\', '_')
+                        .replace('/', '_')
+                        .replace('?', '_')
+                        .replace('*', '_')
+                        .replace('[', '_')
+                        .replace(']', '_')
+                    )
+                    df_detailed.to_excel(writer, sheet_name=sheet_name, index=False)
+
+                    # 格式化详细评分表
+                    if sheet_name in writer.sheets:
+                        worksheet_detailed = writer.sheets[sheet_name]
+                        for i, col in enumerate(df_detailed.columns):
+                            max_len = max(
+                                len(str(col)),
+                                df_detailed[col].astype(str).str.len().max(),
+                            )
+                            worksheet_detailed.set_column(i, i, min(max_len + 2, 50))
+
+        # 准备响应
+        output.seek(0)
+        headers = {
+            'Content-Disposition': f'attachment; filename="评标结果_{project_id}.xlsx"',
+            'Content-Type': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+        }
+        return StreamingResponse(io.BytesIO(output.getvalue()), headers=headers)
+
+    except Exception as e:
+        logging.error(f'导出Excel文件时出错: {e}')
+        return JSONResponse(
+            status_code=500, content={'error': f'导出Excel文件失败: {str(e)}'}
+        )
+
+
+@app.get('/api/projects/{project_id}/export-word')
+async def export_project_results_word(project_id: int, db: Session = Depends(get_db)):
+    """导出项目结果到Word文件"""
+    try:
+        # 获取项目信息
+        project = db.query(TenderProject).filter(TenderProject.id == project_id).first()
+        if not project:
+            return JSONResponse(status_code=404, content={'error': '项目不存在'})
+
+        # 获取分析结果
+        results = (
+            db.query(AnalysisResult)
+            .filter(AnalysisResult.project_id == project_id)
+            .order_by(AnalysisResult.total_score.desc())
+            .all()
+        )
+
+        if not results:
+            return JSONResponse(status_code=404, content={'error': '未找到分析结果'})
+
+        # 获取动态汇总表数据
+        summary_data = generate_summary_data(project_id, db)
+        if 'error' in summary_data:
+            return JSONResponse(status_code=404, content=summary_data)
+
+        # 创建Word文档
+        doc = Document()
+
+        # 添加标题
+        title = doc.add_heading('评标结果报告', 0)
+        title.alignment = WD_ALIGN_PARAGRAPH.CENTER
+
+        # 添加项目信息
+        doc.add_heading('项目信息', level=1)
+        doc.add_paragraph(f'项目ID: {project.id}')
+        doc.add_paragraph(f'项目名称: {project.name or "N/A"}')
+        doc.add_paragraph(f'项目代码: {project.project_code or "N/A"}')
+        doc.add_paragraph(
+            f'创建时间: {project.created_at.strftime("%Y-%m-%d %H:%M:%S") if project.created_at else "N/A"}'
+        )
+
+        # 添加汇总表
+        doc.add_heading('评标结果汇总表', level=1)
+
+        if 'header_rows' in summary_data and len(summary_data['header_rows']) >= 2:
+            # 创建表格
+            header_top = summary_data['header_rows'][0]
+            header_bottom = summary_data['header_rows'][1]
+
+            # 计算列数
+            num_cols = len(header_bottom) + 2  # 加上排名和投标人列
+
+            table = doc.add_table(rows=2, cols=num_cols)
+            table.style = 'Table Grid'
+
+            # 填充表头
+            # 第一行
+            cell_idx = 0
+            for item in header_top:
+                if 'rowspan' in item and item['rowspan'] == 2:
+                    cell = table.cell(0, cell_idx)
+                    cell.text = item['name']
+                    cell.merge(table.cell(1, cell_idx))
+                    cell_idx += 1
+                elif 'colspan' in item:
+                    # 父项，需要合并单元格
+                    start_cell_idx = cell_idx
+                    for i in range(item['colspan']):
+                        cell_idx += 1
+                    # 合并父项单元格
+                    cell = table.cell(0, start_cell_idx)
+                    cell.text = item['name']
+                    cell.merge(table.cell(0, cell_idx - 1))
+
+            # 第二行
+            cell_idx = 2  # 跳过排名和投标人列
+            for item in header_bottom:
+                table.cell(1, cell_idx).text = item['name']
+                cell_idx += 1
+
+            # 添加价格分和总分列标题
+            table.cell(0, cell_idx).text = '价格分'
+            table.cell(0, cell_idx).merge(table.cell(1, cell_idx))
+            cell_idx += 1
+            table.cell(0, cell_idx).text = '总分'
+            table.cell(0, cell_idx).merge(table.cell(1, cell_idx))
+
+            # 填充数据
+            for row_data in summary_data['rows']:
+                row_cells = table.add_row().cells
+                row_cells[0].text = str(row_data['rank'])
+                row_cells[1].text = row_data['bidder_name']
+
+                # 填充子项得分
+                for i, score in enumerate(row_data['scores']):
+                    row_cells[i + 2].text = f'{score:.2f}' if score is not None else '—'
+
+                # 填充价格分和总分
+                row_cells[-2].text = (
+                    f'{row_data["price_score"]:.2f}'
+                    if row_data['price_score'] is not None
+                    else '—'
+                )
+                row_cells[-1].text = f'{row_data["total_score"]:.2f}'
+        else:
+            # 简化版表格
+            table = doc.add_table(rows=1, cols=4)
+            table.style = 'Table Grid'
+            hdr_cells = table.rows[0].cells
+            hdr_cells[0].text = '排名'
+            hdr_cells[1].text = '投标人'
+            hdr_cells[2].text = '总分'
+            hdr_cells[3].text = '价格分'
+
+            # 填充数据
+            for row_data in summary_data['rows']:
+                row_cells = table.add_row().cells
+                row_cells[0].text = str(row_data['rank'])
+                row_cells[1].text = row_data['bidder_name']
+                row_cells[2].text = f'{row_data["total_score"]:.2f}'
+                row_cells[3].text = (
+                    f'{row_data["price_score"]:.2f}'
+                    if row_data['price_score'] is not None
+                    else '—'
+                )
+
+        # 为每个投标人添加详细评分
+        for result in results:
+            doc.add_page_break()
+            doc.add_heading(f'投标人详细评分 - {result.bidder_name}', level=1)
+
+            # 添加基本信息
+            doc.add_paragraph(
+                f'投标总价: {result.extracted_price if result.extracted_price else "N/A"}'
+            )
+            doc.add_paragraph(f'AI模型: {result.ai_model or "N/A"}')
+
+            # 添加详细评分表
+            if result.detailed_scores:
+                try:
+                    scores = (
+                        json.loads(result.detailed_scores)
+                        if isinstance(result.detailed_scores, str)
+                        else result.detailed_scores
+                    )
+
+                    if scores:
+                        # 创建详细评分表格
+                        table = doc.add_table(rows=1, cols=4)
+                        table.style = 'Table Grid'
+                        hdr_cells = table.rows[0].cells
+                        hdr_cells[0].text = '评分项'
+                        hdr_cells[1].text = '满分'
+                        hdr_cells[2].text = '得分'
+                        hdr_cells[3].text = '评分说明'
+
+                        # 填充数据
+                        if isinstance(scores, list):
+                            for score_item in scores:
+                                # 新格式
+                                if 'Child_Item_Name' in score_item:
+                                    row_cells = table.add_row().cells
+                                    row_cells[0].text = str(
+                                        score_item.get('Child_Item_Name', '')
+                                    )
+                                    row_cells[1].text = str(
+                                        score_item.get('max_score', '')
+                                    )
+                                    row_cells[2].text = (
+                                        f'{score_item.get("score", ""):.2f}'
+                                        if score_item.get('score') is not None
+                                        else ''
+                                    )
+                                    row_cells[3].text = str(
+                                        score_item.get('reason', '')
+                                    )
+                                # 旧格式
+                                elif 'criteria_name' in score_item:
+                                    row_cells = table.add_row().cells
+                                    row_cells[0].text = str(
+                                        score_item.get('criteria_name', '')
+                                    )
+                                    row_cells[1].text = str(
+                                        score_item.get('max_score', '')
+                                    )
+                                    row_cells[2].text = (
+                                        f'{score_item.get("score", ""):.2f}'
+                                        if score_item.get('score') is not None
+                                        else ''
+                                    )
+                                    row_cells[3].text = str(
+                                        score_item.get('reason', '')
+                                    )
+                        elif isinstance(scores, dict):
+                            # 旧格式：字典形式
+                            for criteria_name, score_info in scores.items():
+                                row_cells = table.add_row().cells
+                                row_cells[0].text = criteria_name
+                                if isinstance(score_info, dict):
+                                    row_cells[1].text = str(
+                                        score_info.get('max_score', '')
+                                    )
+                                    row_cells[2].text = (
+                                        f'{score_info.get("score", ""):.2f}'
+                                        if score_info.get('score') is not None
+                                        else ''
+                                    )
+                                    row_cells[3].text = str(
+                                        score_info.get('reason', '')
+                                    )
+                                else:
+                                    row_cells[1].text = ''
+                                    row_cells[2].text = (
+                                        f'{score_info:.2f}'
+                                        if score_info is not None
+                                        else ''
+                                    )
+                                    row_cells[3].text = ''
+                except Exception as e:
+                    logging.error(
+                        f'生成投标人 {result.bidder_name} 的详细评分表时出错: {e}'
+                    )
+                    doc.add_paragraph(f'详细评分数据解析错误: {str(e)}')
+
+        # 保存到内存
+        buffer = io.BytesIO()
+        doc.save(buffer)
+        buffer.seek(0)
+
+        # 准备响应
+        headers = {
+            'Content-Disposition': f'attachment; filename="评标结果_{project_id}.docx"',
+            'Content-Type': 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+        }
+        return StreamingResponse(io.BytesIO(buffer.getvalue()), headers=headers)
+
+    except Exception as e:
+        logging.error(f'导出Word文件时出错: {e}')
+        return JSONResponse(
+            status_code=500, content={'error': f'导出Word文件失败: {str(e)}'}
         )
 
 

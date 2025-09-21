@@ -12,6 +12,11 @@ document.addEventListener('DOMContentLoaded', function () {
     const loadingIndicator = document.getElementById('loadingIndicator');
     const errorMessage = document.getElementById('errorMessage');
     const errorText = document.getElementById('errorText');
+    const paginationControls = document.getElementById('paginationControls');
+    
+    let allProjects = [];
+    let currentPage = 1;
+    const projectsPerPage = 10;
 
     async function fetchProjects () {
         try {
@@ -22,9 +27,10 @@ document.addEventListener('DOMContentLoaded', function () {
             if (!response.ok) {
                 throw new Error(`HTTP error! status: ${response.status}`);
             }
-            const projects = await response.json();
-
-            renderProjects(projects);
+            allProjects = await response.json();
+            
+            // 初始显示第一页
+            displayProjectsPage(1);
         } catch (error) {
             console.error('Error fetching projects:', error);
             errorText.textContent = '无法加载项目列表，请稍后重试。';
@@ -32,6 +38,73 @@ document.addEventListener('DOMContentLoaded', function () {
         } finally {
             loadingIndicator.style.display = 'none';
         }
+    }
+
+    function displayProjectsPage(page) {
+        currentPage = page;
+        const startIndex = (page - 1) * projectsPerPage;
+        const endIndex = startIndex + projectsPerPage;
+        const projectsToShow = allProjects.slice(startIndex, endIndex);
+        
+        renderProjects(projectsToShow);
+        renderPaginationControls();
+    }
+
+    function renderPaginationControls() {
+        const totalPages = Math.ceil(allProjects.length / projectsPerPage);
+        if (totalPages <= 1) {
+            paginationControls.innerHTML = '';
+            return;
+        }
+        
+        let paginationHTML = `
+            <nav>
+                <ul class="pagination justify-content-center">
+        `;
+        
+        // Previous button
+        paginationHTML += `
+            <li class="page-item ${currentPage === 1 ? 'disabled' : ''}">
+                <a class="page-link" href="#" onclick="changePage(${currentPage - 1})">上一页</a>
+            </li>
+        `;
+        
+        // Page numbers
+        for (let i = 1; i <= totalPages; i++) {
+            if (i === currentPage) {
+                paginationHTML += `
+                    <li class="page-item active">
+                        <span class="page-link">${i}</span>
+                    </li>
+                `;
+            } else if (i === 1 || i === totalPages || (i >= currentPage - 2 && i <= currentPage + 2)) {
+                paginationHTML += `
+                    <li class="page-item">
+                        <a class="page-link" href="#" onclick="changePage(${i})">${i}</a>
+                    </li>
+                `;
+            } else if (i === currentPage - 3 || i === currentPage + 3) {
+                paginationHTML += `
+                    <li class="page-item disabled">
+                        <span class="page-link">...</span>
+                    </li>
+                `;
+            }
+        }
+        
+        // Next button
+        paginationHTML += `
+            <li class="page-item ${currentPage === totalPages ? 'disabled' : ''}">
+                <a class="page-link" href="#" onclick="changePage(${currentPage + 1})">下一页</a>
+            </li>
+        `;
+        
+        paginationHTML += `
+                </ul>
+            </nav>
+        `;
+        
+        paginationControls.innerHTML = paginationHTML;
     }
 
     function renderProjects (projects) {
@@ -84,6 +157,10 @@ document.addEventListener('DOMContentLoaded', function () {
             full: name
         };
     }
+
+    window.changePage = function(page) {
+        displayProjectsPage(page);
+    };
 
     window.viewProjectDetails = async function (projectId) {
         const modalBody = document.getElementById('projectDetailsModalBody');

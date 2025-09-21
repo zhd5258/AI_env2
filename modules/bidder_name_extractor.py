@@ -49,166 +49,116 @@ def _is_valid_company_name(bidder_name: str) -> bool:
         '投标',
         '项目',
         '文件',
-        '正本',
-        '副本',
-        '单位章',
-        '法定代表',
-        '中车眉山车辆有限公司',  # 明确排除招标方名称
+        '文件',
+        '响应',
+        '投标函',
+        '法定代表人',
+        '授权委托',
+        '签字',
+        '盖章',
+        '日期',
+        '页',
+        '第',
+        '评审',
+        '评标',
+        '中标',
+        '成交',
+        '供应商',
+        '代理',
+        '公告',
+        '公示',
     ]
     if any(keyword in bidder_name for keyword in invalid_keywords):
         return False
-    return True
-
-
-def _filter_bidder_name(bidder_name: str) -> str:
-    """
-    Filters and cleans the extracted bidder name to remove unwanted parts.
-    """
-    if not bidder_name:
-        return ''
-
-    # Strip leading/trailing whitespace and colons
-    bidder_name = bidder_name.strip().lstrip(':：').strip()
-
-    # Define stop words/phrases that signal the end of the company name
-    stop_phrases = [
-        '法定代表',
-        '授权代表',
-        '单位地址',
-        '通信地址',
-        '电话',
-        '传真',
-        '(盖单位章)',
-        '（盖单位章）',
-        '投标单位',
-        '投标人',
-        '（盖章）',
-        '(盖章)',
-        '地址',
-        '邮政编码',
-        '联系人',
-        '手机',
-    ]
-
-    for phrase in stop_phrases:
-        if phrase in bidder_name:
-            bidder_name = bidder_name.split(phrase)[0].strip()
-
-    # Remove any remaining parenthesized or bracketed text
-    bidder_name = re.sub(r'[\(（$$.*?[\)）\]]】〕]', '', bidder_name).strip()
-
-    # Remove orphan leading/trailing bracket characters
-    bidder_name = bidder_name.strip('()（）[]【】〔〕')
-
-    # Remove stray unmatched single brackets inside
-    bidder_name = (
-        bidder_name.replace('[', '')
-        .replace(']', '')
-        .replace('（', '')
-        .replace('）', '')
-        .replace('(', '')
-        .replace(')', '')
-    )
-
-    # Final check for common suffixes that are not part of the name
-    unwanted_suffixes = ['公司章', '公章', '单位章']
-    for suffix in unwanted_suffixes:
-        if bidder_name.endswith(suffix):
-            bidder_name = bidder_name[: -len(suffix)].strip()
-
-    # Normalize whitespace
-    bidder_name = re.sub(r'\s+', ' ', bidder_name).strip()
-
-    return bidder_name
+    # 检查是否包含足够的中文字符
+    chinese_chars = re.findall(r'[\u4e00-\u9fff]', bidder_name)
+    return len(chinese_chars) >= 2
 
 
 def _looks_garbled_or_incomplete(name: str) -> bool:
     """
-    判断名称是否疑似乱码或不完整。
-    规则：包含孤立括号/方括号残留、包含明显非汉字噪声比例较高、长度过短等。
+    检查名称是否看起来是乱码或不完整。
     """
     if not name:
         return True
-    if len(name) < 6:
+    # 检查乱码字符
+    garbled_patterns = [
+        r'[äåçèéêëìíîïðñòóôõöøüýþÿ]',
+        r'[àáâãäåæçèéêëìíîï]',
+        r'[ðñòóôõöøùúûüýþÿ]',
+        r'[Ā-ž]',  # Latin Extended-A 和部分 Extended-B
+        r'â\x80\x99',  # 特定乱码序列
+    ]
+    if any(re.search(pattern, name) for pattern in garbled_patterns):
         return True
-    # 孤立括号或方括号
-    if any(
-        ch in name for ch in ['[', ']', '(', ')', '（', '）', '【', '】', '〔', '〕']
-    ):
+    # 检查是否以常见非公司名称结尾
+    if name.endswith(('投标文件', '响应文件', '公司声明')):
         return True
-    # 噪声字符比例（非汉字、非字母数字与常用公司字）
-    noise = sum(
-        1
-        for ch in name
-        if not re.match(r'[\u4e00-\u9fa5a-zA-Z0-9·．\.（）()有限公司集团股份]+', ch)
-    )
-    # 如果噪声字符比例超过20%，则认为是乱码
-    if noise > len(name) * 0.2:
+    # 检查是否太短
+    if len(name) < 4:
         return True
-    return noise > max(1, len(name) // 6)
+    return False
+
+
+def _filter_bidder_name(name: str) -> str:
+    """
+    清理投标人名称，移除常见的干扰字符。
+    """
+    if not name:
+        return ''
+
+    # 移除常见的干扰字符和多余空格
+    name = re.sub(r'[（\(].*?[）\)]', '', name)  # 移除括号及其中内容
+    name = re.sub(r'[\x00-\x1f\x7f-\x9f]', '', name)  # 移除控制字符
+    name = re.sub(r'[^\S\r\n]+', '', name)  # 移除多余空格但保留换行符
+    name = name.strip(' \t\n\r\v\f\ufeff' + '【】〔〕［］' + '：:;|·.,，。、/\\')
+    # 移除常见的后缀干扰
+    name = re.sub(r'(有限公司|股份公司|集团公司|集团|公司|厂|院|所|社|中心)+[：:;|·.,，。、/\\]*$', r'\1', name)
+    return name.strip()
 
 
 def _search_bidder_name_in_special_sections(pages: list[str]) -> str | None:
     """
-    在"授权委托书""投标一览表"等关键章节中继续检索公司名称。
-    策略：
-    - 定位章节锚点页索引；
-    - 在该页以及后一页内用更宽松的正则提取公司名；
-    - 返回第一个通过过滤与校验的名称。
+    在特殊章节中搜索投标人名称，如"授权委托书"、"投标一览表"等。
     """
-    if not pages:
-        return None
-
-    anchors = [
+    special_section_keywords = [
         '授权委托书',
-        '法定代表人授权书',
+        '法定代表人身份证明',
         '投标一览表',
-        '投标报价一览表',
-        '开标一览表',
         '投标函',
-        '资格审查',
-        '制造商名称',
+        '投标人基本情况',
     ]
-    candidate_indices = []
-    for idx, text in enumerate(pages):
-        if any(anchor in text for anchor in anchors):
-            candidate_indices.append(idx)
+    # 合并所有页面以搜索特殊章节
+    full_text = '\n'.join(pages)
 
-    # 扩大检索窗口到命中页以及后一页
-    indices = sorted(
-        set(
-            candidate_indices + [i + 1 for i in candidate_indices if i + 1 < len(pages)]
-        )
-    )
-    patterns = [
-        r'(?:投标人|投标单位|供应商|单位名称)\s*[:：]\s*([\u4e00-\u9fa5a-zA-Z0-9（）()·．\.]+?公司)',
-        r'(?:投标人|投标单位|供应商|单位名称)[:：\s]*([^\n]+?公司)',
-        r'([\u4e00-\u9fa5a-zA-Z0-9（）()·．\.]+?有限公司)',
-        r'^\s*([^\n]+?有限公司)\s*$',
-        # 制造商名称字段（用于回退提取投标方/制造商公司名）
-        r'(?:制造商名称|制造厂家|生产厂家)\s*[:：]\s*([^\n]+?公司)',
-        r'(?:制造商名称|制造厂家|生产厂家)\s*[:：]\s*([^\n]+?有限公司)',
-    ]
-
-    # 尝试在每个候选页面中查找投标方名称
-    for i in indices:
-        text = pages[i]
-        # 尝试每个模式
-        for pattern in patterns:
-            matches = re.finditer(pattern, text, re.MULTILINE)
-            for m in matches:
-                # 获取匹配的组，通常是第一个捕获组
-                matched_text = m.group(1) if len(m.groups()) >= 1 else m.group(0)
-                name = _filter_bidder_name(matched_text)
-                if _is_valid_company_name(name) and not _looks_garbled_or_incomplete(
-                    name
-                ):
-                    logger.info(
-                        'Found bidder name in special section on page %s: %s',
-                        i + 1,
-                        name,
+    for keyword in special_section_keywords:
+        # 查找特殊章节开始位置
+        start_pos = full_text.find(keyword)
+        if start_pos != -1:
+            # 从章节开始位置向后搜索约500字符以查找投标人名称
+            section_text = full_text[start_pos : start_pos + 500]
+            # 使用正则表达式查找可能的公司名称
+            # 匹配以"单位名称"、"投标人"、"供应商"等开头的行
+            patterns = [
+                r'单位名称\s*[:：\s]*([^\n]+)',
+                r'投标人\s*[:：\s]*([^\n]+)',
+                r'供应商\s*[:：\s]*([^\n]+)',
+                r'^\s*([^\n]+?公司)\s*$',
+            ]
+            for pattern in patterns:
+                matches = re.finditer(pattern, section_text, re.MULTILINE)
+                for match in matches:
+                    potential_name = (
+                        match.group(1).strip() if len(match.groups()) >= 1 else match.group(0).strip()
                     )
-                    return name
+                    filtered_name = _filter_bidder_name(potential_name)
+                    if _is_valid_company_name(filtered_name) and not _looks_garbled_or_incomplete(
+                        filtered_name
+                    ):
+                        logger.info(
+                            'Found bidder name in special section (%s): %s', keyword, filtered_name
+                        )
+                        return filtered_name
     return None
 
 
@@ -309,8 +259,9 @@ def extract_bidder_name_from_file(file_path: str) -> str | None:
 
     try:
         # 1. Process PDF to get text content
-        pdf_processor = PDFProcessor(file_path)
-        pages = pdf_processor.process_pdf_per_page()
+        pdf_processor = PDFProcessor(
+            file_path, file_type='bid'
+        )  # 投标文件使用ONNX        pages = pdf_processor.extract_text_with_ocr_when_needed()
         if not pages:
             logger.warning('PDF processing yielded no text pages.')
             return None
@@ -339,7 +290,7 @@ def extract_bidder_name_from_file(file_path: str) -> str | None:
             logger.info(f"Valid bidder name found via AI: '{bidder_name}'")
             return bidder_name
 
-        # 4. 基于表格的回退提取（整合）：优先从“制造商名称/投标人名称”列获取
+        # 4. 基于表格的回退提取（整合）：优先从"制造商名称/投标人名称"列获取
         try:
             from .table_analyzer import TableAnalyzer  # 延迟导入，避免循环依赖
 

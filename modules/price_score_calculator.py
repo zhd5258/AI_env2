@@ -88,7 +88,7 @@ class PriceScoreCalculator(PriceScoreCalculatorHelpers):
                 }
 
                 self.logger.info(
-                    f'找到价格评分规则: 满分 {price_rule.Parent_max_score}, 公式: {price_rule.price_formula}, 描述: {price_rule.description}'
+                    f'找到价格评分规则: 满分 {price_rule.Child_max_score}, 公式: {price_rule.price_formula}, 描述: {price_rule.description}'
                 )
 
                 # 3. 获取所有分析结果
@@ -119,37 +119,45 @@ class PriceScoreCalculator(PriceScoreCalculatorHelpers):
                     f'提取到 {len(bidder_prices)} 个投标人的报价: {bidder_prices}'
                 )
 
-                # 5. 计算所有投标人的价格分（统一计算）
-                price_scores = self._calculate_price_scores(
-                    bidder_prices, price_rule.Parent_max_score, formula_info
-                )
-                self.logger.info(f'计算出价格分: {price_scores}')
+                # 5. 构造发送给AI大模型的完整prompt
+                # 格式: "投标人1：投标总价1,投标人2：投标总价2,投标人3：投标总价3,......."
+                bidder_info_str = ",".join([f"{name}：{price}" for name, price in bidder_prices.items()])
+                
+                # 构造prompt
+                prompt = f"""你是一个评标专家，现在各投标人的投标总价为：『{bidder_info_str}』,价格评价标准为：『{price_rule.description}』,请计算各投标人的报价。请返回格式为JSON格式：『投标人1：价格分1,投标人2：价格分2,投标人3：价格分3,.......』,请返回结果。"""
 
-                # 若无法计算价格分（例如缺少有效公式或AI失败），使用默认计算方法
+                self.logger.info('=' * 50)
+                self.logger.info('发送给AI大模型的价格分计算请求:')
+                self.logger.info(f'投标人报价信息: {bidder_info_str}')
+                self.logger.info(f'价格评价标准: {price_rule.description}')
+                self.logger.info('完整prompt:')
+                self.logger.info(prompt)
+                self.logger.info('=' * 50)
+
+                # 6. 调用AI大模型计算价格分
+                try:
+                    ai_response = self.ai_analyzer.analyze_text(prompt)
+                    
+                    # 记录AI大模型的返回值
+                    self.logger.info('=' * 50)
+                    self.logger.info('AI大模型返回的完整响应:')
+                    self.logger.info(ai_response)
+                    self.logger.info('=' * 50)
+                    
+                    # 解析AI响应
+                    price_scores = self._parse_price_scores_from_ai_response(ai_response)
+                    self.logger.info(f'解析后的价格分计算结果: {price_scores}')
+                    
+                except Exception as e:
+                    self.logger.error(f'调用AI大模型计算价格分时出错: {e}')
+                    return False
+
+                # 7. 如果AI计算失败，不使用默认计算方法，直接返回False
                 if not price_scores:
-                    self.logger.warning('价格分未通过AI计算，使用默认计算方法。')
-                    # 使用默认计算方法：满足招标文件要求且投标报价最低的投标报价为评标基准价，其价格分为满分
-                    if bidder_prices:
-                        min_price = min(bidder_prices.values())
-                        price_scores = {}
-                        for bidder, price in bidder_prices.items():
-                            if price == min_price:
-                                # 最低报价得满分
-                                price_scores[bidder] = price_rule.Parent_max_score
-                                self.logger.info(
-                                    f'投标人 {bidder} 报价为最低价 {price}，得满分 {price_rule.Parent_max_score}'
-                                )
-                            else:
-                                # 按照评标规则公式计算：投标报价得分＝（评标基准价/投标报价）*满分
-                                score = (
-                                    min_price / price
-                                ) * price_rule.Parent_max_score
-                                price_scores[bidder] = round(score, 2)
-                                self.logger.info(
-                                    f'投标人 {bidder} 报价 {price}，得分 {price_scores[bidder]}'
-                                )
+                    self.logger.error('AI价格分计算失败，按照规范不使用默认计算方法')
+                    return False
 
-                # 6. 更新每个投标人的价格分和总分
+                # 8. 更新每个投标人的价格分和总分
                 updated_count = 0
                 self.logger.info('=' * 50)
                 self.logger.info('开始更新各投标人的价格分和总分:')
@@ -183,7 +191,7 @@ class PriceScoreCalculator(PriceScoreCalculatorHelpers):
                             continue
 
                         # 更新价格分
-                        old_price_score = result.price_score
+                        old_price_score = result.price_score or 0  # 处理 None 情况
                         result.price_score = new_price_score
                         self.logger.info(
                             f'  更新价格分: {old_price_score} -> {new_price_score}'
@@ -333,6 +341,7 @@ class PriceScoreCalculator(PriceScoreCalculatorHelpers):
     ) -> Dict[str, float]:
         """
         根据价格计算公式计算各投标方的价格分
+        注意：根据新规范，此方法不再使用，价格分计算已移至calculate_project_price_scores方法中统一处理
 
         Args:
             bidder_prices: 投标方价格字典
@@ -342,43 +351,8 @@ class PriceScoreCalculator(PriceScoreCalculatorHelpers):
         Returns:
             Dict[str, float]: 投标方名称到价格分的映射
         """
-        if not bidder_prices:
-            return {}
-
-        # 如果有专门的价格计算公式或描述，使用特殊计算方法
-        if formula:
-            # 检查是否是AI生成的格式
-            if isinstance(formula, dict):  # 处理包含formula和description的字典
-                formula_info = formula
-            elif isinstance(formula, str) and (
-                '价格计算公式:' in formula or '1. 价格计算公式:' in formula
-            ):
-                # 解析AI返回的格式
-                formula_info = self._parse_price_formula(formula, None)
-            else:
-                formula_info = {'formula': formula, 'description': ''}
-
-            # 检查是否有公式或描述
-            has_formula = (
-                formula_info.get('formula')
-                if isinstance(formula_info.get('formula'), str)
-                else None
-            )
-            has_description = (
-                formula_info.get('description')
-                if isinstance(formula_info.get('description'), str)
-                else None
-            )
-
-            if has_formula or has_description:
-                return self._calculate_with_custom_formula(
-                    bidder_prices, max_score, formula_info
-                )
-
-        # 没有提供公式或描述时，严格按规范：不允许默认计算，直接返回空结果
-        self.logger.error(
-            '未提供有效的价格计算公式或描述，按照规范禁止使用默认公式，价格分不计算。'
-        )
+        # 根据新规范，此方法已废弃，仅作兼容性保留
+        self.logger.warning("调用了已废弃的 _calculate_price_scores 方法")
         return {}
 
     def _parse_price_formula(
@@ -426,6 +400,7 @@ class PriceScoreCalculator(PriceScoreCalculatorHelpers):
     ) -> Dict[str, float]:
         """
         使用自定义公式计算价格分
+        注意：根据新规范，此方法不再使用，价格分计算已移至calculate_project_price_scores方法中统一处理
 
         Args:
             bidder_prices: 投标方价格字典
@@ -435,77 +410,9 @@ class PriceScoreCalculator(PriceScoreCalculatorHelpers):
         Returns:
             Dict[str, float]: 投标方名称到价格分的映射
         """
-        # 获取公式和描述
-        formula = formula_info.get('formula', '')
-        description = formula_info.get('description', '')
-
-        # 优先使用公式，如果没有公式则使用描述
-        price_formula = formula if formula else description
-
-        self.logger.info(f'使用自定义价格计算规则: {price_formula}')
-
-        # 记录价格计算规则
-        self.logger.info(f'价格计算规则详情: {formula_info}')
-        self.logger.info(f'投标方报价信息: {bidder_prices}')
-        self.logger.info(f'价格分满分: {max_score}')
-
-        # 如果没有提供有效的公式或描述，记录错误并返回空结果
-        if not price_formula:
-            self.logger.error('没有提供有效的价格计算公式或描述')
-            return {}
-
-        # 构造发送给AI大模型的prompt
-        prompt = f"""
-你是一个专业的评标专家，请根据以下价格评分规则和各投标人的投标报价，计算每个投标人的价格得分。
-
-价格评分规则:
-{price_formula}
-
-各投标人报价信息:
-{bidder_prices}
-
-价格分满分: {max_score}
-
-请严格按照以下JSON格式输出结果:
-{{
-    "投标人名称1": 得分1,
-    "投标人名称2": 得分2,
-    // ...更多投标人
-}}
-
-只输出JSON结果，不要包含其他解释性文字。
-"""
-
-        # 记录发送给AI大模型的信息
-        self.logger.info('=' * 50)
-        self.logger.info('发送给AI大模型的价格分计算请求:')
-        self.logger.info(f'价格评分规则: {price_formula}')
-        self.logger.info(f'投标人报价: {bidder_prices}')
-        self.logger.info(f'价格分满分: {max_score}')
-        self.logger.info('完整prompt:')
-        self.logger.info(prompt)
-        self.logger.info('=' * 50)
-
-        try:
-            # 调用AI大模型计算价格分
-            ai_response = self.ai_analyzer.analyze_text(prompt)
-
-            # 记录AI大模型的返回值
-            self.logger.info('=' * 50)
-            self.logger.info('AI大模型返回的完整响应:')
-            self.logger.info(ai_response)
-            self.logger.info('=' * 50)
-
-            # 解析AI响应
-            price_scores = self._parse_price_scores_from_ai_response(ai_response)
-
-            # 记录解析后的价格分计算结果
-            self.logger.info(f'解析后的价格分计算结果: {price_scores}')
-
-            return price_scores
-        except Exception as e:
-            self.logger.error(f'调用AI大模型计算价格分时出错: {e}')
-            return {}
+        # 根据新规范，此方法已废弃，仅作兼容性保留
+        self.logger.warning("调用了已废弃的 _calculate_with_custom_formula 方法")
+        return {}
 
     def _parse_price_scores_from_ai_response(
         self, ai_response: str

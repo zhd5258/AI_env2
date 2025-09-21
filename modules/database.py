@@ -28,7 +28,7 @@ class TenderProject(Base):
     description = Column(String)
     tender_file_path = Column(String)
     scoring_rules_summary = Column(JSON)
-    created_at = Column(DateTime, default=datetime.datetime.utcnow)
+    created_at = Column(DateTime, default=lambda: datetime.datetime.now(datetime.timezone.utc))
     status = Column(String, default='new')
     bid_documents = relationship('BidDocument', back_populates='project')
     analysis_results = relationship('AnalysisResult', back_populates='project')
@@ -43,7 +43,7 @@ class BidDocument(Base):
     bidder_name = Column(String)
     file_path = Column(String)
     file_size = Column(Integer)
-    upload_time = Column(DateTime, default=datetime.datetime.utcnow)
+    upload_time = Column(DateTime, default=lambda: datetime.datetime.now(datetime.timezone.utc))
     processing_status = Column(String, default='pending')
     error_message = Column(String, nullable=True)
 
@@ -81,7 +81,7 @@ class AnalysisResult(Base):
     # 添加动态评分项字段，用于存储各评分项的得分
     dynamic_scores = Column(JSON, default=dict)  # 存储动态评分项得分，key为评分项简称，value为得分
     analysis_summary = Column(String)
-    analyzed_at = Column(DateTime, default=datetime.datetime.utcnow)
+    analyzed_at = Column(DateTime, default=lambda: datetime.datetime.now(datetime.timezone.utc))
     scoring_method = Column(String, default='AI')
     ai_model = Column(String, nullable=True)  # To store the AI model name
     is_modified = Column(Boolean, default=False)
@@ -123,7 +123,7 @@ class ScoreModificationHistory(Base):
     new_reason = Column(String)
     modification_type = Column(String)
     modified_by = Column(String)
-    modified_at = Column(DateTime, default=datetime.datetime.utcnow)
+    modified_at = Column(DateTime, default=lambda: datetime.datetime.now(datetime.timezone.utc))
     modification_reason = Column(String)
     approval_status = Column(String, default='approved')
     approved_by = Column(String)
@@ -140,7 +140,7 @@ class ProjectAuditLog(Base):
     operation_type = Column(String)
     operation_details = Column(JSON)
     operator = Column(String)
-    operation_time = Column(DateTime, default=datetime.datetime.utcnow)
+    operation_time = Column(DateTime, default=lambda: datetime.datetime.now(datetime.timezone.utc))
     ip_address = Column(String)
     user_agent = Column(String)
     project = relationship('TenderProject', back_populates='audit_logs')

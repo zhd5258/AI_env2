@@ -11,6 +11,7 @@
 #
 import json
 from sqlalchemy.orm import Session
+from sqlalchemy import func
 from modules.database import AnalysisResult, ScoringRule
 
 
@@ -79,11 +80,8 @@ def generate_summary_data(project_id: int, db: Session):
     rows_data = []
     rank = 1
     for result in results:
-        detailed_scores = (
-            json.loads(result.detailed_scores)
-            if isinstance(result.detailed_scores, str)
-            else result.detailed_scores
-        )
+        # 直接使用存储的detailed_scores，避免重复解析
+        detailed_scores = result.detailed_scores
 
         scores = []
         # 只计算子项得分

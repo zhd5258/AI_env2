@@ -9,14 +9,17 @@ document.addEventListener('DOMContentLoaded', function () {
     const progressText = document.getElementById('progressText');
     const detailedProgress = document.getElementById('detailedProgress');
     const resultArea = document.getElementById('resultArea');
-    const resultDetailsModal = new bootstrap.Modal(document.getElementById('resultDetailsModal'));
+    const resultDetailsModalElement = document.getElementById('resultDetailsModal');
+    const resultDetailsModal = resultDetailsModalElement ? new bootstrap.Modal(resultDetailsModalElement) : null;
     const modalBody = document.getElementById('modalBody');
     const btnOpenSettings = document.getElementById('btnOpenSettings');
-    const runtimeConfigModal = new bootstrap.Modal(document.getElementById('runtimeConfigModal'));
-    const cfgWorkers = document.getElementById('cfg_page_workers');
-    const cfgPageTimeout = document.getElementById('cfg_page_timeout');
-    const cfgOverallMinTimeout = document.getElementById('cfg_overall_min_timeout');
-    const btnSaveConfig = document.getElementById('btnSaveConfig');
+    // 修复模态框ID不匹配的问题,统一使用settingsModal元素并创建单一实例
+    const settingsModalElement = document.getElementById('settingsModal');
+    const settingsModal = settingsModalElement ? new bootstrap.Modal(settingsModalElement) : null;
+    const cfgWorkers = document.getElementById('pdfPageMaxWorkers');
+    const cfgPageTimeout = document.getElementById('pdfPageTimeoutSec');
+    const cfgOverallMinTimeout = document.getElementById('pdfOverallMinTimeoutSec');
+    const btnSaveConfig = document.getElementById('saveSettings');
     const cfgFeedback = document.getElementById('cfg_feedback');
 
     let uploadedFiles = {
@@ -59,12 +62,12 @@ document.addEventListener('DOMContentLoaded', function () {
     });
 
     // 打开系统设置
-    btnOpenSettings.addEventListener('click', async () => {
-        await loadRuntimeConfig();
-        const modalElement = document.getElementById('runtimeConfigModal');
-        const modal = new bootstrap.Modal(modalElement);
-        modal.show();
-    });
+    if (btnOpenSettings && settingsModal) {
+        btnOpenSettings.addEventListener('click', async () => {
+            await loadRuntimeConfig();
+            settingsModal.show();
+        });
+    }
 
     async function loadRuntimeConfig () {
         try {
@@ -81,35 +84,44 @@ document.addEventListener('DOMContentLoaded', function () {
         }
     }
 
-    btnSaveConfig.addEventListener('click', async () => {
-        try {
-            const payload = {
-                pdf_page_max_workers: numOrNull(cfgWorkers.value),
-                pdf_page_timeout_sec: numOrNull(cfgPageTimeout.value),
-                pdf_overall_min_timeout_sec: numOrNull(cfgOverallMinTimeout.value)
-            };
-            const resp = await fetch('/api/runtime-config', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify(payload)
-            });
-            if (!resp.ok) throw new Error('保存失败');
-            const saved = await resp.json();
-            cfgFeedback.textContent = '保存成功：' + JSON.stringify(saved);
-            setTimeout(() => runtimeConfigModal.hide(), 800);
-        } catch (e) {
-            cfgFeedback.textContent = '保存失败：' + (e.message || e);
-        }
-    });
+    // 将loadRuntimeConfig函数暴露到全局作用域，供其他脚本调用
+    window.loadRuntimeConfig = loadRuntimeConfig;
 
     function numOrNull (v) {
         const n = parseInt(v, 10);
         return Number.isFinite(n) ? n : null;
     }
 
+    if (btnSaveConfig) {
+        btnSaveConfig.addEventListener('click', async () => {
+            try {
+                const payload = {
+                    pdf_page_max_workers: numOrNull(cfgWorkers ? cfgWorkers.value : ''),
+                    pdf_page_timeout_sec: numOrNull(cfgPageTimeout ? cfgPageTimeout.value : ''),
+                    pdf_overall_min_timeout_sec: numOrNull(cfgOverallMinTimeout ? cfgOverallMinTimeout.value : '')
+                };
+                const resp = await fetch('/api/runtime-config', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(payload)
+                });
+                if (!resp.ok) throw new Error('保存失败');
+                const saved = await resp.json();
+                cfgFeedback.textContent = '保存成功：' + JSON.stringify(saved);
+                setTimeout(() => {
+                    if (settingsModal) {
+                        settingsModal.hide();
+                    }
+                }, 800);
+            } catch (e) {
+                cfgFeedback.textContent = '保存失败：' + (e.message || e);
+            }
+        });
+    }
+
     function updateFileList () {
         if (!uploadedFiles.tender && uploadedFiles.bids.length === 0) {
-            fileList.innerHTML = '<div class="text-muted"><i class="fas fa-info-circle me-2"></i>尚未选择任何文件</div>';
+            if (fileList) fileList.innerHTML = '<div class="text-muted"><i class="fas fa-info-circle me-2"></i>尚未选择任何文件</div>';
             return;
         }
 
@@ -121,7 +133,7 @@ document.addEventListener('DOMContentLoaded', function () {
             html += createFileListItem(file, `投标文件 #${index + 1}`, 'info');
         });
         html += '</div>';
-        fileList.innerHTML = html;
+        if (fileList) fileList.innerHTML = html;
     }
 
     function createFileListItem (file, title, color) {
@@ -141,15 +153,16 @@ document.addEventListener('DOMContentLoaded', function () {
     }
 
     async function startAnalysis () {
-        progressContainer.style.display = 'block';
-        progressBar.style.width = '0%';
-        progressText.innerHTML = '<i class="fas fa-upload me-2"></i>正在上传文件...';
-        detailedProgress.innerHTML = '';
-        resultArea.innerHTML = '';
+        if (progressContainer) progressContainer.style.display = 'block';
+        if (progressBar) progressBar.style.width = '0%';
+        if (progressText) progressText.innerHTML = '<i class="fas fa-upload me-2"></i>正在上传文件...';
+        if (detailedProgress) detailedProgress.innerHTML = '';
+        if (resultArea) resultArea.innerHTML = '';
 
         const formData = new FormData();
-        formData.append('tender_file', uploadedFiles.tender);
-        uploadedFiles.bids.forEach(file => formData.append('bid_files', file));
+        // 将文件添加到files字段中，以匹配后端init_upload接口的要求
+        formData.append('files', uploadedFiles.tender);
+        uploadedFiles.bids.forEach(file => formData.append('files', file));
 
         try {
             // 第一步：初始化上传，返回候选投标人名称
@@ -186,71 +199,72 @@ document.addEventListener('DOMContentLoaded', function () {
           <div class="modal-dialog modal-lg">
             <div class="modal-content">
               <div class="modal-header">
-                <h5 class="modal-title" id="confirmBiddersLabel"><i class="fas fa-users me-2"></i>确认投标方名称</h5>
+                <h5 class="modal-title" id="confirmBiddersLabel">确认投标方名称</h5>
                 <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
               </div>
               <div class="modal-body">
-                <div class="table-responsive">
-                  <table class="table table-striped align-middle">
-                    <thead class="table-dark">
-                      <tr>
-                        <th style="width: 120px;">文件名</th>
-                        <th>建议名称</th>
-                        <th>确认名称</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      ${initData.bidders.map(b => `
-                        <tr>
-                          <td title="${b.file_name}">${(b.file_name || '').slice(0, 20)}${(b.file_name || '').length > 20 ? '...' : ''}</td>
-                          <td>${b.suggested_name || ''}</td>
-                          <td>
-                            <input type="text" class="form-control bidder-input" data-bid-id="${b.id}" value="${b.suggested_name || ''}">
-                          </td>
-                        </tr>`).join('')}
-                    </tbody>
-                  </table>
-                </div>
-                <div class="small text-muted">请核对并修改不规范的公司名称（需包含"公司/有限/股份/集团"等关键词）。</div>
+                <p>请确认以下投标方名称是否正确，如有需要可进行修改：</p>
+                <form id="biddersForm">
+                  ${initData.bidder_info.map(bidder => `
+                    <div class="mb-3">
+                      <label for="bidderName${bidder.id}" class="form-label">${bidder.original_filename}</label>
+                      <input type="text" class="form-control" id="bidderName${bidder.id}" name="bidderName${bidder.id}" value="${bidder.bidder_name}" data-bidder-id="${bidder.id}">
+                    </div>
+                  `).join('')}
+                </form>
               </div>
               <div class="modal-footer">
                 <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">取消</button>
-                <button type="button" class="btn btn-primary" id="btnConfirmBidders"><i class="fas fa-play me-1"></i>开始分析</button>
+                <button type="button" class="btn btn-primary" id="startAnalysisBtn">开始分析</button>
               </div>
             </div>
           </div>
-        </div>`;
+        </div>
+        `;
 
-        document.body.insertAdjacentHTML('beforeend', modalHtml);
-        const modalElement = document.getElementById('confirmBiddersModal');
-        const modal = new bootstrap.Modal(modalElement);
+        // 添加模态框到页面
+        const modalElement = document.createElement('div');
+        modalElement.innerHTML = modalHtml;
+        document.body.appendChild(modalElement);
+
+        // 显示模态框
+        const modal = new bootstrap.Modal(document.getElementById('confirmBiddersModal'));
         modal.show();
 
-        document.getElementById('btnConfirmBidders').addEventListener('click', async () => {
+        // 监听开始分析按钮点击事件
+        document.getElementById('startAnalysisBtn').addEventListener('click', async () => {
+            // 收集确认后的投标方名称
+            const formData = new FormData(document.getElementById('biddersForm'));
+            const bidders = initData.bidder_info.map(bidder => {
+                const input = document.getElementById(`bidderName${bidder.id}`);
+                return {
+                    id: bidder.id,
+                    confirmed_name: input ? input.value : bidder.bidder_name
+                };
+            });
+
             try {
-                const inputs = Array.from(document.querySelectorAll('.bidder-input'));
-                const bidders = inputs.map(inp => ({ id: parseInt(inp.getAttribute('data-bid-id'), 10), confirmed_name: inp.value.trim() }));
-
-                // 简单校验
-                const companyKeywords = ['公司', '有限', '股份', '集团', '厂', '院', '所', '中心'];
-                for (const b of bidders) {
-                    if (!b.confirmed_name || b.confirmed_name.length < 2 || !companyKeywords.some(k => b.confirmed_name.includes(k))) {
-                        alert('名称无效，请检查：' + (b.confirmed_name || '空'));
-                        return;
-                    }
-                }
-
-                const resp = await fetch(`/api/projects/${currentProjectId}/start-analysis`, {
+                // 发送确认后的名称并开始分析
+                const response = await fetch(`/api/projects/${currentProjectId}/start-analysis`, {
                     method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
                     body: JSON.stringify({ bidders })
                 });
-                if (!resp.ok) {
-                    const err = await resp.text();
-                    throw new Error(err || '启动分析失败');
+
+                if (!response.ok) {
+                    const errorText = await response.text();
+                    throw new Error(`服务器错误: ${response.status} ${response.statusText}\n${errorText}`);
                 }
 
+                const result = await response.json();
+                console.log('分析已启动:', result);
+
+                // 关闭模态框
                 modal.hide();
+                document.body.removeChild(modalElement);
+
                 // 启动轮询
                 startPolling(currentProjectId);
             } catch (e) {
@@ -258,7 +272,8 @@ document.addEventListener('DOMContentLoaded', function () {
             }
         });
 
-        modalElement.addEventListener('hidden.bs.modal', function () {
+        // 监听模态框关闭事件
+        document.getElementById('confirmBiddersModal').addEventListener('hidden.bs.modal', function () {
             document.body.removeChild(modalElement);
         });
     }
@@ -292,6 +307,14 @@ document.addEventListener('DOMContentLoaded', function () {
             if (data.project_status === 'completed' || data.project_status === 'completed_with_errors') {
                 clearInterval(pollInterval);
                 progressText.innerHTML = '<i class="fas fa-check-circle me-2"></i>分析完成!';
+
+                // 弹出确认窗口，让用户确认投标人名称
+                await showConfirmBidderNamesModal(projectId);
+
+                // 询问是否删除临时文件
+                await askToDeleteTempFiles(projectId);
+
+                // 确认后显示结果
                 await fetchAndDisplayResults(projectId);
             }
         } catch (error) {
@@ -361,6 +384,205 @@ document.addEventListener('DOMContentLoaded', function () {
                 ${bid.error_message ? `<div class="alert alert-danger mt-1 mb-0 py-1 small">${bid.error_message}</div>` : ''}
             </div>
         `;
+    }
+
+    async function showConfirmBidderNamesModal (projectId) {
+        try {
+            // 获取项目下的所有投标人信息
+            const response = await fetch(`/api/projects/${projectId}/bidders`);
+            if (!response.ok) {
+                throw new Error(`获取投标人信息失败: ${response.statusText}`);
+            }
+
+            const bidders = await response.json();
+
+            // 创建模态框HTML
+            const modalHtml = `
+            <div class="modal fade" id="confirmBidderNamesModal" tabindex="-1" aria-labelledby="confirmBidderNamesLabel" aria-hidden="true">
+              <div class="modal-dialog modal-lg">
+                <div class="modal-content">
+                  <div class="modal-header">
+                    <h5 class="modal-title" id="confirmBidderNamesLabel">确认投标人名称</h5>
+                    <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+                  </div>
+                  <div class="modal-body">
+                    <p>请确认以下投标人名称是否正确，如有需要可进行修改：</p>
+                    <form id="bidderNamesForm">
+                      ${bidders.map(bidder => `
+                        <div class="mb-3">
+                          <label for="bidderName${bidder.id}" class="form-label">${bidder.original_filename || '投标文件'}</label>
+                          <input type="text" class="form-control" id="bidderName${bidder.id}" name="bidderName${bidder.id}" value="${bidder.bidder_name}" data-bidder-id="${bidder.id}">
+                        </div>
+                      `).join('')}
+                    </form>
+                  </div>
+                  <div class="modal-footer">
+                    <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">取消</button>
+                    <button type="button" class="btn btn-primary" id="saveBidderNamesBtn">保存并继续</button>
+                  </div>
+                </div>
+              </div>
+            </div>
+            `;
+
+            // 添加模态框到页面
+            const modalElement = document.createElement('div');
+            modalElement.innerHTML = modalHtml;
+            document.body.appendChild(modalElement);
+
+            // 显示模态框
+            const modal = new bootstrap.Modal(document.getElementById('confirmBidderNamesModal'));
+            modal.show();
+
+            // 等待用户操作
+            return new Promise((resolve) => {
+                document.getElementById('saveBidderNamesBtn').addEventListener('click', async () => {
+                    // 收集修改后的投标人名称
+                    const formData = new FormData(document.getElementById('bidderNamesForm'));
+                    const bidderUpdates = [];
+
+                    bidders.forEach(bidder => {
+                        const input = document.getElementById(`bidderName${bidder.id}`);
+                        if (input && input.value !== bidder.bidder_name) {
+                            bidderUpdates.push({
+                                id: bidder.id,
+                                confirmed_name: input.value
+                            });
+                        }
+                    });
+
+                    // 如果有修改，发送更新请求
+                    if (bidderUpdates.length > 0) {
+                        try {
+                            const updateResponse = await fetch(`/api/projects/${projectId}/confirm-names-and-start-analysis`, {
+                                method: 'POST',
+                                headers: {
+                                    'Content-Type': 'application/json',
+                                },
+                                body: JSON.stringify({ bidders: bidderUpdates })
+                            });
+
+                            if (!updateResponse.ok) {
+                                throw new Error(`更新投标人名称失败: ${updateResponse.statusText}`);
+                            }
+
+                            console.log('投标人名称更新成功');
+                        } catch (error) {
+                            console.error('更新投标人名称时出错:', error);
+                            alert('更新投标人名称失败: ' + error.message);
+                        }
+                    }
+
+                    // 关闭模态框
+                    modal.hide();
+                    document.body.removeChild(modalElement);
+                    resolve();
+                });
+
+                // 监听模态框关闭事件
+                document.getElementById('confirmBidderNamesModal').addEventListener('hidden.bs.modal', function () {
+                    document.body.removeChild(modalElement);
+                    resolve();
+                });
+            });
+        } catch (error) {
+            console.error('显示确认投标人名称模态框时出错:', error);
+        }
+    }
+
+    async function askToDeleteTempFiles (projectId) {
+        // 创建确认删除临时文件的模态框
+        const modalHtml = `
+        <div class="modal fade" id="deleteTempFilesModal" tabindex="-1" aria-labelledby="deleteTempFilesLabel" aria-hidden="true">
+          <div class="modal-dialog">
+            <div class="modal-content">
+              <div class="modal-header">
+                <h5 class="modal-title" id="deleteTempFilesLabel">删除临时文件</h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+              </div>
+              <div class="modal-body">
+                <p>项目分析已完成。是否要删除上传的临时文件和生成的中间文件？</p>
+                <div class="form-check">
+                  <input class="form-check-input" type="checkbox" id="deleteUploads" checked>
+                  <label class="form-check-label" for="deleteUploads">
+                    删除上传的临时文件 (temp_uploads目录)
+                  </label>
+                </div>
+                <div class="form-check">
+                  <input class="form-check-input" type="checkbox" id="deleteCache" checked>
+                  <label class="form-check-label" for="deleteCache">
+                    删除生成的中间文件 (temp_pdf_cache目录)
+                  </label>
+                </div>
+                <div class="form-check">
+                  <input class="form-check-input" type="checkbox" id="deleteTempWord" checked>
+                  <label class="form-check-label" for="deleteTempWord">
+                    删除生成的文本文件 (temp_word目录)
+                  </label>
+                </div>
+              </div>
+              <div class="modal-footer">
+                <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">取消</button>
+                <button type="button" class="btn btn-primary" id="confirmDeleteBtn">确认删除</button>
+              </div>
+            </div>
+          </div>
+        </div>
+        `;
+
+        // 添加模态框到页面
+        const modalElement = document.createElement('div');
+        modalElement.innerHTML = modalHtml;
+        document.body.appendChild(modalElement);
+
+        // 显示模态框
+        const modal = new bootstrap.Modal(document.getElementById('deleteTempFilesModal'));
+        modal.show();
+
+        // 等待用户操作
+        return new Promise((resolve) => {
+            document.getElementById('confirmDeleteBtn').addEventListener('click', async () => {
+                // 获取用户选择
+                const deleteUploads = document.getElementById('deleteUploads').checked;
+                const deleteCache = document.getElementById('deleteCache').checked;
+                const deleteTempWord = document.getElementById('deleteTempWord').checked;
+
+                // 发送删除请求
+                try {
+                    const response = await fetch(`/api/projects/${projectId}/cleanup`, {
+                        method: 'POST',
+                        headers: {
+                            'Content-Type': 'application/json',
+                        },
+                        body: JSON.stringify({
+                            delete_uploads: deleteUploads,
+                            delete_cache: deleteCache,
+                            delete_temp_word: deleteTempWord
+                        })
+                    });
+
+                    if (!response.ok) {
+                        throw new Error(`清理临时文件失败: ${response.statusText}`);
+                    }
+
+                    console.log('临时文件清理完成');
+                } catch (error) {
+                    console.error('清理临时文件时出错:', error);
+                    // 不中断流程，只是记录错误
+                }
+
+                // 关闭模态框
+                modal.hide();
+                document.body.removeChild(modalElement);
+                resolve();
+            });
+
+            // 监听模态框关闭事件
+            document.getElementById('deleteTempFilesModal').addEventListener('hidden.bs.modal', function () {
+                document.body.removeChild(modalElement);
+                resolve();
+            });
+        });
     }
 
     async function fetchAndDisplayResults (projectId) {
@@ -551,153 +773,228 @@ document.addEventListener('DOMContentLoaded', function () {
                     </div>
                 `;
 
-                // 添加事件监听器用于编辑投标方名称
+                // 绑定编辑按钮事件
                 document.querySelectorAll('.edit-bidder-name').forEach(button => {
                     button.addEventListener('click', function () {
                         const bidId = this.getAttribute('data-bid');
                         const currentName = this.getAttribute('data-current-name');
-                        editBidderName(bidId, currentName);
+                        showEditBidderNameModal(bidId, currentName);
                     });
                 });
             })
             .catch(error => {
-                console.error("获取动态汇总表数据时出错:", error);
+                console.error('获取动态汇总表数据失败:', error);
                 resultArea.innerHTML = `<div class="alert alert-danger">获取动态汇总表数据失败: ${error.message}</div>`;
             });
     }
 
     function displaySimpleResults (results) {
-        let tableRows = results.map((result, index) => `
-            <tr>
-                <td><span class="badge bg-primary rounded-pill">${index + 1}</span></td>
-                <td>${result.bidder_name}</td>
-                <td>${(result.total_score || 0).toFixed(2)}</td>
-            </tr>
-        `).join('');
+        let html = '<div class="card"><div class="card-body"><h3 class="card-title">分析结果</h3><div class="table-responsive">';
+        html += '<table class="table table-bordered table-hover"><thead class="table-light">';
+        html += '<tr><th>排名</th><th>投标人</th><th>总得分</th><th>操作</th></tr></thead><tbody>';
 
-        resultArea.innerHTML = `
-            <div class="card">
-                <div class="card-header"><h3><i class="fas fa-poll me-2"></i>分析结果</h3></div>
-                <div class="card-body">
-                    <div class="table-responsive">
-                        <table class="table table-striped table-hover">
-                            <thead class="table-dark">
-                                <tr>
-                                    <th>排名</th>
-                                    <th>投标人</th>
-                                    <th>总分</th>
-                                </tr>
-                            </thead>
-                            <tbody>
-                                ${tableRows}
-                            </tbody>
-                        </table>
-                    </div>
-                </div>
-            </div>
-        `;
-    }
-});
+        results.forEach((result, index) => {
+            html += `<tr>
+                <td>${index + 1}</td>
+                <td>${result.bidder_name || 'N/A'}</td>
+                <td>${result.total_score ? result.total_score.toFixed(2) : 'N/A'}</td>
+                <td>
+                    <button class="btn btn-sm btn-primary view-details" data-bid="${result.id}">
+                        <i class="fas fa-eye"></i> 查看详情
+                    </button>
+                </td>
+            </tr>`;
+        });
 
-// 编辑投标方名称函数
-async function editBidderName (bidId, currentName) {
-    // 创建模态框HTML
-    const modalHtml = `
-        <div class="modal fade" id="editBidderNameModal" tabindex="-1" aria-labelledby="editBidderNameModalLabel" aria-hidden="true">
-            <div class="modal-dialog">
-                <div class="modal-content">
-                    <div class="modal-header">
-                        <h5 class="modal-title" id="editBidderNameModalLabel">编辑投标方名称</h5>
-                        <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
-                    </div>
-                    <div class="modal-body">
-                        <form id="editBidderNameForm">
-                            <div class="mb-3">
-                                <label for="newBidderName" class="form-label">新的投标方名称</label>
-                                <input type="text" class="form-control" id="newBidderName" value="${currentName}" required>
-                                <div class="form-text">请输入有效的公司名称，必须包含"公司"、"有限"、"股份"、"集团"等关键词。</div>
-                            </div>
-                            <div id="editNameFeedback" class="small text-danger"></div>
-                        </form>
-                    </div>
-                    <div class="modal-footer">
-                        <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">取消</button>
-                        <button type="button" class="btn btn-primary" id="saveBidderNameBtn">保存</button>
-                    </div>
-                </div>
-            </div>
-        </div>
-    `;
+        html += '</tbody></table></div></div></div>';
+        resultArea.innerHTML = html;
 
-    // 添加模态框到页面
-    document.body.insertAdjacentHTML('beforeend', modalHtml);
-
-    // 显示模态框
-    const modalElement = document.getElementById('editBidderNameModal');
-    const modal = new bootstrap.Modal(modalElement);
-    modal.show();
-
-    // 保存按钮事件监听器
-    document.getElementById('saveBidderNameBtn').addEventListener('click', async function () {
-        const newName = document.getElementById('newBidderName').value.trim();
-        const feedbackElement = document.getElementById('editNameFeedback');
-
-        // 简单验证
-        if (newName.length < 2) {
-            feedbackElement.textContent = '名称长度不能少于2个字符';
-            return;
-        }
-
-        // 检查是否包含公司关键词
-        const companyKeywords = ['公司', '有限', '股份', '集团', '厂', '院', '所', '中心'];
-        if (!companyKeywords.some(keyword => newName.includes(keyword))) {
-            feedbackElement.textContent = '名称必须包含公司关键词，如"公司"、"有限"、"股份"、"集团"等';
-            return;
-        }
-
-        try {
-            // 发送请求更新投标方名称
-            const response = await fetch(`/api/bids/${bidId}/name`, {
-                method: 'PATCH',
-                headers: {
-                    'Content-Type': 'application/json'
-                },
-                body: JSON.stringify({ new_name: newName })
+        // 绑定查看详情按钮事件
+        document.querySelectorAll('.view-details').forEach(button => {
+            button.addEventListener('click', function () {
+                const bidId = this.getAttribute('data-bid');
+                showResultDetails(bidId);
             });
+        });
+    }
 
+    async function showResultDetails (bidId) {
+        try {
+            const response = await fetch(`/api/bids/${bidId}/result`);
             if (!response.ok) {
-                const errorData = await response.json();
-                throw new Error(errorData.error || '更新失败');
+                throw new Error(`获取详情失败: ${response.statusText}`);
             }
 
             const result = await response.json();
-            
-            // 更新表格中的显示
-            const nameElements = document.querySelectorAll(`.edit-bidder-name[data-bid="${bidId}"]`);
-            nameElements.forEach(element => {
-                const nameSpan = element.closest('td').querySelector('.bidder-name-text');
-                if (nameSpan) {
-                    const truncatedName = newName.length > 10 ? newName.substring(0, 10) + '...' : newName;
-                    nameSpan.textContent = truncatedName;
-                    nameSpan.setAttribute('title', newName);
-                    // 更新按钮的data-current-name属性
-                    element.setAttribute('data-current-name', newName);
-                }
+            displayResultDetails(result);
+            if (resultDetailsModal) {
+                resultDetailsModal.show();
+            }
+        } catch (error) {
+            console.error('获取详情时出错:', error);
+            alert('获取详情失败: ' + error.message);
+        }
+    }
+
+    function displayResultDetails (result) {
+        if (!modalBody) return;
+
+        let html = '<h4>投标人: ' + (result.bidder_name || 'N/A') + '</h4>';
+        html += '<h5>总得分: ' + (result.total_score ? result.total_score.toFixed(2) : 'N/A') + '</h5>';
+
+        if (result.detailed_scores && Array.isArray(result.detailed_scores)) {
+            html += '<h5>详细评分</h5>';
+            html += '<div class="table-responsive"><table class="table table-bordered">';
+            html += '<thead class="table-light"><tr><th>评分项</th><th>满分</th><th>得分</th><th>评分说明</th></tr></thead><tbody>';
+
+            result.detailed_scores.forEach(score => {
+                html += `<tr>
+                    <td>${score.criteria_name || 'N/A'}</td>
+                    <td>${score.max_score || 'N/A'}</td>
+                    <td>${score.score ? score.score.toFixed(2) : 'N/A'}</td>
+                    <td>${score.reason || 'N/A'}</td>
+                </tr>`;
             });
 
-            // 关闭模态框
-            modal.hide();
-            
-            // 显示成功消息
-            alert('投标方名称更新成功');
-        } catch (error) {
-            console.error('更新投标方名称失败:', error);
-            feedbackElement.textContent = '更新失败: ' + (error.message || '未知错误');
+            html += '</tbody></table></div>';
         }
-    });
 
-    // 模态框关闭后移除DOM元素
-    modalElement.addEventListener('hidden.bs.modal', function () {
-        document.body.removeChild(modalElement);
-    });
-}
+        modalBody.innerHTML = html;
+    }
+
+    async function showEditBidderNameModal (bidId, currentName) {
+        const modalHtml = `
+        <div class="modal fade" id="editBidderNameModal" tabindex="-1" aria-labelledby="editBidderNameLabel" aria-hidden="true">
+          <div class="modal-dialog">
+            <div class="modal-content">
+              <div class="modal-header">
+                <h5 class="modal-title" id="editBidderNameLabel">编辑投标方名称</h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+              </div>
+              <div class="modal-body">
+                <form id="editBidderNameForm">
+                  <div class="mb-3">
+                    <label for="newBidderName" class="form-label">新的投标方名称</label>
+                    <input type="text" class="form-control" id="newBidderName" name="newBidderName" value="${currentName}">
+                  </div>
+                </form>
+              </div>
+              <div class="modal-footer">
+                <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">取消</button>
+                <button type="button" class="btn btn-primary" id="saveBidderNameBtn">保存</button>
+              </div>
+            </div>
+          </div>
+        </div>
+        `;
+
+        // 添加模态框到页面
+        const modalElement = document.createElement('div');
+        modalElement.innerHTML = modalHtml;
+        document.body.appendChild(modalElement);
+
+        // 显示模态框
+        const modal = new bootstrap.Modal(document.getElementById('editBidderNameModal'));
+        modal.show();
+
+        // 监听保存按钮点击事件
+        document.getElementById('saveBidderNameBtn').addEventListener('click', async () => {
+            const newName = document.getElementById('newBidderName').value.trim();
+            if (!newName) {
+                alert('请输入新的投标方名称');
+                return;
+            }
+
+            try {
+                const response = await fetch(`/api/bids/${bidId}/name`, {
+                    method: 'PATCH',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify({ new_name: newName })
+                });
+
+                if (!response.ok) {
+                    const errorData = await response.json();
+                    throw new Error(errorData.error || '更新失败');
+                }
+
+                const result = await response.json();
+                console.log('投标方名称更新成功:', result);
+
+                // 更新页面上的显示
+                const nameElement = document.querySelector(`.edit-bidder-name[data-bid="${bidId}"]`).previousElementSibling;
+                if (nameElement) {
+                    nameElement.textContent = newName.length > 5 ? newName.substring(0, 5) + '...' : newName;
+                    nameElement.title = newName;
+                }
+
+                // 关闭模态框
+                modal.hide();
+                document.body.removeChild(modalElement);
+
+                alert('投标方名称更新成功');
+            } catch (error) {
+                console.error('更新投标方名称时出错:', error);
+                alert('更新失败: ' + error.message);
+            }
+        });
+
+        // 监听模态框关闭事件
+        document.getElementById('editBidderNameModal').addEventListener('hidden.bs.modal', function () {
+            document.body.removeChild(modalElement);
+        });
+    }
+
+    // 导出到Excel功能
+    window.exportToExcel = async function (projectId) {
+        try {
+            const response = await fetch(`/api/projects/${projectId}/export-excel`, {
+                method: 'GET',
+            });
+
+            if (!response.ok) {
+                throw new Error(`导出失败: ${response.statusText}`);
+            }
+
+            const blob = await response.blob();
+            const url = window.URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = `评标结果_${projectId}.xlsx`;
+            document.body.appendChild(a);
+            a.click();
+            window.URL.revokeObjectURL(url);
+            document.body.removeChild(a);
+        } catch (error) {
+            console.error('导出Excel时出错:', error);
+            alert('导出失败: ' + error.message);
+        }
+    };
+
+    // 导出到Word功能
+    window.exportToWord = async function (projectId) {
+        try {
+            const response = await fetch(`/api/projects/${projectId}/export-word`, {
+                method: 'GET',
+            });
+
+            if (!response.ok) {
+                throw new Error(`导出失败: ${response.statusText}`);
+            }
+
+            const blob = await response.blob();
+            const url = window.URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = `评标结果_${projectId}.docx`;
+            document.body.appendChild(a);
+            a.click();
+            window.URL.revokeObjectURL(url);
+            document.body.removeChild(a);
+        } catch (error) {
+            console.error('导出Word时出错:', error);
+            alert('导出失败: ' + error.message);
+        }
+    };
+});
