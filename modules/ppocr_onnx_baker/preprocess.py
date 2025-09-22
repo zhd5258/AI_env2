@@ -1,7 +1,5 @@
 import cv2
 import numpy as np
-import operator
-from PIL import Image
 
 class DetResizeForTest(object):
     def __init__(self, **kwargs):

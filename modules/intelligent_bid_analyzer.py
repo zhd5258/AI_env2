@@ -1,7 +1,6 @@
 import json
 import re
 import logging
-import traceback
 from modules.local_ai_analyzer import LocalAIAnalyzer
 from modules.pdf_processor import PDFProcessor
 from modules.database import BidDocument, ScoringRule, AnalysisResult
@@ -17,7 +16,7 @@ class IntelligentBidAnalyzer(BidAnalyzerHelpers):
         db_session=None,
         bid_document_id=None,
         project_id=None,
-        extracted_text: list = None,
+        extracted_text: list = [],
     ):
         super().__init__()
         self.tender_file_path = tender_file_path
@@ -51,17 +50,17 @@ class IntelligentBidAnalyzer(BidAnalyzerHelpers):
             self.logger.warning(
                 f'No pre-extracted text provided for {self.bid_file_path}. PDFProcessor will be used.'
             )
+            # 从环境变量获取GPU配置
+            import os
+
+            use_gpu = os.getenv('USE_GPU', 'false').lower() == 'true'
             self.bid_processor = PDFProcessor(
-                self.bid_file_path, file_type='bid'
+                self.bid_file_path, use_gpu=use_gpu, file_type='bid'
             )  # 投标文件使用ONNX
-            self.bid_pages = None
+            self.bid_pages = []  # 初始化为空列表而不是None
 
         # 存储分析结果的累积数据
-        self.accumulated_results = {
-            '投标人名称': '',
-            '投标总价': '',
-            '评分结果': [{}]
-        }
+        self.accumulated_results = {'投标人名称': '', '投标总价': '', '评分结果': [{}]}
         self.bidder_names = []  # 存储所有提取到的投标人名称
         self.total_prices = []  # 存储所有提取到的投标总价
 
@@ -73,17 +72,44 @@ class IntelligentBidAnalyzer(BidAnalyzerHelpers):
 
         try:
             # 1. 提取投标文件文本（使用PyMuPDF，对无法提取的页面使用RapidOCR）
-            if self.bid_pages is None:
+            if not self.bid_pages or len(self.bid_pages) == 0:
                 self.logger.info('提取投标文件文本...')
                 # 设置流式处理回调函数
                 if self.bid_processor:
-                    self.bid_processor.set_stream_callback(self._stream_process_callback)
+                    # 用于存储已处理的页面文本
+                    self._processed_pages_text = []
+
+                    # 创建适配器函数来处理回调签名差异
+                    def stream_callback_adapter(
+                        processed_pages: int, text_content: list
+                    ):
+                        # text_content已经是一个页面文本列表，不需要再split
+                        self._processed_pages_text = text_content
+
+                        # ensure列表长度正确
+                        if len(self._processed_pages_text) < processed_pages:
+                            self._processed_pages_text.extend(
+                                ['']
+                                * (processed_pages - len(self._processed_pages_text))
+                            )
+                        elif len(self._processed_pages_text) > processed_pages:
+                            self._processed_pages_text = self._processed_pages_text[
+                                :processed_pages
+                            ]
+
+                        self._stream_process_callback(
+                            processed_pages, self._processed_pages_text
+                        )
+
+                    self.bid_processor.set_stream_callback(stream_callback_adapter)
                     # 使用流式处理
                     self.bid_pages = self.bid_processor.stream_process_pdf(chunk_size=3)
                 else:
-                    self.bid_pages = self.bid_processor.extract_text_with_ocr_when_needed()
+                    # 如果没有PDF处理器，使用默认的文本提取方法
+                    self.bid_pages = []
 
-            if not self.bid_pages or not any(self.bid_pages):
+            # 修正：检查bid_pages是否包含有效文本
+            if not self.bid_pages or not any(page.strip() for page in self.bid_pages):
                 raise ValueError('未能提取到有效的投标文件文本内容')
 
             self.logger.info(f'成功提取投标文件文本，共 {len(self.bid_pages)} 页')
@@ -91,7 +117,13 @@ class IntelligentBidAnalyzer(BidAnalyzerHelpers):
             # 2. 从数据库获取评分规则
             rules_from_db = self._get_scoring_rules_from_db()
             if not rules_from_db:
-                raise ValueError('未能从数据库获取评分规则')
+                # 检查是否有项目ID，如果没有说明流程有问题
+                if not self.project_id:
+                    raise ValueError('未能从数据库获取评分规则：项目ID未设置')
+                else:
+                    raise ValueError(
+                        f'项目 {self.project_id} 没有评分规则，请确保已从招标文件中正确提取评分规则'
+                    )
 
             self.logger.info(f'从数据库获取到 {len(rules_from_db)} 条评分规则')
 
@@ -104,19 +136,10 @@ class IntelligentBidAnalyzer(BidAnalyzerHelpers):
             # 5. 保存分析结果
             self._save_analysis_results(analyzed_result)
 
-            # 提取关键信息用于返回
-            bidder_name = analyzed_result.get('投标人名称', self.bidder_name)
-            total_price = analyzed_result.get('投标总价', '未提取')
-            scores = analyzed_result.get('评分结果', [])
-
             return {
                 'status': 'success',
-                'message': '投标文件分析完成',
-                'details': {
-                    'bidder_name': bidder_name,
-                    'total_price': total_price,
-                    'scores': scores,
-                },
+                'message': '分析完成',
+                'details': analyzed_result,
             }
 
         except Exception as e:
@@ -127,44 +150,66 @@ class IntelligentBidAnalyzer(BidAnalyzerHelpers):
     def _stream_process_callback(self, processed_pages: int, pages_text: list):
         """
         流式处理回调函数，在PDF处理过程中被调用
-        
+
         Args:
             processed_pages: 已处理的页面数
             pages_text: 已处理的页面文本列表
         """
         self.logger.info(f'流式处理回调：已处理 {processed_pages} 页')
-        
+        # 实时写入进度到数据库供前端轮询
+        try:
+            if self.db and self.bid_document_id:
+                bid_doc = (
+                    self.db.query(BidDocument)
+                    .filter(BidDocument.id == self.bid_document_id)
+                    .first()
+                )
+                if bid_doc:
+                    # 记录总页数（若可获取）
+                    total_pages = (
+                        getattr(self.bid_processor, 'total_pages', None)
+                        if self.bid_processor
+                        else None
+                    )
+                    bid_doc.progress_total_rules = (
+                        total_pages or bid_doc.progress_total_rules or 0
+                    )
+                    bid_doc.progress_completed_rules = processed_pages
+                    bid_doc.progress_current_rule = f'解析PDF文本 {processed_pages}/{bid_doc.progress_total_rules or "?"} 页'
+                    self.db.commit()
+        except Exception as e:
+            self.logger.warning(f'更新流式进度到数据库失败: {e}')
+
         # 当处理了足够的页面时，开始进行AI分析
-        if processed_pages >= 3:  # 至少处理3页后再进行分析
+        from modules.runtime_config import load_config
+
+        runtime_config = load_config()
+        ai_analysis_page_limit = runtime_config.get('ai_analysis_page_limit', 5)
+
+        # 修正：确保pages_text包含足够的页面
+        if (
+            len(pages_text) >= processed_pages
+            and processed_pages >= ai_analysis_page_limit
+        ):
             # 构建当前已处理文本的分析请求
+            # 修正：使用实际的页面文本而不是重新连接
             current_text = '\n'.join(pages_text[:processed_pages])
-            
+
             # 从数据库获取评分规则
             rules_from_db = self._get_scoring_rules_from_db()
             if rules_from_db:
-                # 构建AI分析Prompt
-                prompt = self._build_analysis_prompt(rules_from_db)
-                
-                # 为当前块构建完整的prompt
-                chunk_prompt = f"""{prompt.split('}},投标方的投标文本内容为：')[0] + '}}'}},投标方的投标文本内容为：
+                # 构建AI分析Prompt的第一部分（评分规则）
+                scoring_rules_section = self._build_analysis_prompt(rules_from_db)
+
+                # 优化：简化prompt内容
+                chunk_prompt = f"""{scoring_rules_section},投标方的投标文本内容为：
 『{current_text}』
-请分析该投标文本，分析出该投标方的投标人名称、投标总价，并根据评分规则，对投标方投标文本内容进行打分，并给出每一项评分结果，请返回一个json格式的打分结果，格式如下：
-{{
-    "投标人名称": "投标方公司名称",  
-    "投标总价": "投标总价",  
-    "评分结果": [
-        {{
-            "规则名称1": "50分",
-            "规则名称2": "50分",
-            ......
-        }}
-    ]
-}}，其中投标方名称和投标总价为必填项，都可以在投标一览表”提取，其中投标人名称在授权委托书等多处可以提取，需要前后多次提取进行对比验证。而投标总价在投标一览表中，该表可能同时还有投标保证金，也是数字，注意imian二者不能混淆，投标总价同时有汉字大写，需要转换为数字，与从数字提取的投标报价进行对照核实。"""
+请分析该投标文本，分析出该投标方的投标人名称、投标总价，并根据评分规则进行打分，请返回json格式的结果。"""
 
                 # 调用AI分析
                 self.logger.info(f'对已处理的 {processed_pages} 页内容进行AI分析...')
                 ai_response = self.ai_analyzer.analyze_text(chunk_prompt)
-                
+
                 # 解析AI响应并累积结果
                 try:
                     # 清理响应文本
@@ -177,10 +222,41 @@ class IntelligentBidAnalyzer(BidAnalyzerHelpers):
 
                     # 解析JSON
                     chunk_result = json.loads(clean_response)
-                    
+
                     # 累积结果
                     self._accumulate_results(chunk_result)
-                    
+
+                    # 将部分结果保存到数据库，供进度接口展示
+                    try:
+                        if self.db and self.bid_document_id:
+                            ar = (
+                                self.db.query(AnalysisResult)
+                                .filter(
+                                    AnalysisResult.bid_document_id
+                                    == self.bid_document_id
+                                )
+                                .first()
+                            )
+                            if ar:
+                                partial = {
+                                    'processed_pages': processed_pages,
+                                    'bidder_name': self.accumulated_results.get(
+                                        '投标人名称'
+                                    ),
+                                    'total_price': self.accumulated_results.get(
+                                        '投标总价'
+                                    ),
+                                    'scores_count': len(
+                                        self.accumulated_results['评分结果'][0]
+                                    ),
+                                }
+                                ar.partial_analysis_results = json.dumps(
+                                    partial, ensure_ascii=False
+                                )
+                                self.db.commit()
+                    except Exception as pe:
+                        self.logger.warning(f'保存部分分析结果失败: {pe}')
+
                     self.logger.info(
                         f'第1到{processed_pages}页AI分析完成，提取到投标人名称: {chunk_result.get("投标人名称")}'
                     )
@@ -189,11 +265,15 @@ class IntelligentBidAnalyzer(BidAnalyzerHelpers):
                         f'第1到{processed_pages}页AI响应JSON解析失败: {e}'
                     )
                     self.logger.error(f'AI响应内容: {ai_response}')
+                except Exception as e:
+                    self.logger.error(
+                        f'第1到{processed_pages}页AI分析过程中发生未知错误: {e}'
+                    )
 
     def _accumulate_results(self, chunk_result):
         """
         累积分析结果
-        
+
         Args:
             chunk_result: 当前块的分析结果
         """
@@ -211,7 +291,9 @@ class IntelligentBidAnalyzer(BidAnalyzerHelpers):
                 if isinstance(score_dict, dict):
                     for rule_name, score in score_dict.items():
                         # 检查是否已存在该规则的评分
-                        existing_score = self.accumulated_results['评分结果'][0].get(rule_name)
+                        existing_score = self.accumulated_results['评分结果'][0].get(
+                            rule_name
+                        )
                         if existing_score:
                             # 累加分数（如果是数值）
                             try:
@@ -222,21 +304,29 @@ class IntelligentBidAnalyzer(BidAnalyzerHelpers):
                                 )
                             except ValueError:
                                 # 如果无法转换为数值，则保留新值
-                                self.accumulated_results['评分结果'][0][rule_name] = score
+                                self.accumulated_results['评分结果'][0][rule_name] = (
+                                    score
+                                )
                         else:
                             self.accumulated_results['评分结果'][0][rule_name] = score
 
         # 选择最常出现的投标人名称
         if self.bidder_names:
             from collections import Counter
+
             name_counts = Counter(self.bidder_names)
             self.accumulated_results['投标人名称'] = name_counts.most_common(1)[0][0]
 
         # 选择最常出现的投标总价
         if self.total_prices:
             from collections import Counter
+
             price_counts = Counter(self.total_prices)
             self.accumulated_results['投标总价'] = price_counts.most_common(1)[0][0]
+
+        self.logger.info(
+            f'累积结果: 投标人名称={self.accumulated_results["投标人名称"]}, 投标总价={self.accumulated_results["投标总价"]}, 评分结果数量={len(self.accumulated_results["评分结果"][0])}'
+        )
 
     def _get_scoring_rules_from_db(self):
         """
@@ -252,6 +342,14 @@ class IntelligentBidAnalyzer(BidAnalyzerHelpers):
                 .filter(ScoringRule.project_id == self.project_id)
                 .all()
             )
+
+            # 记录获取到的评分规则数量和详细信息
+            self.logger.info(f'从数据库获取到 {len(rules)} 条评分规则')
+            for rule in rules:
+                self.logger.info(
+                    f'评分规则: Parent_Item_Name={rule.Parent_Item_Name}, Child_Item_Name={rule.Child_Item_Name}, is_price_criteria={rule.is_price_criteria}'
+                )
+
             return rules
         except Exception as e:
             self.logger.error(f'从数据库获取评分规则时出错: {e}')
@@ -260,16 +358,14 @@ class IntelligentBidAnalyzer(BidAnalyzerHelpers):
     def _build_analysis_prompt(self, rules_from_db):
         """
         构建AI分析Prompt，将评分规则作为Prompt的一部分
+        优化：只发送Child_Item_Name项，剔除价格规则和Parent_Item_Name项
         """
-        # 将评分规则转换为文本格式
+        # 将评分规则转换为文本格式，只包含Child_Item_Name项
         scoring_rules_text = ''
         for rule in rules_from_db:
-            if rule.is_price_criteria:
-                scoring_rules_text += f'    {rule.Parent_Item_Name or "价格评分"}：，本项最高分{rule.Child_max_score}，{rule.description}；\n'
-            elif rule.Child_Item_Name:
+            # 剔除价格规则和Parent_Item_Name项，只保留Child_Item_Name项
+            if not rule.is_price_criteria and rule.Child_Item_Name:
                 scoring_rules_text += f'    {rule.Child_Item_Name}：，本项最高分{rule.Child_max_score}，{rule.description}；\n'
-            elif rule.Parent_Item_Name:
-                scoring_rules_text += f'    {rule.Parent_Item_Name}：，本项最高分{rule.Parent_max_score}，{rule.description}；\n'
 
         # 返回评分规则部分，不包含投标文件文本（因为会在分块处理时添加）
         prompt = f"""你是一个资深评标专家，现在需要根据如下评分规则：
@@ -277,23 +373,30 @@ class IntelligentBidAnalyzer(BidAnalyzerHelpers):
 {scoring_rules_text}
 }}"""
 
+        self.logger.info(f'构建的评分规则Prompt:\n{prompt}')
         return prompt
 
     def _analyze_with_ai_in_chunks(self, prompt):
         """
         分块处理投标文件内容并调用AI分析
         实现边解析边给AI大模型进行评价，并保存每次评价的结果，最终合并处理返回结果
+        优化：简化发送给AI的prompt格式
         """
         # 如果已经通过流式处理累积了结果，则直接返回累积结果
         if any(self.accumulated_results['评分结果'][0].values()):
             self.logger.info('使用流式处理累积的分析结果')
             return self.accumulated_results
-            
+
         # 始终采用分块处理方式，避免一次性发送过长文本给AI
         self.logger.info('开始分块处理投标文件内容...')
 
-        # 按固定页数分块处理（较小的块大小以适应AI模型上下文限制）
-        chunk_size = 3
+        # 从配置中获取chunk_size，如果获取失败则使用默认值
+        from modules.runtime_config import load_config
+
+        runtime_config = load_config()
+        chunk_size = runtime_config.get('ai_analysis_page_limit', 5)
+        self.logger.info(f'从配置中获取AI分析页面数量限制: {chunk_size}')
+
         all_results = []
 
         # 提取评分规则部分（所有分块共用）
@@ -304,20 +407,23 @@ class IntelligentBidAnalyzer(BidAnalyzerHelpers):
             chunk_text = '\n'.join(chunk_pages)
 
             # 为每个块构建完整的prompt，包含评分规则和当前块的文本
-            chunk_prompt = f"""{scoring_rules_section},投标方的投标文本内容为：
-『{chunk_text}』
-请分析该投标文本，分析出该投标方的投标人名称、投标总价，并根据评分规则，对投标方投标文本内容进行打分，并给出每一项评分结果，请返回一个json格式的打分结果，格式如下：
-{{
+            # 优化：简化JSON格式示例
+            json_format_example = """{
     "投标人名称": "投标方公司名称",  
     "投标总价": "投标总价",  
     "评分结果": [
-        {{
+        {
             "规则名称1": "50分",
-            "规则名称2": "50分",
-            ......
-        }}
+            "规则名称2": "50分"
+        }
     ]
-}}，其中投标方名称和投标总价为必填项，都可以在投标一览表”提取，其中投标人名称在授权委托书等多处可以提取，需要前后多次提取进行对比验证。而投标总价在投标一览表中，该表可能同时还有投标保证金，也是数字，注意imian二者不能混淆，投标总价同时有汉字大写，需要转换为数字，与从数字提取的投标报价进行对照核实。"""
+}"""
+
+            # 优化：简化prompt内容，移除冗余说明
+            chunk_prompt = f"""{scoring_rules_section},投标方的投标文本内容为：
+『{chunk_text}』
+请分析该投标文本，分析出该投标方的投标人名称、投标总价，并根据评分规则进行打分，请返回json格式的结果：
+{json_format_example}"""
 
             self.logger.info(
                 f'分析第{i + 1}到{min(i + chunk_size, len(self.bid_pages))}页内容...'
@@ -345,6 +451,10 @@ class IntelligentBidAnalyzer(BidAnalyzerHelpers):
                     f'第{i + 1}到{min(i + chunk_size, len(self.bid_pages))}页AI响应JSON解析失败: {e}'
                 )
                 self.logger.error(f'AI响应内容: {ai_response}')
+            except Exception as e:
+                self.logger.error(
+                    f'第{i + 1}到{min(i + chunk_size, len(self.bid_pages))}页AI分析过程中发生未知错误: {e}'
+                )
 
         # 合并结果
         merged_result = self._merge_results(all_results)
@@ -416,18 +526,25 @@ class IntelligentBidAnalyzer(BidAnalyzerHelpers):
         # 更新评分结果
         merged['评分结果'] = [merged_scores]
 
+        self.logger.info(
+            f'合并后的结果: 投标人名称={merged["投标人名称"]}, 投标总价={merged["投标总价"]}, 评分结果数量={len(merged_scores)}'
+        )
+
         return merged
 
     def _save_analysis_results(self, analyzed_result):
         """
-        保存分析结果到数据库，包括投标人名称、投标总价和评分结果
-        """
-        if not (self.db and self.bid_document_id):
-            self.logger.warning('数据库会话或投标文件ID未提供，无法保存分析结果')
-            return
+        保存分析结果到数据库
 
+        Args:
+            analyzed_result: AI分析结果
+        """
         try:
-            # 获取或创建分析结果记录
+            if not self.db or not self.bid_document_id:
+                self.logger.warning('数据库会话或投标文件ID未设置，无法保存分析结果')
+                return
+
+            # 获取分析结果记录
             analysis_result = (
                 self.db.query(AnalysisResult)
                 .filter(AnalysisResult.bid_document_id == self.bid_document_id)
@@ -435,53 +552,46 @@ class IntelligentBidAnalyzer(BidAnalyzerHelpers):
             )
 
             if not analysis_result:
-                analysis_result = AnalysisResult(
-                    project_id=self.project_id,
-                    bid_document_id=self.bid_document_id,
-                    bidder_name=analyzed_result.get('投标人名称', self.bidder_name),
-                )
-                self.db.add(analysis_result)
-            else:
-                # 更新投标人名称
-                if '投标人名称' in analyzed_result:
-                    analysis_result.bidder_name = analyzed_result['投标人名称']
+                self.logger.warning('未找到分析结果记录，无法保存分析结果')
+                return
 
-            # 提取并保存投标总价
-            if '投标总价' in analyzed_result:
+            # 准备详细评分数据
+            detailed_scores = []
+            scores_data = analyzed_result.get('评分结果', [])
+            if scores_data and isinstance(scores_data, list):
+                for score_dict in scores_data:
+                    if isinstance(score_dict, dict):
+                        for rule_name, score in score_dict.items():
+                            detailed_scores.append(
+                                {
+                                    'Child_Item_Name': rule_name,
+                                    'score': float(
+                                        str(score).rstrip('分')
+                                    ),  # 移除"分"字并转换为数值
+                                    'reason': f'根据评分规则对{rule_name}项进行评分',
+                                }
+                            )
+
+            # 更新分析结果
+            analysis_result.detailed_scores = json.dumps(
+                detailed_scores, ensure_ascii=False
+            )
+
+            # 记录投标人名称和投标总价
+            if '投标人名称' in analyzed_result and analyzed_result['投标人名称']:
+                analysis_result.bidder_name = analyzed_result['投标人名称']
+
+            if '投标总价' in analyzed_result and analyzed_result['投标总价']:
                 try:
-                    # 尝试将投标总价转换为浮点数
-                    price_str = analyzed_result['投标总价']
-                    # 使用增强的价格提取方法
-                    price_value = self._extract_numeric_price(price_str)
+                    price_value = self._extract_numeric_price(
+                        analyzed_result['投标总价']
+                    )
                     if price_value is not None:
                         analysis_result.extracted_price = price_value
                 except (ValueError, TypeError) as e:
                     self.logger.warning(
                         f'无法解析投标总价: {analyzed_result["投标总价"]}, 错误: {e}'
                     )
-
-            # 转换评分结果格式以适应现有数据库结构
-            detailed_scores = []
-            if '评分结果' in analyzed_result and isinstance(
-                analyzed_result['评分结果'], list
-            ):
-                for score_dict in analyzed_result['评分结果']:
-                    for rule_name, score in score_dict.items():
-                        # 这里需要匹配数据库中的评分规则来获取详细信息
-                        detailed_scores.append(
-                            {
-                                'Child_Item_Name': rule_name,
-                                'score': float(
-                                    str(score).rstrip('分')
-                                ),  # 移除"分"字并转换为数值
-                                'reason': f'根据评分规则对{rule_name}项进行评分',
-                            }
-                        )
-
-            # 更新分析结果
-            analysis_result.detailed_scores = json.dumps(
-                detailed_scores, ensure_ascii=False
-            )
 
             # 计算总分
             total_score = sum(item.get('score', 0) for item in detailed_scores)
@@ -494,7 +604,8 @@ class IntelligentBidAnalyzer(BidAnalyzerHelpers):
 
         except Exception as e:
             self.logger.error(f'保存分析结果时出错: {e}')
-            self.db.rollback()
+            if self.db:
+                self.db.rollback()
 
     def _extract_numeric_price(self, price_str):
         """
@@ -552,26 +663,10 @@ class IntelligentBidAnalyzer(BidAnalyzerHelpers):
                 return float(chinese_nums[cleaned_chinese])
 
             # 处理"一百"、"一千"等格式
-            result = 0
-            temp = 0
-
-            for char in cleaned_chinese:
-                if char in chinese_nums:
-                    num = chinese_nums[char]
-                    if num >= 10:
-                        if temp == 0 and num >= 10000:  # 直接是万或亿
-                            result = num
-                        elif temp == 0:
-                            temp = num
-                        else:
-                            result += temp * num
-                            temp = 0
-                    else:
-                        temp = num
-
-            result += temp
-            return float(result) if result > 0 else None
-        except:
+            # 这里可以添加更复杂的汉字数字解析逻辑
+            # 暂时返回None，表示无法解析
+        except (ValueError, TypeError):
             pass
 
+        # 如果所有方法都失败，返回None
         return None

@@ -11,6 +11,12 @@ import subprocess
 import sys
 from PyPDF2 import PdfReader, PdfWriter
 
+# 添加项目根目录到Python路径
+sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+# 导入路径处理函数
+from main import get_platform_safe_path, safe_makedirs
+
 
 def check_ocrmypdf_installed():
     """
@@ -112,8 +118,10 @@ def ocr_pdf_pages(input_pdf, output_pdf, output_text, start_page=1, end_page=Non
         page = reader.pages[page_num]
         writer.add_page(page)
 
-    # 保存临时PDF文件
-    temp_pdf = 'temp.pdf'
+    # 保存临时PDF文件到temp_uploads目录
+    temp_dir = get_platform_safe_path('temp_uploads')
+    safe_makedirs(temp_dir)
+    temp_pdf = get_platform_safe_path(temp_dir, 'temp.pdf')
     with open(temp_pdf, 'wb') as f:
         writer.write(f)
 
@@ -121,7 +129,7 @@ def ocr_pdf_pages(input_pdf, output_pdf, output_text, start_page=1, end_page=Non
     global lang
     if 'lang' not in globals():
         lang = 'chi_sim+eng'  # 设置默认语言组合
-    
+
     # 构建OCRmyPDF命令
     # 移除了 --clean 和 --remove-background 参数，因为它们依赖于 unpaper 工具
     # 移除了 --skip-text 参数，因为它与 --force-ocr 冲突
@@ -142,7 +150,7 @@ def ocr_pdf_pages(input_pdf, output_pdf, output_text, start_page=1, end_page=Non
         '--tesseract-timeout',  # 将超时参数放在输入文件之前
         '120',  # 增加超时时间到120秒，以提高识别质量
         temp_pdf,  # 输入PDF文件（临时文件）
-        output_pdf  # 输出PDF文件
+        output_pdf,  # 输出PDF文件
     ]
 
     print(f'执行命令: {" ".join(cmd)}')
@@ -190,30 +198,30 @@ def select_file():
     try:
         import tkinter as tk
         from tkinter import filedialog
-        
+
         # 创建根窗口
         root = tk.Tk()
-        root.title("选择要OCR处理的PDF文件")
-        
+        root.title('选择要OCR处理的PDF文件')
+
         # 设置窗口尺寸为原来的三倍
-        root.geometry("900x600")  # 原来大约是 300x200
-        
+        root.geometry('900x600')  # 原来大约是 300x200
+
         # 设置文件选择器属性
         file_path = filedialog.askopenfilename(
             parent=root,
-            title="选择要OCR处理的PDF文件",
-            filetypes=[("PDF文件", "*.pdf"), ("所有文件", "*.*")]
+            title='选择要OCR处理的PDF文件',
+            filetypes=[('PDF文件', '*.pdf'), ('所有文件', '*.*')],
         )
-        
+
         # 销毁根窗口
         root.destroy()
-        
+
         return file_path
     except ImportError:
-        print("未安装tkinter，无法使用图形文件选择器")
+        print('未安装tkinter，无法使用图形文件选择器')
         return None
     except Exception as e:
-        print(f"文件选择器出现错误: {e}")
+        print(f'文件选择器出现错误: {e}')
         return None
 
 
@@ -222,34 +230,33 @@ if __name__ == '__main__':
     # 检查是否提供了命令行参数
     if len(sys.argv) > 1:
         input_pdf = sys.argv[1]
-        print(f"使用命令行参数指定的文件: {input_pdf}")
+        print(f'使用命令行参数指定的文件: {input_pdf}')
     else:
         # 尝试使用文件选择器
-        print("请选择要处理的PDF文件:")
-        # input_pdf = select_file()
-        input_pdf = r'/media/kr/软件/user/设备管理/招标评标资料/2025/旧油漆线改造/集装箱/广东创智智能装备有限公司投标文件OCR.pdf'
+        print('请选择要处理的PDF文件:')
+        input_pdf = select_file()
         # 如果文件选择器不可用或用户未选择文件，则提示用户通过命令行输入
         if not input_pdf:
-            print("请输入要处理的PDF文件路径:")
+            print('请输入要处理的PDF文件路径:')
             input_pdf = input().strip()
-            
+
         # 如果仍然没有选择文件，则退出
         if not input_pdf:
-            print("未选择文件，程序退出。")
+            print('未选择文件，程序退出。')
             sys.exit(1)
-    
+
     # 检查输入文件是否存在
     if not os.path.exists(input_pdf):
-        print(f"文件不存在: {input_pdf}")
+        print(f'文件不存在: {input_pdf}')
         sys.exit(1)
-    
+
     # 检查文件扩展名
     if not input_pdf.lower().endswith('.pdf'):
-        print("警告: 选择的文件可能不是PDF文件")
-        confirm = input("是否继续处理？(y/N): ").strip().lower()
+        print('警告: 选择的文件可能不是PDF文件')
+        confirm = input('是否继续处理？(y/N): ').strip().lower()
         if confirm != 'y':
             sys.exit(1)
-    
+
     # 根据输入文件名自动生成输出文件名
     base_name = os.path.splitext(os.path.basename(input_pdf))[0]
     output_pdf = f'{base_name}_ocr.pdf'
@@ -261,9 +268,9 @@ if __name__ == '__main__':
         print(f'输入文件: {input_pdf}')
         print(f'输出PDF文件: {output_pdf}')
         print(f'输出文本文件: {output_text}')
-        
+
         success = ocr_pdf_pages(
-            input_pdf, output_pdf, output_text, start_page=103, end_page=103
+            input_pdf, output_pdf, output_text, start_page=1, end_page=1
         )  # 处理第1页到第1页
         if success:
             print('OCR处理完成！')
@@ -274,5 +281,3 @@ if __name__ == '__main__':
         import traceback
 
         traceback.print_exc()
-
-    

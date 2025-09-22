@@ -1,8 +1,20 @@
+#!/usr/bin/env python
+# -*- coding:utf-8 -*-
+#
+# 作者           : KingFreeDom
+# 创建时间         : 2025-09-22 22:07:27
+# 最近一次编辑者      : KingFreeDom
+# 最近一次编辑时间     : 2025-09-22 22:07:30
+# 文件相对于项目的路径   : \AI_env2\diagnose_full_issue.py
+#
+# Copyright (c) 2025 by 中车眉山车辆有限公司/KingFreeDom, All Rights Reserved.
+#
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 
 """
-诊断项目6的价格提取和计算问题
+全面诊断AI_env2项目的问题
+包括价格分析失败和流式分析无结果的问题
 """
 
 import sys
@@ -16,24 +28,24 @@ from modules.database import (
     SessionLocal,
     TenderProject,
     BidDocument,
+    AnalysisResult,
     ScoringRule,
 )
-from modules.pdf_processor import PDFProcessor
 from modules.price_manager import PriceManager
+from modules.pdf_processor import PDFProcessor
 
 
-
-def diagnose_price_issue():
+def diagnose_full_issue():
     """
-    诊断项目6的价格提取和计算问题
+    全面诊断问题
     """
-    print('诊断项目6的价格提取和计算问题')
-    print('=' * 50)
+    print('全面诊断AI_env2项目问题')
+    print('=' * 60)
 
     try:
         session = SessionLocal()
 
-        # 检查项目6是否存在
+        # 检查项目6
         project = session.query(TenderProject).filter(TenderProject.id == 6).first()
         if not project:
             print('错误：项目6不存在')
@@ -43,7 +55,22 @@ def diagnose_price_issue():
         print(f'  ID: {project.id}')
         print(f'  名称: {project.name}')
         print(f'  项目代码: {project.project_code}')
-        print(f'  招标文件路径: {project.tender_file_path}')
+        print(f'  状态: {project.status}')
+        print(f'  招标文件: {project.tender_file_path}')
+
+        # 检查评分规则
+        scoring_rules = (
+            session.query(ScoringRule).filter(ScoringRule.project_id == 6).all()
+        )
+        print(f'\n评分规则数量: {len(scoring_rules)}')
+        price_rules = [r for r in scoring_rules if r.is_price_criteria]
+        print(f'  价格规则数量: {len(price_rules)}')
+        for rule in price_rules:
+            print(f'    规则ID: {rule.id}')
+            print(f'      父项名称: {rule.Parent_Item_Name}')
+            print(f'      父项分数: {rule.Parent_max_score}')
+            print(f'      描述: {rule.description}')
+            print(f'      公式: {rule.price_formula}')
 
         # 检查投标文档
         bid_docs = session.query(BidDocument).filter(BidDocument.project_id == 6).all()
@@ -78,19 +105,6 @@ def diagnose_price_issue():
                         print(f'      解析详细得分时出错: {e}')
             else:
                 print('    无分析结果')
-
-        # 检查评分规则
-        scoring_rules = (
-            session.query(ScoringRule).filter(ScoringRule.project_id == 6).all()
-        )
-        print(f'\n评分规则数量: {len(scoring_rules)}')
-        price_rules = [r for r in scoring_rules if r.is_price_criteria]
-        print(f'  价格规则数量: {len(price_rules)}')
-        for rule in price_rules:
-            print(f'    规则ID: {rule.id}')
-            print(f'      父项名称: {rule.Parent_Item_Name}')
-            print(f'      父项分数: {rule.Parent_max_score}')
-            print(f'      描述: {rule.description}')
 
         # 尝试重新提取价格
         print('\n尝试重新提取价格:')
@@ -128,4 +142,4 @@ def diagnose_price_issue():
 
 
 if __name__ == '__main__':
-    diagnose_price_issue()
+    diagnose_full_issue()

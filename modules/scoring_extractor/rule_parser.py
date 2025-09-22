@@ -5,7 +5,7 @@
 
 import re
 import logging
-from typing import List, Dict, Any, Tuple
+from typing import List, Dict, Any
 from modules.local_ai_analyzer import LocalAIAnalyzer
 
 
@@ -35,7 +35,7 @@ class ScoringRuleParser:
             rows = table.get('rows', [])
 
             # 检查是否为评分规则表格（包含评价项目和评价标准）
-            if '评价项目' in headers and '评价标准' in headers:
+            if self._is_scoring_table(headers):
                 # 解析评分规则
                 rules = self._extract_rules_from_scoring_table(headers, rows)
                 scoring_rules.extend(rules)
@@ -43,7 +43,95 @@ class ScoringRuleParser:
         # 对评分规则进行后处理，特别是对价格规则进行特殊处理
         processed_rules = self._post_process_rules(scoring_rules)
 
+        # 去除重复的规则
+        processed_rules = self._remove_duplicate_rules(processed_rules)
+
         return processed_rules
+
+    def _is_scoring_table(self, headers: List[str]) -> bool:
+        """
+        判断表格是否为评分规则表格
+
+        Args:
+            headers: 表头列表
+
+        Returns:
+            bool: 是否为评分规则表格
+        """
+        # 检查是否包含评分相关的关键字
+        scoring_keywords = [
+            '评价项目',
+            '评分项目',
+            '评审项目',
+            '评分标准',
+            '评价标准',
+            '评审标准',
+            '分值',
+            '分数',
+            '得分',
+        ]
+        header_text = ' '.join(str(h) for h in headers)
+        return any(keyword in header_text for keyword in scoring_keywords)
+
+    def _remove_duplicate_rules(
+        self, rules: List[Dict[str, Any]]
+    ) -> List[Dict[str, Any]]:
+        """
+        去除重复的评分规则
+
+        Args:
+            rules: 评分规则列表
+
+        Returns:
+            List[Dict[str, Any]]: 去重后的评分规则列表
+        """
+        if not rules:
+            return rules
+
+        unique_rules = []
+        seen_names = set()
+
+        for rule in rules:
+            # 标准化规则名称，去除空格和特殊字符差异
+            criteria_name = rule.get('criteria_name', '')
+            normalized_name = re.sub(r'[\s\(\)（）]+', '', criteria_name).strip()
+
+            # 检查是否已经见过这个规则名称
+            if normalized_name in seen_names:
+                # 找到已存在的规则
+                existing_rule = None
+                for r in unique_rules:
+                    existing_name = re.sub(
+                        r'[\s\(\)（）]+', '', r.get('criteria_name', '')
+                    ).strip()
+                    if existing_name == normalized_name:
+                        existing_rule = r
+                        break
+
+                # 如果当前规则有子项而之前没有，则替换
+                if (
+                    existing_rule
+                    and rule.get('children')
+                    and not existing_rule.get('children')
+                ):
+                    unique_rules.remove(existing_rule)
+                    unique_rules.append(rule)
+                # 如果是价格规则且已存在的也是价格规则，跳过重复的价格规则
+                elif (
+                    rule.get('is_price_criteria', False)
+                    and existing_rule
+                    and existing_rule.get('is_price_criteria', False)
+                ):
+                    continue
+                # 其他情况跳过重复项
+                else:
+                    continue
+            else:
+                # 如果没有见过这个规则名称，则添加
+                seen_names.add(normalized_name)
+                unique_rules.append(rule)
+
+        return unique_rules
 
     def _post_process_rules(self, rules: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         """
@@ -57,6 +145,25 @@ class ScoringRuleParser:
         """
         if not rules:
             return rules
+
+        # 处理每个规则的max_score，从criteria_name中提取
+        for rule in rules:
+            # 清理criteria_name
+            criteria_name = rule.get('criteria_name', '')
+            cleaned_name = self._clean_criteria_name(criteria_name)
+            rule['criteria_name'] = cleaned_name
+
+            # 清理description
+            description = rule.get('description', '')
+            if description:
+                cleaned_description = self._clean_criteria_name(description)
+                rule['description'] = cleaned_description
+
+            if not rule.get('is_price_criteria', False):
+                # 从清理后的名称中提取分数
+                max_score = self._extract_score_from_text(cleaned_name)
+                if max_score > 0:
+                    rule['max_score'] = max_score
 
         # 处理最后一个规则（价格规则）
         if rules and rules[-1].get('is_price_criteria', False):
@@ -95,19 +202,28 @@ class ScoringRuleParser:
         score_col_index = None
 
         for i, header in enumerate(headers):
-            if '评价项目' in header:
+            header_str = str(header) if header else ''
+            if (
+                '评价项目' in header_str
+                or '评分项目' in header_str
+                or '评审项目' in header_str
+            ):
                 project_col_index = i
             elif i == 1:  # 第二列通常是明细项
                 detail_col_index = i
-            elif '评价标准' in header:
+            elif (
+                '评价标准' in header_str
+                or '评审标准' in header_str
+                or '评分标准' in header_str
+            ):
                 standard_col_index = i
-            elif '分值' in header or '分数' in header or '得分' in header:
+            elif '分值' in header_str or '分数' in header_str or '得分' in header_str:
                 score_col_index = i
 
         # 如果没有找到评价标准列，尝试查找包含"标准"的列
         if standard_col_index is None:
             for i, header in enumerate(headers):
-                if '标准' in header:
+                if '标准' in str(header) if header else '':
                     standard_col_index = i
                     break
 
@@ -163,6 +279,7 @@ class ScoringRuleParser:
                 if is_parent_item:
                     # 这是父项（大项）
                     current_parent_name = project_value
+                    # 从项目名称中提取分数
                     current_parent_score = self._extract_score_from_text(project_value)
 
                     # 检查是否为价格评分规则
@@ -184,7 +301,7 @@ class ScoringRuleParser:
                     # 创建评分规则（父项）
                     rule = {
                         'criteria_name': project_value,
-                        'max_score': current_parent_score,
+                        'max_score': current_parent_score,  # 直接使用从名称中提取的分数
                         'description': standard_value
                         if not detail_value
                         else '',  # 父项通常没有详细描述
@@ -197,6 +314,7 @@ class ScoringRuleParser:
 
                     # 如果有明细项，也创建子项（但价格规则除外）
                     if detail_value and not is_price_criteria:
+                        # 从明细项名称中提取分数
                         detail_score = self._extract_score_from_text(detail_value)
                         is_detail_price_criteria = self._is_price_criteria(
                             detail_value, standard_value
@@ -204,7 +322,7 @@ class ScoringRuleParser:
 
                         child_rule = {
                             'criteria_name': detail_value,
-                            'max_score': detail_score,
+                            'max_score': detail_score,  # 直接使用从名称中提取的分数
                             'description': standard_value,
                             'is_price_criteria': is_detail_price_criteria,
                             'price_formula': price_formula
@@ -222,6 +340,7 @@ class ScoringRuleParser:
                 else:
                     # 这是子项（明细项）
                     if detail_value:
+                        # 从明细项名称中提取分数
                         detail_score = self._extract_score_from_text(detail_value)
                         is_detail_price_criteria = self._is_price_criteria(
                             detail_value, standard_value
@@ -240,7 +359,7 @@ class ScoringRuleParser:
 
                         child_rule = {
                             'criteria_name': detail_value,
-                            'max_score': detail_score,
+                            'max_score': detail_score,  # 直接使用从名称中提取的分数
                             'description': standard_value,
                             'is_price_criteria': is_detail_price_criteria,
                             'price_formula': price_formula,
@@ -386,6 +505,97 @@ class ScoringRuleParser:
         text = re.sub(r'\s+', ' ', text)
         return text
 
+    def _clean_criteria_name(self, criteria_name: str) -> str:
+        """
+        清理评分规则名称，包括替换中文标点为英文标点，去除多余空格
+
+        Args:
+            criteria_name: 原始评分规则名称
+
+        Returns:
+            str: 清理后的评分规则名称
+        """
+        if not criteria_name:
+            return ''
+
+        # 中文标点到英文标点的映射
+        punctuation_map = {
+            '（': '(',
+            '）': ')',
+            '【': '[',
+            '】': ']',
+            '《': '<',
+            '》': '>',
+            '“': '"',
+            '”': '"',
+            '‘': "'",
+            '’': "'",
+            '：': ':',
+            '；': ';',
+            '，': ',',
+            '。': '.',
+            '！': '!',
+            '？': '?',
+            '—': '-',
+            '－': '-',
+            '·': '.',
+            '…': '...',
+            '、': ',',
+            '￥': '$',
+            '％': '%',
+            '＃': '#',
+            '＆': '&',
+            '＊': '*',
+            '＋': '+',
+            '＝': '=',
+            '＜': '<',
+            '＞': '>',
+            '｛': '{',
+            '｝': '}',
+            '｜': '|',
+            '＼': '\\',
+            '／': '/',
+        }
+
+        # 替换中文标点为英文标点
+        for chinese_punct, english_punct in punctuation_map.items():
+            criteria_name = criteria_name.replace(chinese_punct, english_punct)
+
+        # 特殊处理：去除括号内数字和"分"之间的空格
+        criteria_name = re.sub(r'(\d+)\s*分\s*(?=\)|,)', r'\1分', criteria_name)
+
+        # 特殊处理：去除括号内"客观"和"分"之间的空格
+        criteria_name = re.sub(r'客观\s*分', r'客观分', criteria_name)
+
+        # 保存括号内的内容（包括空格）
+        parenthetical_parts = re.findall(r'\([^)]*\)', criteria_name)
+
+        # 去除所有空格（除了括号内的）
+        # 先将括号内容替换为占位符
+        placeholder_map = {}
+        for i, part in enumerate(parenthetical_parts):
+            placeholder = f'__PLACEHOLDER_{i}__'
+            placeholder_map[placeholder] = part
+            criteria_name = criteria_name.replace(part, placeholder, 1)
+
+        # 去除所有空格
+        criteria_name = re.sub(r'\s+', '', criteria_name)
+
+        # 重新插入括号内容，并再次清理
+        for placeholder, part in placeholder_map.items():
+            # 清理括号内的内容
+            cleaned_part = re.sub(r'(\d+)\s*分\s*(?=\)|,)', r'\1分', part)
+            cleaned_part = re.sub(r'客观\s*分', r'客观分', cleaned_part)
+            criteria_name = criteria_name.replace(placeholder, cleaned_part)
+
+        # 再次特殊处理：去除括号内数字和"分"之间的空格
+        criteria_name = re.sub(r'(\d+)\s*分\s*(?=\)|,)', r'\1分', criteria_name)
+
+        # 再次特殊处理：去除括号内"客观"和"分"之间的空格
+        criteria_name = re.sub(r'客观\s*分', r'客观分', criteria_name)
+
+        return criteria_name
+
     def _extract_score_from_text(self, text: str) -> float:
         """
         从文本中提取分数
@@ -400,9 +610,11 @@ class ScoringRuleParser:
             return 0.0
 
         # 匹配分数模式，如"10分"、"(10分)"、"10.0分"等
+        # 支持中英文括号
         score_patterns = [
             r'(\d+(?:\.\d+)?)\s*分',  # 匹配"10分"格式
             r'\((\d+(?:\.\d+)?)\s*分\)',  # 匹配"(10分)"格式
+            r'（(\d+(?:\.\d+)?)\s*分）',  # 匹配"（10分）"格式
             r'满分\s*(\d+(?:\.\d+)?)',  # 匹配"满分10"格式
         ]
 
@@ -427,7 +639,15 @@ class ScoringRuleParser:
         Returns:
             bool: 是否为价格评分规则
         """
-        price_keywords = ['价格', '报价', '投标报价', '金额', '费用']
+        price_keywords = [
+            '价格',
+            '报价',
+            '投标报价',
+            '金额',
+            '费用',
+            '评标基准价',
+            '最低价',
+        ]
         text_to_check = (project_text + ' ' + standard_text).lower()
         return any(keyword in text_to_check for keyword in price_keywords)
 

@@ -8,7 +8,7 @@
 
 import json
 from typing import List, Dict, Any
-from modules.database import SessionLocal, TenderProject, BidDocument, ScoringRule, AnalysisResult
+from modules.database import SessionLocal, BidDocument, ScoringRule, AnalysisResult
 import logging
 
 logger = logging.getLogger(__name__)

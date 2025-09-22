@@ -5,8 +5,7 @@
 
 import logging
 import json
-import re
-from typing import List, Dict, Any, Optional, Tuple, Union
+from typing import List, Dict, Any, Optional, Union
 from contextlib import contextmanager
 
 from modules.database import SessionLocal, AnalysisResult, ScoringRule, TenderProject
@@ -45,12 +44,7 @@ class PriceScoreCalculator(PriceScoreCalculatorHelpers):
     def calculate_project_price_scores(self, project_id: int) -> bool:
         """
         计算项目中所有投标人的价格分（统一计算，不针对单个投标人）
-
-        Args:
-            project_id: 项目ID
-
-        Returns:
-            bool: 是否计算成功
+        优化：确保只使用AI大模型进行价格分计算，不使用默认计算方法
         """
         try:
             self.logger.info(f'开始计算项目 {project_id} 的价格分')
@@ -121,10 +115,12 @@ class PriceScoreCalculator(PriceScoreCalculatorHelpers):
 
                 # 5. 构造发送给AI大模型的完整prompt
                 # 格式: "投标人1：投标总价1,投标人2：投标总价2,投标人3：投标总价3,......."
-                bidder_info_str = ",".join([f"{name}：{price}" for name, price in bidder_prices.items()])
-                
-                # 构造prompt
-                prompt = f"""你是一个评标专家，现在各投标人的投标总价为：『{bidder_info_str}』,价格评价标准为：『{price_rule.description}』,请计算各投标人的报价。请返回格式为JSON格式：『投标人1：价格分1,投标人2：价格分2,投标人3：价格分3,.......』,请返回结果。"""
+                bidder_info_str = ','.join(
+                    [f'{name}：{price}' for name, price in bidder_prices.items()]
+                )
+
+                # 优化：简化prompt内容
+                prompt = f"""你是一个评标专家，现在各投标人的投标总价为：『{bidder_info_str}』,价格评价标准为：『{price_rule.description}』,请计算各投标人的价格分。请返回格式为JSON格式：『投标人1：价格分1,投标人2：价格分2,投标人3：价格分3,.......』,请返回结果。"""
 
                 self.logger.info('=' * 50)
                 self.logger.info('发送给AI大模型的价格分计算请求:')
@@ -137,17 +133,19 @@ class PriceScoreCalculator(PriceScoreCalculatorHelpers):
                 # 6. 调用AI大模型计算价格分
                 try:
                     ai_response = self.ai_analyzer.analyze_text(prompt)
-                    
+
                     # 记录AI大模型的返回值
                     self.logger.info('=' * 50)
                     self.logger.info('AI大模型返回的完整响应:')
                     self.logger.info(ai_response)
                     self.logger.info('=' * 50)
-                    
+
                     # 解析AI响应
-                    price_scores = self._parse_price_scores_from_ai_response(ai_response)
+                    price_scores = self._parse_price_scores_from_ai_response(
+                        ai_response
+                    )
                     self.logger.info(f'解析后的价格分计算结果: {price_scores}')
-                    
+
                 except Exception as e:
                     self.logger.error(f'调用AI大模型计算价格分时出错: {e}')
                     return False
@@ -352,7 +350,7 @@ class PriceScoreCalculator(PriceScoreCalculatorHelpers):
             Dict[str, float]: 投标方名称到价格分的映射
         """
         # 根据新规范，此方法已废弃，仅作兼容性保留
-        self.logger.warning("调用了已废弃的 _calculate_price_scores 方法")
+        self.logger.warning('调用了已废弃的 _calculate_price_scores 方法')
         return {}
 
     def _parse_price_formula(
@@ -411,7 +409,7 @@ class PriceScoreCalculator(PriceScoreCalculatorHelpers):
             Dict[str, float]: 投标方名称到价格分的映射
         """
         # 根据新规范，此方法已废弃，仅作兼容性保留
-        self.logger.warning("调用了已废弃的 _calculate_with_custom_formula 方法")
+        self.logger.warning('调用了已废弃的 _calculate_with_custom_formula 方法')
         return {}
 
     def _parse_price_scores_from_ai_response(
@@ -437,7 +435,15 @@ class PriceScoreCalculator(PriceScoreCalculatorHelpers):
         try:
             import json
 
-            parsed_results = json.loads(ai_response)
+            # 清理响应文本，移除可能的代码块标记
+            clean_response = ai_response.strip()
+            if clean_response.startswith('```json'):
+                clean_response = clean_response[7:]
+            if clean_response.endswith('```'):
+                clean_response = clean_response[:-3]
+            clean_response = clean_response.strip()
+
+            parsed_results = json.loads(clean_response)
             if isinstance(parsed_results, dict):
                 # 验证并转换结果
                 result = {}
@@ -460,7 +466,15 @@ class PriceScoreCalculator(PriceScoreCalculatorHelpers):
 
             for match in matches:
                 try:
-                    parsed_results = json.loads(match)
+                    # 清理匹配到的JSON文本
+                    clean_match = match.strip()
+                    if clean_match.startswith('```json'):
+                        clean_match = clean_match[7:]
+                    if clean_match.endswith('```'):
+                        clean_match = clean_match[:-3]
+                    clean_match = clean_match.strip()
+
+                    parsed_results = json.loads(clean_match)
                     if isinstance(parsed_results, dict):
                         # 验证并转换结果
                         result = {}
@@ -492,6 +506,25 @@ class PriceScoreCalculator(PriceScoreCalculatorHelpers):
                 return result
         except Exception as e:
             self.logger.debug(f'方法3解析失败: {e}')
+
+        # 方法4: 尝试按逗号分隔解析
+        try:
+            # 按逗号分隔，然后解析每个部分
+            parts = ai_response.strip().split(',')
+            result = {}
+            for part in parts:
+                # 匹配 投标人名称：分数 格式
+                match = re.search(r'([^：:]+)[：:]\s*([0-9]+\.?[0-9]*)', part)
+                if match:
+                    bidder_name = match.group(1).strip()
+                    score = float(match.group(2))
+                    result[bidder_name] = score
+
+            if result:
+                self.logger.info(f'成功通过方法4解析AI响应: {result}')
+                return result
+        except Exception as e:
+            self.logger.debug(f'方法4解析失败: {e}')
 
         self.logger.warning(f'无法解析AI响应为有效的价格分计算结果: {ai_response}')
         return {}

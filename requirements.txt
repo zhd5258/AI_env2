@@ -4,7 +4,6 @@ jinja2
 numpy==1.26.4
 onnxruntime
 opencv-python-headless==4.10.0.84
-opencv-python-headless
 openpyxl==3.1.5
 orjson==3.10.7
 paddleocr

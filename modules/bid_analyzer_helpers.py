@@ -6,7 +6,6 @@
 import logging
 import json
 import re
-from typing import List, Dict, Any, Optional
 from modules.database import BidDocument, AnalysisResult
 
 

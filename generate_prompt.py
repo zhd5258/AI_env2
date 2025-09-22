@@ -6,7 +6,6 @@
 根据日志中的数据生成发送给AI大模型的prompt
 """
 
-import json
 
 def generate_price_calculation_prompt():
     """

@@ -11,6 +11,8 @@
 #
 import fitz  # PyMuPDF
 import json
+import requests
+
 
 
 class BiddingEvaluationFinder:

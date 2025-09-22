@@ -29,7 +29,7 @@ def display_detailed_price_scores():
             print("错误：项目6不存在")
             return
             
-        print(f"项目信息:")
+        print("项目信息:")
         print(f"  ID: {project.id}")
         print(f"  名称: {project.name}")
         print(f"  项目代码: {project.project_code}")
@@ -42,7 +42,7 @@ def display_detailed_price_scores():
             if doc.analysis_result and doc.analysis_result.extracted_price is not None:
                 prices[doc.bidder_name] = doc.analysis_result.extracted_price
         
-        print(f"\n所有投标人的报价:")
+        print("\n所有投标人的报价:")
         sorted_prices = sorted(prices.items(), key=lambda x: x[1])
         for bidder, price in sorted_prices:
             print(f"  {bidder}: {price:,.2f}")
@@ -54,7 +54,7 @@ def display_detailed_price_scores():
             print(f"\n最低报价: {min_bidder} - {min_price:,.2f}")
             
             # 显示价格分计算详情
-            print(f"\n价格分计算详情:")
+            print("\n价格分计算详情:")
             for bidder, price in sorted_prices:
                 if price == min_price:
                     score = 40.0  # 满分
@@ -65,7 +65,7 @@ def display_detailed_price_scores():
                     print(f"  {bidder}: 报价 {price:,.2f} -> 价格分: {score:.2f}/40.0")
         
         # 显示最终结果
-        print(f"\n最终结果:")
+        print("\n最终结果:")
         for doc in bid_docs:
             if doc.analysis_result:
                 print(f"  {doc.bidder_name}:")
@@ -74,7 +74,7 @@ def display_detailed_price_scores():
                 print(f"    价格分: {doc.analysis_result.price_score}")
         
         session.close()
-        print(f"\n显示完成!")
+        print("\n显示完成!")
         
     except Exception as e:
         print(f"显示过程中出错: {e}")

@@ -398,200 +398,57 @@ class EnhancedPriceExtractor:
         if page_index in price_summary_pages:
             confidence += 40  # 在"投标一览表"中，权重最高
         elif page_index in price_doc_pages:
-            confidence += 20  # 在"价格文件"中，权重次之
+            confidence += 20  # 在价格文档中，权重较高
 
-        # 大写中文验证加分
+        # 大写中文价格加分
         if chinese_price_str:
-            chinese_value = self.converter.chinese_to_number(chinese_price_str)
-            if chinese_value is not None:
-                # 允许一定的误差（例如，小数部分）
-                if abs(price_value - chinese_value) < 1.0:
-                    confidence += 30  # 大小写匹配，置信度极高
+            confidence += 10  # 有大写中文价格，增加可信度
 
-        # 价格本身也作为一个小的参考因素，避免选到明显的分项价格
-        confidence += min(price_value / 1000000, 5)  # 每百万加1分，最多5分
+        # 价格合理性加分（价格在合理范围内）
+        if 1000 <= price_value <= 1000000000:  # 1000元到10亿元之间
+            confidence += 10
+        elif price_value > 1000000000:  # 超过10亿元，可能是总价
+            confidence += 5
 
-        return round(confidence, 2)
+        # 限制最大置信度
+        confidence = min(confidence, 100.0)
+
+        return confidence
 
     def _identify_sections(self, pages: List[str], keywords: List[str]) -> List[int]:
         """
-        识别包含特定关键字的页面索引列表。
-        """
-        found_pages = []
-        pattern = '|'.join(keywords)
-        for i, page_text in enumerate(pages):
-            if re.search(pattern, page_text):
-                found_pages.append(i)
-        return found_pages
-
-    def _str_to_float(self, s: str) -> Optional[float]:
-        """将可能带逗号的数字字符串转换为浮点数"""
-        try:
-            return float(s.replace(',', ''))
-        except (ValueError, TypeError):
-            return None
-
-    def _is_total_price_intelligent(self, context: str, price_value: float) -> bool:
-        """
-        智能判断上下文中的价格是否为总价
+        识别包含特定关键词的页面。
 
         Args:
-            context: 包含价格的上下文文本
-            price_value: 价格数值
+            pages: 页面文本列表
+            keywords: 关键词列表
 
         Returns:
-            bool: 如果是总价返回True，否则返回False
+            List[int]: 包含关键词的页面索引列表
         """
-        # 检查上下文中是否包含价格数值和总价相关关键字
-        total_keywords = [
-            '总价',
-            '总报价',
-            '投标报价',
-            '合计',
-            '总计',
-            '报价总额',
-            '小写',
-            '大写',
-        ]
-
-        # 检查上下文中是否包含总价相关关键字
-        context_contains_keyword = any(keyword in context for keyword in total_keywords)
-
-        # 检查价格值是否在上下文中（考虑到可能的格式化差异）
-        price_str = str(price_value)
-        formatted_price_str = f'{price_value:,.2f}'  # 格式化为带逗号和两位小数
-
-        # 检查上下文中是否包含价格（原始形式或格式化形式）
-        context_contains_price = (price_str in context) or (
-            formatted_price_str in context
-        )
-
-        # 如果上下文中同时包含价格和关键字，则很可能是总价
-        if context_contains_price and context_contains_keyword:
-            return True
-
-        # 检查价格值是否较大（总价通常较大）
-        # 这是一个启发式判断，假设总价通常大于10000
-        if price_value > 10000:
-            return True
-
-        return False
-
-    # ================= 追加：保证金提取（避免与总价混读） =================
-    def _extract_bid_bonds_from_summary_page(
-        self, page_text: str, page_index: int
-    ) -> List[Dict[str, Any]]:
-        """
-        从一览表页面提取投标/履约等保证金金额（支持阿拉伯数字与中文大写）。
-        """
-        bonds: List[Dict[str, Any]] = []
-
-        bid_bond_summary_patterns = [
-            r'(保证金|投标保证金|履约保证金)[:：\s]*￥?\s*(\d[\d,]*\.?\d*)',
-            r'(保证金|投标保证金|履约保证金)[:：\s]*([壹贰叁肆伍陆柒捌玖拾佰仟万亿零一二三四五六七八九十百千万亿\s]+)',
-        ]
-
-        # 阿拉伯数字
-        m = re.search(bid_bond_summary_patterns[0], page_text, re.IGNORECASE)
-        if m:
-            line_start = page_text.rfind('\n', 0, m.start()) + 1
-            line_end = page_text.find('\n', m.end())
-            if line_end == -1:
-                line_end = len(page_text)
-            line_text = page_text[line_start:line_end]
-            # 若该行含有总价关键词，则跳过，避免混读
-            total_keywords = ['总价', '总报价', '投标报价', '合计', '总计']
-            if not any(k in line_text for k in total_keywords):
-                try:
-                    value = float(m.group(2).replace(',', ''))
-                except Exception:
-                    value = None
-                if value is not None and value > 0:
-                    bonds.append(
-                        {
-                            'value': value,
-                            'page': page_index,
-                            'confidence': 80,
-                            'reason': '保证金阿拉伯数字',
-                            'type': 'bid_bond',
-                        }
-                    )
-
-        # 中文大写
-        if not bonds:
-            m2 = re.search(bid_bond_summary_patterns[1], page_text, re.IGNORECASE)
-            if m2:
-                line_start = page_text.rfind('\n', 0, m2.start()) + 1
-                line_end = page_text.find('\n', m2.end())
-                if line_end == -1:
-                    line_end = len(page_text)
-                line_text = page_text[line_start:line_end]
-                total_keywords = ['总价', '总报价', '投标报价', '合计', '总计']
-                if not any(k in line_text for k in total_keywords):
-                    cn = re.sub(r'[^\u4e00-\u9fa5]', '', m2.group(2) or '')
-                    value = ChineseNumberConverter().chinese_to_number(cn)
-                    if value is not None and value > 0:
-                        bonds.append(
-                            {
-                                'value': value,
-                                'page': page_index,
-                                'confidence': 70,
-                                'reason': '保证金中文大写',
-                                'type': 'bid_bond',
-                            }
-                        )
-
-        return bonds
-
-    def extract_bid_bonds(self, pages: List[str]) -> List[Dict[str, Any]]:
-        """
-        公共方法：提取保证金候选金额列表（带置信度），避免与总价混读。
-        """
-        all_bonds: List[Dict[str, Any]] = []
-        bond_pages = self._identify_sections(pages, ['一览表', '保证金', '保函'])
+        matched_pages = []
         for i, page_text in enumerate(pages):
-            if i in bond_pages:
-                all_bonds.extend(
-                    self._extract_bid_bonds_from_summary_page(page_text, i)
-                )
-            else:
-                # 通用窗口匹配
-                context = page_text.replace('\n', ' ')
-                bid_bond_keywords = [
-                    '保证金',
-                    '投标保证金',
-                    '履约保证金',
-                    '质量保证金',
-                    '投标保函',
-                    '履约保函',
-                    '银行保函',
-                    '押金',
-                    '投标押金',
-                    '担保金额',
-                ]
-                for kw in bid_bond_keywords:
-                    for m in re.finditer(rf'{kw}[:：\s]*([\d,]+\.?\d*)', context):
-                        window_start = max(0, m.start() - 30)
-                        window_end = min(len(context), m.end() + 30)
-                        window_text = context[window_start:window_end]
-                        if any(
-                            k in window_text
-                            for k in ['总价', '总报价', '投标报价', '合计', '总计']
-                        ):
-                            continue
-                        try:
-                            val = float(m.group(1).replace(',', ''))
-                        except Exception:
-                            val = None
-                        if val is not None and val > 0:
-                            all_bonds.append(
-                                {
-                                    'value': val,
-                                    'page': i,
-                                    'confidence': 60,
-                                    'reason': f'保证金窗口匹配({kw})',
-                                    'type': 'bid_bond',
-                                }
-                            )
-                        break
-        return all_bonds
+            # 将页面文本转换为小写进行匹配
+            lower_text = page_text.lower()
+            # 检查是否包含任何关键词
+            if any(keyword.lower() in lower_text for keyword in keywords):
+                matched_pages.append(i)
+        return matched_pages
+
+    def _str_to_float(self, s: str) -> Optional[float]:
+        """
+        将字符串转换为浮点数，处理逗号分隔符。
+
+        Args:
+            s: 字符串
+
+        Returns:
+            Optional[float]: 转换后的浮点数，如果转换失败则返回None
+        """
+        if not s:
+            return None
+        try:
+            # 移除逗号并转换为浮点数
+            return float(s.replace(',', ''))
+        except ValueError:
+            return None

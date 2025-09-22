@@ -4,10 +4,7 @@
 """
 
 import logging
-import re
-import json
-from typing import List, Dict, Any, Optional, Tuple, Union
-from modules.database import AnalysisResult, ScoringRule
+from typing import List, Dict, Any, Optional
 
 
 class PriceScoreCalculatorHelpers:

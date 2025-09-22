@@ -6,12 +6,10 @@ PDF处理辅助模块
 import re
 import PyPDF2
 import fitz  # PyMuPDF
-import pikepdf
 from PIL import Image
 import pytesseract
 import logging
-from typing import List, Dict, Any
-import io
+from typing import List
 
 
 class PDFProcessorHelpers:

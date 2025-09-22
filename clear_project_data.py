@@ -43,6 +43,100 @@ def get_cache_path(file_path: str) -> str:
         return None
 
 
+def clear_all_data():
+    """
+    清理所有项目的数据，包括文件和数据库记录。
+    """
+    db = SessionLocal()
+    try:
+        # 1. 获取所有项目
+        projects = db.query(TenderProject).all()
+        if not projects:
+            logging.info('数据库中没有项目。')
+            return
+
+        logging.info(f"准备清理所有项目数据，共 {len(projects)} 个项目。")
+
+        # 2. 用户确认
+        confirm = input(
+            "这是一个危险操作！将永久删除所有项目的数据和文件。\n请输入 'DELETE ALL' 以确认: "
+        )
+        if confirm.strip() != 'DELETE ALL':
+            logging.warning('确认信息不匹配。操作已取消。')
+            return
+
+        logging.info('确认成功，开始清理...')
+
+        # 3. 遍历所有项目并清理
+        for project in projects:
+            logging.info(f"正在清理项目：'{project.name}' (ID: {project.id})")
+            
+            # 查找并删除关联的投标文件和缓存
+            bid_documents = (
+                db.query(BidDocument).filter(BidDocument.project_id == project.id).all()
+            )
+            if bid_documents:
+                logging.info(f'  - 找到 {len(bid_documents)} 个关联的投标文件。')
+                for doc in bid_documents:
+                    # 删除物理文件
+                    if doc.file_path and os.path.exists(doc.file_path):
+                        try:
+                            os.remove(doc.file_path)
+                            logging.info(f'    - 已删除投标文件: {doc.file_path}')
+                        except OSError as e:
+                            logging.error(f'    - 删除文件失败: {doc.file_path}, 错误: {e}')
+
+                    # 删除缓存文件
+                    cache_file = get_cache_path(doc.file_path)
+                    if cache_file and os.path.exists(cache_file):
+                        try:
+                            os.remove(cache_file)
+                            logging.info(f'    - 已删除缓存文件: {cache_file}')
+                        except OSError as e:
+                            logging.error(f'    - 删除缓存失败: {cache_file}, 错误: {e}')
+            else:
+                logging.info('  - 未找到关联的投标文件。')
+
+            # 清理招标项目文件
+            if project.tender_file_path and os.path.exists(project.tender_file_path):
+                try:
+                    os.remove(project.tender_file_path)
+                    logging.info(f'  - 已删除招标文件: {project.tender_file_path}')
+                except OSError as e:
+                    logging.error(
+                        f'  - 删除招标文件失败: {project.tender_file_path}, 错误: {e}'
+                    )
+
+        # 4. 删除所有数据库记录 (按依赖顺序)
+        logging.info('正在删除所有数据库记录...')
+
+        # 删除所有分析结果
+        deleted_count = db.query(AnalysisResult).delete()
+        logging.info(f'  - 已删除 {deleted_count} 条分析结果。')
+
+        # 删除所有评分规则
+        deleted_count = db.query(ScoringRule).delete()
+        logging.info(f'  - 已删除 {deleted_count} 条评分规则。')
+
+        # 删除所有投标文件记录
+        deleted_count = db.query(BidDocument).delete()
+        logging.info(f'  - 已删除 {deleted_count} 条投标文件记录。')
+
+        # 删除所有项目
+        deleted_count = db.query(TenderProject).delete()
+        logging.info(f'  - 已删除 {deleted_count} 个项目。')
+
+        # 5. 提交事务
+        db.commit()
+        logging.info('所有数据和文件已成功清理。')
+
+    except Exception as e:
+        logging.error(f'清理过程中发生错误: {e}')
+        db.rollback()
+    finally:
+        db.close()
+
+
 def clear_project_data(project_id: int):
     """
     清理指定项目的所有相关数据，包括文件和数据库记录。
@@ -55,13 +149,13 @@ def clear_project_data(project_id: int):
             logging.error(f'错误：未找到ID为 {project_id} 的项目。')
             return
 
-        logging.info(f"准备清理项目：'{project.project_name}' (ID: {project.id})")
+        logging.info(f"准备清理项目：'{project.name}' (ID: {project.id})")
 
         # 2. 用户确认
         confirm = input(
-            f"这是一个危险操作！将永久删除项目的所有文件和数据。\n请输入项目名称 '{project.project_name}' 以确认: "
+            f"这是一个危险操作！将永久删除项目的所有文件和数据。\n请输入项目名称 '{project.name}' 以确认: "
         )
-        if confirm.strip() != project.project_name:
+        if confirm.strip() != project.name:
             logging.warning('项目名称不匹配。操作已取消。')
             return
 
@@ -118,7 +212,7 @@ def clear_project_data(project_id: int):
 
         # 删除项目本身
         db.delete(project)
-        logging.info(f"  - 已删除项目 '{project.project_name}'。")
+        logging.info(f"  - 已删除项目 '{project.name}'。")
 
         # 5. 提交事务
         db.commit()
@@ -135,7 +229,7 @@ def clear_project_data(project_id: int):
                 )
 
         logging.info(
-            f"\n项目 {project_id} ('{project.project_name}') 的所有数据和文件已成功清理。"
+            f"\n项目 {project_id} ('{project.name}') 的所有数据和文件已成功清理。"
         )
 
     except Exception as e:
@@ -159,7 +253,8 @@ def list_projects():
         print(f'{"ID":<5} | {"项目名称":<30}')
         print('-' * 40)
         for p in projects:
-            print(f'{p.id:<5} | {p.project_name:<30}')
+            name = p.name if p.name is not None else "未命名项目"
+            print(f'{p.id:<5} | {name:<30}')
         print('-' * 40)
 
     finally:
@@ -176,12 +271,20 @@ if __name__ == '__main__':
         nargs='?',
         help='要清理的项目的ID。如果未提供，将列出所有项目。',
     )
+    parser.add_argument(
+        '--all',
+        action='store_true',
+        help='删除所有项目数据，无需选择特定项目。',
+    )
 
     args = parser.parse_args()
 
-    if args.project_id is None:
+    if args.all:
+        clear_all_data()
+    elif args.project_id is None:
         list_projects()
         print('\n请提供一个项目ID来执行清理操作。')
         print(f'用法: python {os.path.basename(__file__)} <project_id>')
+        print(f'或者使用 --all 参数删除所有数据: python {os.path.basename(__file__)} --all')
     else:
         clear_project_data(args.project_id)

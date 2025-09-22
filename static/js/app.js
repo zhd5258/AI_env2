@@ -19,6 +19,8 @@ document.addEventListener('DOMContentLoaded', function () {
     const cfgWorkers = document.getElementById('pdfPageMaxWorkers');
     const cfgPageTimeout = document.getElementById('pdfPageTimeoutSec');
     const cfgOverallMinTimeout = document.getElementById('pdfOverallMinTimeoutSec');
+    const cfgAiAnalysisPageLimit = document.getElementById('aiAnalysisPageLimit');
+    const cfgUseGpu = document.getElementById('useGpu');
     const btnSaveConfig = document.getElementById('saveSettings');
     const cfgFeedback = document.getElementById('cfg_feedback');
 
@@ -69,14 +71,39 @@ document.addEventListener('DOMContentLoaded', function () {
         });
     }
 
+    // 添加模态框隐藏事件监听器，确保正确清理背景
+    if (settingsModalElement) {
+        settingsModalElement.addEventListener('hidden.bs.modal', function () {
+            // 清理modal-open类和backdrop元素
+            document.body.classList.remove('modal-open');
+            const backdrops = document.querySelectorAll('.modal-backdrop');
+            backdrops.forEach(backdrop => backdrop.remove());
+        });
+    }
+
     async function loadRuntimeConfig () {
         try {
-            const resp = await fetch('/api/runtime-config');
-            if (!resp.ok) throw new Error(`HTTP error! status: ${resp.status}`);
-            const cfg = await resp.json();
+            // 优先按项目读取项目级默认；没有项目时回退全局默认
+            let cfg = null;
+            if (currentProjectId) {
+                const projResp = await fetch(`/api/projects/${currentProjectId}/runtime-config`);
+                if (projResp.ok) cfg = await projResp.json();
+            }
+            if (!cfg) {
+                const resp = await fetch('/api/runtime-config');
+                if (!resp.ok) throw new Error(`HTTP error! status: ${resp.status}`);
+                cfg = await resp.json();
+            }
             cfgWorkers.value = cfg.pdf_page_max_workers ?? '';
             cfgPageTimeout.value = cfg.pdf_page_timeout_sec ?? '';
             cfgOverallMinTimeout.value = cfg.pdf_overall_min_timeout_sec ?? '';
+            cfgAiAnalysisPageLimit.value = cfg.ai_analysis_page_limit ?? '';
+            // 加载OCR配置
+            const ocrResp = await fetch('/api/ocr-config');
+            if (ocrResp.ok) {
+                const ocrCfg = await ocrResp.json();
+                cfgUseGpu.checked = ocrCfg.use_gpu ?? false;
+            }
             cfgFeedback.textContent = '';
         } catch (e) {
             console.error('加载配置失败:', e);
@@ -98,19 +125,41 @@ document.addEventListener('DOMContentLoaded', function () {
                 const payload = {
                     pdf_page_max_workers: numOrNull(cfgWorkers ? cfgWorkers.value : ''),
                     pdf_page_timeout_sec: numOrNull(cfgPageTimeout ? cfgPageTimeout.value : ''),
-                    pdf_overall_min_timeout_sec: numOrNull(cfgOverallMinTimeout ? cfgOverallMinTimeout.value : '')
+                    pdf_overall_min_timeout_sec: numOrNull(cfgOverallMinTimeout ? cfgOverallMinTimeout.value : ''),
+                    ai_analysis_page_limit: numOrNull(cfgAiAnalysisPageLimit ? cfgAiAnalysisPageLimit.value : '')
                 };
-                const resp = await fetch('/api/runtime-config', {
+                // 保存到项目级别（若已创建项目），否则保存为全局默认
+                const url = currentProjectId ? `/api/projects/${currentProjectId}/runtime-config` : '/api/runtime-config';
+                const resp = await fetch(url, {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify(payload)
                 });
                 if (!resp.ok) throw new Error('保存失败');
                 const saved = await resp.json();
-                cfgFeedback.textContent = '保存成功：' + JSON.stringify(saved);
+
+                // 保存OCR配置
+                const ocrPayload = {
+                    use_gpu: cfgUseGpu ? cfgUseGpu.checked : false
+                };
+                const ocrResp = await fetch('/api/ocr-config', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(ocrPayload)
+                });
+                if (!ocrResp.ok) throw new Error('保存OCR配置失败');
+
+                cfgFeedback.textContent = '保存成功';
                 setTimeout(() => {
                     if (settingsModal) {
                         settingsModal.hide();
+                        // 注意：背景清理工作已通过hidden.bs.modal事件监听器处理
+                        // 清除配置反馈信息
+                        cfgFeedback.textContent = '';
+                        // 重置表单
+                        if (document.getElementById('settingsForm')) {
+                            document.getElementById('settingsForm').reset();
+                        }
                     }
                 }, 800);
             } catch (e) {
@@ -182,101 +231,29 @@ document.addEventListener('DOMContentLoaded', function () {
             }
 
             currentProjectId = initData.project_id;
-            progressText.innerHTML = '<i class="fas fa-user-edit me-2"></i>请确认各投标方名称后开始分析';
+            progressText.innerHTML = '<i class="fas fa-sync-alt fa-spin me-2"></i>正在启动分析...';
 
-            // 打开确认投标方名称的模态框
-            await showConfirmBiddersModal(initData);
+            // 直接以文件名作为投标方名称，立即启动分析
+            const bidders = (initData.bidder_info || []).map(b => ({ id: b.id, confirmed_name: b.bidder_name }));
+            const startResp = await fetch(`/api/projects/${currentProjectId}/start-analysis`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ bidders })
+            });
+            if (!startResp.ok) {
+                const errorText = await startResp.text();
+                throw new Error(`启动分析失败: ${startResp.status} ${startResp.statusText}\n${errorText}`);
+            }
+
+            // 启动轮询
+            startPolling(currentProjectId);
 
         } catch (error) {
             console.error('初始化上传失败:', error);
             progressText.innerHTML = `<div class="alert alert-danger mb-0"><i class="fas fa-exclamation-circle me-2"></i>上传失败: ${error.message}</div>`;
         }
     }
-
-    async function showConfirmBiddersModal (initData) {
-        const modalHtml = `
-        <div class="modal fade" id="confirmBiddersModal" tabindex="-1" aria-labelledby="confirmBiddersLabel" aria-hidden="true">
-          <div class="modal-dialog modal-lg">
-            <div class="modal-content">
-              <div class="modal-header">
-                <h5 class="modal-title" id="confirmBiddersLabel">确认投标方名称</h5>
-                <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
-              </div>
-              <div class="modal-body">
-                <p>请确认以下投标方名称是否正确，如有需要可进行修改：</p>
-                <form id="biddersForm">
-                  ${initData.bidder_info.map(bidder => `
-                    <div class="mb-3">
-                      <label for="bidderName${bidder.id}" class="form-label">${bidder.original_filename}</label>
-                      <input type="text" class="form-control" id="bidderName${bidder.id}" name="bidderName${bidder.id}" value="${bidder.bidder_name}" data-bidder-id="${bidder.id}">
-                    </div>
-                  `).join('')}
-                </form>
-              </div>
-              <div class="modal-footer">
-                <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">取消</button>
-                <button type="button" class="btn btn-primary" id="startAnalysisBtn">开始分析</button>
-              </div>
-            </div>
-          </div>
-        </div>
-        `;
-
-        // 添加模态框到页面
-        const modalElement = document.createElement('div');
-        modalElement.innerHTML = modalHtml;
-        document.body.appendChild(modalElement);
-
-        // 显示模态框
-        const modal = new bootstrap.Modal(document.getElementById('confirmBiddersModal'));
-        modal.show();
-
-        // 监听开始分析按钮点击事件
-        document.getElementById('startAnalysisBtn').addEventListener('click', async () => {
-            // 收集确认后的投标方名称
-            const formData = new FormData(document.getElementById('biddersForm'));
-            const bidders = initData.bidder_info.map(bidder => {
-                const input = document.getElementById(`bidderName${bidder.id}`);
-                return {
-                    id: bidder.id,
-                    confirmed_name: input ? input.value : bidder.bidder_name
-                };
-            });
-
-            try {
-                // 发送确认后的名称并开始分析
-                const response = await fetch(`/api/projects/${currentProjectId}/start-analysis`, {
-                    method: 'POST',
-                    headers: {
-                        'Content-Type': 'application/json',
-                    },
-                    body: JSON.stringify({ bidders })
-                });
-
-                if (!response.ok) {
-                    const errorText = await response.text();
-                    throw new Error(`服务器错误: ${response.status} ${response.statusText}\n${errorText}`);
-                }
-
-                const result = await response.json();
-                console.log('分析已启动:', result);
-
-                // 关闭模态框
-                modal.hide();
-                document.body.removeChild(modalElement);
-
-                // 启动轮询
-                startPolling(currentProjectId);
-            } catch (e) {
-                alert('启动分析失败：' + (e.message || e));
-            }
-        });
-
-        // 监听模态框关闭事件
-        document.getElementById('confirmBiddersModal').addEventListener('hidden.bs.modal', function () {
-            document.body.removeChild(modalElement);
-        });
-    }
+    // 取消上传前的确认弹窗流程，改为分析完成后再确认名称
 
     function startPolling (projectId) {
         progressText.innerHTML = '<i class="fas fa-sync-alt fa-spin me-2"></i>正在初始化分析...';
@@ -308,7 +285,7 @@ document.addEventListener('DOMContentLoaded', function () {
                 clearInterval(pollInterval);
                 progressText.innerHTML = '<i class="fas fa-check-circle me-2"></i>分析完成!';
 
-                // 弹出确认窗口，让用户确认投标人名称
+                // 弹出确认窗口，让用户确认投标人名称（分析完成后）
                 await showConfirmBidderNamesModal(projectId);
 
                 // 询问是否删除临时文件
@@ -454,22 +431,22 @@ document.addEventListener('DOMContentLoaded', function () {
                     // 如果有修改，发送更新请求
                     if (bidderUpdates.length > 0) {
                         try {
-                            const updateResponse = await fetch(`/api/projects/${projectId}/confirm-names-and-start-analysis`, {
-                                method: 'POST',
-                                headers: {
-                                    'Content-Type': 'application/json',
-                                },
-                                body: JSON.stringify({ bidders: bidderUpdates })
-                            });
-
-                            if (!updateResponse.ok) {
-                                throw new Error(`更新投标人名称失败: ${updateResponse.statusText}`);
+                            // 逐个PATCH更新，不重新启动分析
+                            for (const upd of bidderUpdates) {
+                                const resp = await fetch(`/api/bids/${upd.id}/name`, {
+                                    method: 'PATCH',
+                                    headers: { 'Content-Type': 'application/json' },
+                                    body: JSON.stringify({ new_name: upd.confirmed_name })
+                                });
+                                if (!resp.ok) {
+                                    const errText = await resp.text();
+                                    throw new Error(`更新投标人名称失败: ${resp.status} ${resp.statusText}\n${errText}`);
+                                }
                             }
-
-                            console.log('投标人名称更新成功');
+                            console.log('投标人名称批量更新成功');
                         } catch (error) {
                             console.error('更新投标人名称时出错:', error);
-                            alert('更新投标人名称失败: ' + error.message);
+                            alert('更新投标人名称失败: ' + (error.message || error));
                         }
                     }
 
