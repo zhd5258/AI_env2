@@ -620,6 +620,22 @@ def analysis_task(
             logging.error(f'未找到投标文件记录: {bid_document_id}')
             return
 
+        # 检查是否已存在对应的分析结果记录，如果不存在则创建
+        analysis_result = (
+            db.query(AnalysisResult)
+            .filter(AnalysisResult.bid_document_id == bid_document_id)
+            .first()
+        )
+        if not analysis_result:
+            analysis_result = AnalysisResult(
+                project_id=project_id,
+                bid_document_id=bid_document_id,
+                bidder_name=bid_document.bidder_name or '未知投标方',
+            )
+            db.add(analysis_result)
+            db.commit()
+            logging.info(f'为投标文件 {bid_document_id} 创建了新的分析结果记录')
+
         # 更新处理状态
         bid_document.processing_status = 'processing'
         bid_document.progress_current_rule = '开始处理'
@@ -811,6 +827,21 @@ async def confirm_names_and_start_analysis(
                 doc.bidder_name = confirmed_name
                 doc.processing_status = 'pending'
                 doc.progress_current_rule = '准备中...'
+
+                # 确保对应的分析结果记录存在
+                analysis_result = (
+                    db.query(AnalysisResult)
+                    .filter(AnalysisResult.bid_document_id == bid_id)
+                    .first()
+                )
+                if not analysis_result:
+                    analysis_result = AnalysisResult(
+                        project_id=project_id,
+                        bid_document_id=bid_id,
+                        bidder_name=confirmed_name,
+                    )
+                    db.add(analysis_result)
+
                 bid_files_info.append(
                     {
                         'id': doc.id,
@@ -837,6 +868,7 @@ async def confirm_names_and_start_analysis(
 
     except Exception as e:
         logging.error(f'启动分析时出错: {e}')
+        db.rollback()
         return JSONResponse(status_code=500, content={'error': '服务器内部错误'})
 
 
@@ -1281,6 +1313,7 @@ async def init_upload(
 
         # 保存投标文件并提取投标人名称
         bidder_info = []
+        bid_documents = []  # 保存创建的投标文档记录
         for bid_file in bid_files:
             if bid_file.filename:
                 # 保存文件
@@ -1300,6 +1333,10 @@ async def init_upload(
                 # 移除文件扩展名
                 if '.' in default_bidder_name:
                     default_bidder_name = default_bidder_name.rsplit('.', 1)[0]
+
+                # 更新投标文档记录的投标人名称
+                bid_document.bidder_name = default_bidder_name
+                bid_documents.append(bid_document)  # 保存到列表中
 
                 bidder_info.append(
                     {
@@ -1322,12 +1359,17 @@ async def init_upload(
         db.flush()
 
         # 更新投标文档记录，关联到项目
-        for info in bidder_info:
-            bid_document = (
-                db.query(BidDocument).filter(BidDocument.id == info['id']).first()
+        for bid_document in bid_documents:
+            bid_document.project_id = project.id
+
+            # 为每个投标文件创建对应的分析结果记录
+            analysis_result = AnalysisResult(
+                project_id=project.id,
+                bid_document_id=bid_document.id,
+                bidder_name=bid_document.bidder_name,
             )
-            if bid_document:
-                bid_document.project_id = project.id
+            db.add(analysis_result)
+
         db.commit()
 
         # 在后台初始化项目分析（提取评分规则）
@@ -1416,6 +1458,20 @@ async def start_analysis(
             doc.processing_status = 'pending'
             doc.progress_current_rule = '准备中...'
 
+            # 确保对应的分析结果记录存在
+            analysis_result = (
+                db.query(AnalysisResult)
+                .filter(AnalysisResult.bid_document_id == doc.id)
+                .first()
+            )
+            if not analysis_result:
+                analysis_result = AnalysisResult(
+                    project_id=project_id,
+                    bid_document_id=doc.id,
+                    bidder_name=doc.bidder_name,
+                )
+                db.add(analysis_result)
+
         project.status = 'processing'
         db.commit()
         logging.info(f'项目 {project_id} 已更新 {updated_count} 个投标方名称，开始分析')
@@ -1439,6 +1495,7 @@ async def start_analysis(
         return JSONResponse(content={'message': '分析已启动', 'project_id': project_id})
     except Exception as e:
         logging.error(f'启动分析时出错: {e}')
+        db.rollback()
         return JSONResponse(
             status_code=500, content={'error': f'服务器内部错误: {str(e)}'}
         )
