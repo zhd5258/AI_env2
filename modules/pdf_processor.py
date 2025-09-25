@@ -16,7 +16,6 @@ from .runtime_config import load_config
 from .ppocr_paddle_processor import PPOCRPaddleProcessor
 
 # 导入OCR目录中的ONNX处理器
-sys.path.append(os.path.join(os.path.dirname(__file__), '..', 'OCR'))
 from ocr_pipeline.ocr_engine_rapid import OCREngine as RapidOCREngine
 import cv2
 import numpy as np
@@ -409,7 +408,10 @@ class PDFProcessor(PDFProcessorHelpers):
                     # 增加分辨率以提高OCR准确性
                     mat = fitz.Matrix(300 / 72, 300 / 72)
                     pix = page.get_pixmap(matrix=mat)
-                    img_data = pix.tobytes('ppm')
+                    # 转换为numpy数组（OpenCV图像格式）
+                    img_data = np.frombuffer(pix.samples, dtype=np.uint8).reshape(
+                        pix.height, pix.width, pix.n
+                    )
                     # 使用PaddleOCR处理
                     text = self.paddle_processor.ocr_single_page(img_data)
                     results[page_num] = self._clean_text(text)

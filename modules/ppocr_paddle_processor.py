@@ -1,33 +1,28 @@
-import cv2
-import numpy as np
-from paddleocr import PaddleOCR
 import logging
+import numpy as np
+import cv2
+from paddleocr import PaddleOCR
+import paddle
+import warnings
+
+warnings.filterwarnings('ignore')  # 忽略警告信息
 
 
 class PPOCRPaddleProcessor:
     """
-    基于PaddleOCR高级库的OCR引擎，适配本项目调用接口。
+    使用PaddleOCR引擎进行OCR处理的类
+    (代码来自参考项目 ocr_engine_pp_ocrv5.py)
     """
 
     def __init__(self, use_gpu: bool = False):
-        """
-        初始化PaddleOCR引擎。
-
-        Args:
-            use_gpu (bool): 是否使用GPU加速。
-        """
         self.logger = logging.getLogger(__name__)
         self.use_gpu = use_gpu
+        self.ocr_engine = None
 
-        # 使用paddleocr库自动加载模型，它会自动查找~/.paddlex/official_models等路径
         try:
-            self.logger.info('正在初始化PaddleOCR，GPU模式: %s', self.use_gpu)
-
-            # 检查GPU可用性
+            # 尝试初始化PaddleOCR引擎
             if self.use_gpu:
                 try:
-                    import paddle
-
                     if not paddle.is_compiled_with_cuda():
                         self.logger.warning('PaddlePaddle未编译CUDA支持，将使用CPU模式')
                         self.use_gpu = False
@@ -38,10 +33,8 @@ class PPOCRPaddleProcessor:
             self.ocr_engine = PaddleOCR(
                 use_angle_cls=True,
                 lang='ch',
-                use_gpu=self.use_gpu,
                 # paddleocr会自动在默认路径查找模型，无需手动指定det/rec/cls_model_dir
                 # 默认路径包括 ~/.paddlex/official_models/
-                show_log=False,  # 禁止paddleocr打印过多的日志
             )
             self.logger.info('PaddleOCR引擎初始化成功')
         except ImportError as e:
@@ -108,7 +101,7 @@ class PPOCRPaddleProcessor:
 
             # 2. 执行OCR (paddleocr需要RGB格式)
             image_rgb = cv2.cvtColor(processed_image, cv2.COLOR_BGR2RGB)
-            result = self.ocr_engine.ocr(image_rgb, cls=True)
+            result = self.ocr_engine.ocr(image_rgb)  # 移除cls参数
 
             # 3. 格式化结果
             if not result or not result[0]:

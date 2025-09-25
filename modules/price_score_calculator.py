@@ -55,14 +55,12 @@ class PriceScoreCalculator(PriceScoreCalculatorHelpers):
                 .all()
             )
             price_rule = next(
-                next(
-                    (
-                        rule
-                        for rule in scoring_rules
-                        if getattr(rule, 'is_price_criteria', False)
-                    ),
-                    None,
-                )
+                (
+                    rule
+                    for rule in scoring_rules
+                    if getattr(rule, 'is_price_criteria', False)
+                ),
+                None,
             )
 
             if not price_rule:

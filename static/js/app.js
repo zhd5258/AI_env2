@@ -238,7 +238,7 @@ document.addEventListener('DOMContentLoaded', function () {
             const startResp = await fetch(`/api/projects/${currentProjectId}/start-analysis`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ bidders })
+                body: JSON.stringify(bidders)  // 直接发送bidders数组，而不是包含bidders字段的对象
             });
             if (!startResp.ok) {
                 const errorText = await startResp.text();
@@ -375,7 +375,7 @@ document.addEventListener('DOMContentLoaded', function () {
 
             // 创建模态框HTML
             const modalHtml = `
-            <div class="modal fade" id="confirmBidderNamesModal" tabindex="-1" aria-labelledby="confirmBidderNamesLabel" aria-hidden="true">
+            <div class="modal fade" id="confirmBidderNamesModal" tabindex="-1" aria-labelledby="confirmBidderNamesLabel">
               <div class="modal-dialog modal-lg">
                 <div class="modal-content">
                   <div class="modal-header">
@@ -470,7 +470,7 @@ document.addEventListener('DOMContentLoaded', function () {
     async function askToDeleteTempFiles (projectId) {
         // 创建确认删除临时文件的模态框
         const modalHtml = `
-        <div class="modal fade" id="deleteTempFilesModal" tabindex="-1" aria-labelledby="deleteTempFilesLabel" aria-hidden="true">
+        <div class="modal fade" id="deleteTempFilesModal" tabindex="-1" aria-labelledby="deleteTempFilesLabel">
           <div class="modal-dialog">
             <div class="modal-content">
               <div class="modal-header">
@@ -841,24 +841,25 @@ document.addEventListener('DOMContentLoaded', function () {
 
     async function showEditBidderNameModal (bidId, currentName) {
         const modalHtml = `
-        <div class="modal fade" id="editBidderNameModal" tabindex="-1" aria-labelledby="editBidderNameLabel" aria-hidden="true">
+        <div class="modal fade" id="editBidderNameModal" tabindex="-1" aria-labelledby="editBidderNameLabel">
           <div class="modal-dialog">
             <div class="modal-content">
               <div class="modal-header">
-                <h5 class="modal-title" id="editBidderNameLabel">编辑投标方名称</h5>
+                <h5 class="modal-title" id="editBidderNameLabel">编辑投标人名称</h5>
                 <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
               </div>
               <div class="modal-body">
                 <form id="editBidderNameForm">
                   <div class="mb-3">
-                    <label for="newBidderName" class="form-label">新的投标方名称</label>
-                    <input type="text" class="form-control" id="newBidderName" name="newBidderName" value="${currentName}">
+                    <label for="editBidderNameInput" class="form-label">投标人名称</label>
+                    <input type="text" class="form-control" id="editBidderNameInput" required>
+                    <input type="hidden" id="editBidderId">
                   </div>
                 </form>
               </div>
               <div class="modal-footer">
                 <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">取消</button>
-                <button type="button" class="btn btn-primary" id="saveBidderNameBtn">保存</button>
+                <button type="button" class="btn btn-primary" id="saveEditBidderNameBtn">保存</button>
               </div>
             </div>
           </div>
@@ -875,8 +876,8 @@ document.addEventListener('DOMContentLoaded', function () {
         modal.show();
 
         // 监听保存按钮点击事件
-        document.getElementById('saveBidderNameBtn').addEventListener('click', async () => {
-            const newName = document.getElementById('newBidderName').value.trim();
+        document.getElementById('saveEditBidderNameBtn').addEventListener('click', async () => {
+            const newName = document.getElementById('editBidderNameInput').value.trim();
             if (!newName) {
                 alert('请输入新的投标方名称');
                 return;
