@@ -197,6 +197,7 @@ class PDFProcessor(PDFProcessorHelpers):
         """
         page_num = task['page_num']
         try:
+            # 使用fitz打开PDF文件
             doc = fitz.open(self.file_path)
             page = doc[page_num]
             text = page.get_text()
@@ -290,7 +291,7 @@ class PDFProcessor(PDFProcessorHelpers):
                                     # 注意：这里我们传递的是页面数和文本内容，而不是调用不存在的方法
                                     try:
                                         # 对于单页处理，我们传递页面数和包含单个页面文本的列表
-                                        self.stream_callback(page_num, [page_text])
+                                        self.stream_callback(page_num, page_text)
                                     except Exception as cb_error:
                                         self.logger.warning(
                                             '流式处理回调执行失败: %s', cb_error
@@ -345,7 +346,7 @@ class PDFProcessor(PDFProcessorHelpers):
 
     def extract_text_with_ocr_when_needed(self) -> List[str]:
         """
-        使用PyMuPDF提取文本，对无法提取的页面使用RapidOCR处理
+        使用PyMuPDF提取文本，对无法提取的页面使用PaddleOCR处理
         这是针对投标文件的新处理方式
         """
         self.logger.info('使用PyMuPDF提取文本，对无法提取的页面使用OCR处理...')
@@ -400,19 +401,17 @@ class PDFProcessor(PDFProcessorHelpers):
                     self.logger.error('PaddleOCR处理器初始化失败: %s', e)
                     return results
 
+            # 使用fitz打开PDF文件
             doc = fitz.open(self.file_path)
             for page_num in page_numbers:
                 try:
                     page = doc[page_num - 1]
+                    # 增加分辨率以提高OCR准确性
                     mat = fitz.Matrix(300 / 72, 300 / 72)
                     pix = page.get_pixmap(matrix=mat)
-                    img_rgb = np.frombuffer(pix.samples, dtype=np.uint8).reshape(
-                        pix.height, pix.width, pix.n
-                    )
-                    if img_rgb.shape[2] == 4:
-                        img_rgb = cv2.cvtColor(img_rgb, cv2.COLOR_RGBA2RGB)
-                    img_bgr = cv2.cvtColor(img_rgb, cv2.COLOR_RGB2BGR)
-                    text = self.paddle_processor.ocr_single_page(img_bgr)
+                    img_data = pix.tobytes('ppm')
+                    # 使用PaddleOCR处理
+                    text = self.paddle_processor.ocr_single_page(img_data)
                     results[page_num] = self._clean_text(text)
                     self.logger.info(
                         'PaddleOCR成功处理页面 %d，文本长度: %d', page_num, len(text)
@@ -432,6 +431,128 @@ class PDFProcessor(PDFProcessorHelpers):
                 if p_num not in results:
                     results[p_num] = ''
         return results
+
+    def _run_rapid_ocr_on_pages(self, page_numbers: List[int]) -> Dict[int, str]:
+        """
+        使用RapidOCR在指定页面执行OCR。
+        """
+        results = {}
+        try:
+            if self.rapid_processor is None:
+                self.logger.info('初始化RapidOCR处理器')
+                try:
+                    self.rapid_processor = RapidOCREngine()
+                except Exception as e:
+                    self.logger.error('RapidOCR处理器初始化失败: %s', e)
+                    return results
+
+            # 使用fitz打开PDF文件
+            doc = fitz.open(self.file_path)
+            for page_num in page_numbers:
+                try:
+                    page = doc[page_num - 1]
+                    # 增加分辨率以提高OCR准确性
+                    mat = fitz.Matrix(300 / 72, 300 / 72)
+                    pix = page.get_pixmap(matrix=mat)
+                    # 转换为numpy数组
+                    img_data = np.frombuffer(pix.samples, dtype=np.uint8).reshape(
+                        pix.height, pix.width, pix.n
+                    )
+                    # 使用RapidOCR处理
+                    ocr_result = self.rapid_processor.ocr(img_data)
+                    # 提取文本
+                    text = ''
+                    if ocr_result and len(ocr_result) > 0 and ocr_result[0] is not None:
+                        for item in ocr_result[0]:
+                            if item and len(item) > 1 and item[1] is not None:
+                                text += str(item[1][0]) + ' '
+                    results[page_num] = self._clean_text(text)
+                    self.logger.info(
+                        'RapidOCR成功处理页面 %d，文本长度: %d', page_num, len(text)
+                    )
+                except Exception as page_exc:
+                    self.logger.error(
+                        '使用RapidOCR处理页面 %d 时出错: %s',
+                        page_num,
+                        page_exc,
+                        exc_info=True,
+                    )
+                    results[page_num] = ''
+            doc.close()
+        except Exception as e:
+            self.logger.error('RapidOCR处理过程中发生一般错误: %s', e, exc_info=True)
+            for p_num in page_numbers:
+                if p_num not in results:
+                    results[p_num] = ''
+        return results
+
+    def process_pdf_full_text(self) -> List[str]:
+        """
+        全文本处理模式：全部读取文本后再处理
+        首先尝试使用PyMuPDF读取，不能读取的页面改为采用PaddleOCR识别
+        全部文本化后保存
+        """
+        self.logger.info('开始全文本处理模式...')
+
+        if not os.path.exists(self.file_path):
+            self.logger.error('PDF文件不存在: %s', self.file_path)
+            return []
+
+        # 首先尝试从缓存或temp_word目录加载
+        cached_text = self._load_from_cache()
+        if cached_text:
+            self.logger.info('使用缓存的PDF文本')
+            return cached_text
+
+        temp_word_text = self._load_from_temp_word()
+        if temp_word_text:
+            self.logger.info('使用temp_word目录中的PDF文本')
+            return temp_word_text
+
+        try:
+            # 使用PyMuPDF提取文本
+            pages_text = self.extract_text_per_page(use_cache=False)
+
+            # 检查哪些页面需要OCR处理
+            pages_to_ocr = []
+            char_threshold = 30  # 文本字符数阈值
+            for i, page_text in enumerate(pages_text):
+                if len(page_text.strip()) < char_threshold:
+                    self.logger.info(
+                        f'第 {i + 1} 页文本内容过少 (长度: {len(page_text.strip())})，标记为需要OCR处理'
+                    )
+                    pages_to_ocr.append(i + 1)  # 页码从1开始
+
+            # 对需要OCR的页面进行OCR处理
+            if pages_to_ocr:
+                self.logger.info(f'对以下页面进行OCR处理: {pages_to_ocr}')
+                if self.use_paddle_ocr:
+                    ocr_results = self._run_paddle_ocr_on_pages(pages_to_ocr)
+                else:
+                    ocr_results = self._run_rapid_ocr_on_pages(pages_to_ocr)
+
+                # 将OCR结果替换到原页面文本中
+                for page_num, ocr_text in ocr_results.items():
+                    # 只有当OCR文本比原始文本更丰富时才替换
+                    original_text = pages_text[page_num - 1]
+                    if len(ocr_text.strip()) > len(original_text.strip()):
+                        self.logger.info(f'使用OCR结果替换第 {page_num} 页的原始文本')
+                        pages_text[page_num - 1] = ocr_text
+                    else:
+                        self.logger.info(
+                            f'第 {page_num} 页的OCR结果不如原始文本，保持原始文本'
+                        )
+
+            # 保存处理后的文本
+            self._save_to_cache(pages_text)
+            self._save_to_temp_word(pages_text)
+
+            self.logger.info(f'PDF全文本处理完成，共处理 {len(pages_text)} 页')
+            return pages_text
+
+        except Exception as e:
+            self.logger.error('全文本处理PDF时发生未知错误: %s', e)
+            return []
 
     def stream_process_pdf(self, chunk_size: int = 3) -> List[str]:
         """
@@ -518,7 +639,7 @@ class PDFProcessor(PDFProcessorHelpers):
                                     try:
                                         self.stream_callback(
                                             processed_pages,
-                                            all_pages_text[:processed_pages],
+                                            text_content,
                                         )
                                     except Exception as cb_error:
                                         self.logger.warning(
@@ -557,89 +678,8 @@ class PDFProcessor(PDFProcessorHelpers):
             results_sorted = sorted(results, key=lambda x: x['page'])
             all_pages_text = [r.get('text', '') for r in results_sorted]
 
-            # 保存到缓存和temp_word目录
-            self._save_to_cache(all_pages_text)
-
-            self.logger.info(f'PDF流式处理完成，共处理 {len(all_pages_text)} 页')
-            return all_pages_text
-
         except Exception as e:
             self.logger.error('流式处理PDF时发生未知错误: %s', e)
-            return []
 
-    def _run_rapid_ocr_on_pages(self, page_numbers: List[int]) -> Dict[int, str]:
-        """
-        在指定页面上运行RapidOCR
-
-        Args:
-            page_numbers: 需要OCR的页面号列表（从1开始）
-
-        Returns:
-            Dict[int, str]: 页面号到OCR文本的映射
-        """
-        results = {}
-        try:
-            # 懒加载RapidOCR处理器
-            if self.rapid_processor is None:
-                self.logger.info('初始化RapidOCR处理器，GPU模式: %s', self.use_gpu)
-                try:
-                    self.rapid_processor = RapidOCREngine(
-                        lang='ch',
-                        use_angle_cls=True,
-                        use_gpu=self.use_gpu,
-                    )
-                    self.logger.info('RapidOCR处理器初始化成功')
-                except Exception as e:
-                    self.logger.error('RapidOCR处理器初始化失败: %s', e)
-                    return results
-
-            processor = self.rapid_processor
-
-            doc = fitz.open(self.file_path)
-            for page_num in page_numbers:
-                try:
-                    page = doc[page_num - 1]  # fitz是0索引
-                    # 以高DPI渲染页面为图像以获得更好的OCR结果
-                    mat = fitz.Matrix(300 / 72, 300 / 72)  # 300 DPI
-                    pix = page.get_pixmap(matrix=mat)
-
-                    # 将pixmap样本转换为numpy数组（RGB格式）
-                    img_rgb = np.frombuffer(pix.samples, dtype=np.uint8).reshape(
-                        pix.height, pix.width, pix.n
-                    )
-
-                    # 如果图像有alpha通道，移除它
-                    if img_rgb.shape[2] == 4:
-                        img_rgb = cv2.cvtColor(img_rgb, cv2.COLOR_RGBA2RGB)
-
-                    # 转换为BGR格式供OpenCV和RapidOCR使用
-                    img_bgr = cv2.cvtColor(img_rgb, cv2.COLOR_RGB2BGR)
-
-                    # 在图像上运行OCR
-                    ocr_lines = processor.infer(img_bgr)
-                    # 将OCR结果合并为文本
-                    text = (
-                        '\n'.join([line.text for line in ocr_lines])
-                        if ocr_lines
-                        else ''
-                    )
-                    results[page_num] = self._clean_text(text)
-                    self.logger.info(
-                        'RapidOCR成功处理页面 %d，文本长度: %d', page_num, len(text)
-                    )
-                except Exception as page_exc:
-                    self.logger.error(
-                        '使用RapidOCR处理页面 %d 时出错: %s',
-                        page_num,
-                        page_exc,
-                        exc_info=True,
-                    )
-                    results[page_num] = ''
-            doc.close()
-        except Exception as e:
-            self.logger.error('RapidOCR处理过程中发生一般错误: %s', e, exc_info=True)
-            # 确保所有请求的页面在结果中都有条目
-            for p_num in page_numbers:
-                if p_num not in results:
-                    results[p_num] = ''
-        return results
+        self._save_to_cache(all_pages_text)
+        return all_pages_text
