@@ -116,6 +116,43 @@ body {
     margin-top: 15px;
 }
 
+/* 批量操作样式 */
+.batch-operations {
+    background-color: #f8f9fa;
+    border: 1px solid #dee2e6;
+    border-radius: 0.375rem;
+    padding: 0.75rem;
+}
+
+.batch-operations .form-check-input {
+    margin-top: 0.125rem;
+}
+
+.bid-file-checkbox {
+    margin-right: 0.5rem !important;
+}
+
+/* 文件列表卡片样式调整 */
+.file-list .card-body .d-flex {
+    gap: 0.5rem;
+}
+
+/* 通知样式 */
+.alert.position-fixed {
+    animation: slideInRight 0.3s ease-out;
+}
+
+@keyframes slideInRight {
+    from {
+        transform: translateX(100%);
+        opacity: 0;
+    }
+    to {
+        transform: translateX(0);
+        opacity: 1;
+    }
+}
+
 .result-section {
     background: white;
     border-radius: 15px;

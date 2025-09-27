@@ -1,0 +1,21 @@
+[MASTER]
+# 忽略的文件和目录
+ignore=venv,__pycache__,.git,.pytest_cache,temp_word
+
+[MESSAGES CONTROL]
+# 禁用日志格式相关的警告
+disable=logging-format-interpolation,
+        logging-fstring-interpolation,
+        logging-not-lazy
+
+[FORMAT]
+# 最大行长度
+max-line-length=120
+
+[BASIC]
+# 好的变量名
+good-names=i,j,k,ex,Run,_,id,db,ai,ui,io,os,sys,re,df,dt,ts,url,api,id,pk,obj,cls,self,args,kwargs
+
+[REPORTS]
+# 消息格式
+msg-template={path}:{line}:{column}: {msg_id}: {msg} ({symbol})

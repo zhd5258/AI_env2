@@ -3,7 +3,8 @@ import json
 from typing import List, Dict, Any
 from .pdf_processor import PDFProcessor
 from .database import ScoringRule
-from modules.scoring_extractor.core import IntelligentScoringExtractor
+from modules.analysis_manager import AnalysisManager
+from modules.scoring_rules_manager import ScoringRulesManager
 
 
 class TenderAnalyzer:
@@ -24,7 +25,7 @@ class TenderAnalyzer:
         """
         提取招标文件文本并保存到temp_word目录
         """
-        self.logger.info(f'开始提取招标文件文本: {self.tender_file_path}')
+        self.logger.info('开始提取招标文件文本: %s', self.tender_file_path)
 
         try:
             # 使用PDFProcessor提取文本
@@ -34,7 +35,7 @@ class TenderAnalyzer:
             if not pages_text or not any(pages_text):
                 raise ValueError('未能提取到有效的招标文件文本内容')
 
-            self.logger.info(f'成功提取招标文件文本，共 {len(pages_text)} 页')
+            self.logger.info('成功提取招标文件文本，共 %d 页', len(pages_text))
 
             # 确保文本也保存到temp_word目录
             processor._save_to_temp_word(pages_text)
@@ -48,27 +49,48 @@ class TenderAnalyzer:
 
     def extract_scoring_rules(self) -> List[Dict[str, Any]]:
         """
-        从招标文件PDF中提取评分规则，使用新的 IntelligentScoringExtractor。
+        从招标文件PDF中提取评分规则，使用统一的分析管理器。
         """
-        self.logger.info('开始使用 IntelligentScoringExtractor 提取评分规则...')
+        self.logger.info('开始使用 AnalysisManager 提取评分规则...')
 
         try:
-            # 1. 初始化并使用新的提取器
-            extractor = IntelligentScoringExtractor()
-            
-            # 2. 直接从PDF路径提取规则
-            #    extract 方法返回的是一个扁平化的规则列表，可以直接使用
-            rules = extractor.extract(self.tender_file_path)
+            # 1. 初始化并使用分析管理器
+            analysis_manager = AnalysisManager(db_session=self.db)
 
-            if not rules:
-                self.logger.warning('IntelligentScoringExtractor 未能提取到任何评分规则。')
+            # 2. 提取评分规则
+            extract_result = analysis_manager.initialize_project_analysis(
+                self.project_id
+            )
+
+            if not extract_result:
+                self.logger.warning('AnalysisManager 未能提取到任何评分规则。')
                 return []
 
-            self.logger.info(f'成功提取 {len(rules)} 条评分规则')
-            return rules
+            # 3. 获取提取的评分规则
+            rules_manager = ScoringRulesManager(db_session=self.db)
+            scoring_rules = rules_manager.get_scoring_rules(self.project_id)
+
+            # 转换为字典格式
+            rules_data = []
+            for rule in scoring_rules:
+                rules_data.append(
+                    {
+                        'criteria_name': rule.Parent_Item_Name or rule.Child_Item_Name,
+                        'max_score': rule.Parent_max_score or rule.Child_max_score,
+                        'is_price_criteria': rule.is_price_criteria,
+                        'description': rule.description,
+                    }
+                )
+
+            self.logger.info('成功提取 %d 条评分规则', len(rules_data))
+            return rules_data
 
         except Exception as e:
-            self.logger.error(f'使用 IntelligentScoringExtractor 提取评分规则时出错: {e}', exc_info=True)
+            self.logger.error(
+                '使用 AnalysisManager 提取评分规则时出错: %s',
+                e,
+                exc_info=True,
+            )
             return []
 
     def save_scoring_rules_to_db(self, rules: List[Dict[str, Any]]) -> bool:
@@ -80,48 +102,13 @@ class TenderAnalyzer:
             return False
 
         try:
-            # 先删除该项目已有的评分规则
-            self.db.query(ScoringRule).filter(
-                ScoringRule.project_id == self.project_id
-            ).delete()
+            # 使用统一的评分规则管理器保存评分规则
+            # ScoringRulesManager 已在顶部导入，无需重复导入
 
-            # 保存新的评分规则
-            for rule_data in rules:
-                # The new extractor provides a nested structure, we need to flatten it for DB insertion
-                self._save_rule_and_children(rule_data)
-
-            self.db.commit()
-            self.logger.info(f'成功保存评分规则到数据库')
-            return True
+            rules_manager = ScoringRulesManager(db_session=self.db)
+            save_result = rules_manager.save_scoring_rules(self.project_id, rules)
+            return save_result
 
         except Exception as e:
             self.logger.error(f'保存评分规则到数据库时出错: {e}', exc_info=True)
-            self.db.rollback()
             return False
-
-    def _save_rule_and_children(self, rule_data: Dict[str, Any], parent_name: str = '', parent_score: float = 0.0):
-        """
-        递归保存父项和子项规则
-        """
-        # Create the main rule object for the DB
-        rule = ScoringRule(
-            project_id=self.project_id,
-            Parent_Item_Name=parent_name if parent_name else rule_data.get('criteria_name', ''),
-            Parent_max_score=parent_score if parent_name else rule_data.get('max_score', 0),
-            Child_Item_Name=rule_data.get('criteria_name', '') if parent_name else None,
-            Child_max_score=rule_data.get('max_score', 0) if parent_name else None,
-            description=rule_data.get('description', ''),
-            is_price_criteria=rule_data.get('is_price_criteria', False),
-            is_veto=rule_data.get('is_veto', False),
-            price_formula=rule_data.get('price_formula', '')
-        )
-        self.db.add(rule)
-
-        # If there are children, recurse
-        if 'children' in rule_data and rule_data['children']:
-            for child_rule_data in rule_data['children']:
-                self._save_rule_and_children(
-                    child_rule_data,
-                    parent_name=rule_data.get('criteria_name', ''),
-                    parent_score=rule_data.get('max_score', 0)
-                )

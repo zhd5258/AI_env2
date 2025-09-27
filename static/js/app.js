@@ -174,31 +174,190 @@ document.addEventListener('DOMContentLoaded', function () {
             return;
         }
 
-        let html = '<h5 class="mb-3"><i class="fas fa-file-alt me-2"></i>已选择的文件：</h5><div class="row">';
+        let html = '<h5 class="mb-3"><i class="fas fa-file-alt me-2"></i>已选择的文件：</h5>';
+        
+        // 如果有投标文件，添加批量操作工具栏
+        if (uploadedFiles.bids.length > 0) {
+            html += `
+                <div class="batch-operations mb-3">
+                    <div class="d-flex justify-content-between align-items-center">
+                        <div>
+                            <label class="form-check-label">
+                                <input type="checkbox" id="selectAllBids" class="form-check-input me-2">
+                                全选投标文件
+                            </label>
+                        </div>
+                        <div>
+                            <button type="button" class="btn btn-outline-danger btn-sm" id="deleteSelectedBids" disabled>
+                                <i class="fas fa-trash-alt me-1"></i>删除选中文件
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            `;
+        }
+        
+        html += '<div class="row">';
         if (uploadedFiles.tender) {
-            html += createFileListItem(uploadedFiles.tender, '招标文件', 'primary');
+            html += createFileListItem(uploadedFiles.tender, '招标文件', 'primary', false);
         }
         uploadedFiles.bids.forEach((file, index) => {
-            html += createFileListItem(file, `投标文件 #${index + 1}`, 'info');
+            html += createFileListItem(file, `投标文件 #${index + 1}`, 'info', true, index);
         });
         html += '</div>';
         if (fileList) fileList.innerHTML = html;
+        
+        // 添加事件监听器
+        setupBatchOperationListeners();
     }
 
-    function createFileListItem (file, title, color) {
+    function createFileListItem (file, title, color, showCheckbox = false, fileIndex = null) {
+        const checkboxHtml = showCheckbox ? 
+            `<div class="form-check me-3">
+                <input class="form-check-input bid-file-checkbox" type="checkbox" 
+                       data-file-index="${fileIndex}" id="bidFile${fileIndex}">
+            </div>` : '';
+        
         return `
             <div class="col-md-6 mb-2">
                 <div class="card border-start border-4 border-${color} h-100">
                     <div class="card-body">
-                        <h6 class="card-title text-${color}">
-                            <i class="fas fa-file-pdf me-2"></i>${title}
-                        </h6>
-                        <p class="card-text mb-1">${file.name}</p>
-                        <small class="text-muted">${(file.size / 1024 / 1024).toFixed(2)} MB</small>
+                        <div class="d-flex align-items-start">
+                            ${checkboxHtml}
+                            <div class="flex-grow-1">
+                                <h6 class="card-title text-${color}">
+                                    <i class="fas fa-file-pdf me-2"></i>${title}
+                                </h6>
+                                <p class="card-text mb-1">${file.name}</p>
+                                <small class="text-muted">${(file.size / 1024 / 1024).toFixed(2)} MB</small>
+                            </div>
+                        </div>
                     </div>
                 </div>
             </div>
         `;
+    }
+
+    function setupBatchOperationListeners() {
+        // 全选/取消全选
+        const selectAllCheckbox = document.getElementById('selectAllBids');
+        if (selectAllCheckbox) {
+            selectAllCheckbox.addEventListener('change', function() {
+                const bidCheckboxes = document.querySelectorAll('.bid-file-checkbox');
+                bidCheckboxes.forEach(checkbox => {
+                    checkbox.checked = this.checked;
+                });
+                updateDeleteButtonState();
+            });
+        }
+
+        // 单个文件选择框变化
+        const bidCheckboxes = document.querySelectorAll('.bid-file-checkbox');
+        bidCheckboxes.forEach(checkbox => {
+            checkbox.addEventListener('change', function() {
+                updateSelectAllState();
+                updateDeleteButtonState();
+            });
+        });
+
+        // 删除选中文件按钮
+        const deleteButton = document.getElementById('deleteSelectedBids');
+        if (deleteButton) {
+            deleteButton.addEventListener('click', function() {
+                const selectedIndexes = getSelectedFileIndexes();
+                if (selectedIndexes.length > 0) {
+                    const fileNames = selectedIndexes.map(index => uploadedFiles.bids[index].name).join('\n');
+                    if (confirm(`确定要删除以下 ${selectedIndexes.length} 个文件吗？\n\n${fileNames}`)) {
+                        deleteSelectedFiles(selectedIndexes);
+                    }
+                }
+            });
+        }
+    }
+
+    function updateSelectAllState() {
+        const selectAllCheckbox = document.getElementById('selectAllBids');
+        const bidCheckboxes = document.querySelectorAll('.bid-file-checkbox');
+        
+        if (selectAllCheckbox && bidCheckboxes.length > 0) {
+            const checkedCount = Array.from(bidCheckboxes).filter(cb => cb.checked).length;
+            selectAllCheckbox.checked = checkedCount === bidCheckboxes.length;
+            selectAllCheckbox.indeterminate = checkedCount > 0 && checkedCount < bidCheckboxes.length;
+        }
+    }
+
+    function updateDeleteButtonState() {
+        const deleteButton = document.getElementById('deleteSelectedBids');
+        const selectedCount = getSelectedFileIndexes().length;
+        
+        if (deleteButton) {
+            deleteButton.disabled = selectedCount === 0;
+            deleteButton.innerHTML = selectedCount > 0 ? 
+                `<i class="fas fa-trash-alt me-1"></i>删除选中文件 (${selectedCount})` :
+                '<i class="fas fa-trash-alt me-1"></i>删除选中文件';
+        }
+    }
+
+    function getSelectedFileIndexes() {
+        const selectedIndexes = [];
+        const bidCheckboxes = document.querySelectorAll('.bid-file-checkbox:checked');
+        bidCheckboxes.forEach(checkbox => {
+            const index = parseInt(checkbox.getAttribute('data-file-index'));
+            selectedIndexes.push(index);
+        });
+        return selectedIndexes.sort((a, b) => b - a); // 逆序，从后往前删除
+    }
+
+    function deleteSelectedFiles(selectedIndexes) {
+        try {
+            // 从后往前删除，避免索引混乱
+            selectedIndexes.forEach(index => {
+                if (index >= 0 && index < uploadedFiles.bids.length) {
+                    uploadedFiles.bids.splice(index, 1);
+                }
+            });
+
+            // 更新文件输入框（清空并重新设置剩余文件）
+            const bidFilesInput = document.getElementById('bidFiles');
+            if (bidFilesInput) {
+                const dt = new DataTransfer();
+                uploadedFiles.bids.forEach(file => {
+                    dt.items.add(file);
+                });
+                bidFilesInput.files = dt.files;
+            }
+
+            // 更新文件列表显示
+            updateFileList();
+
+            // 显示成功消息
+            const deletedCount = selectedIndexes.length;
+            showNotification(`成功删除 ${deletedCount} 个投标文件`, 'success');
+
+        } catch (error) {
+            console.error('删除文件失败:', error);
+            showNotification('删除文件失败: ' + error.message, 'error');
+        }
+    }
+
+    function showNotification(message, type = 'info') {
+        // 创建通知元素
+        const notification = document.createElement('div');
+        notification.className = `alert alert-${type === 'success' ? 'success' : type === 'error' ? 'danger' : 'info'} alert-dismissible fade show position-fixed`;
+        notification.style.cssText = 'top: 20px; right: 20px; z-index: 1050; min-width: 300px;';
+        notification.innerHTML = `
+            ${message}
+            <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
+        `;
+
+        document.body.appendChild(notification);
+
+        // 3秒后自动移除
+        setTimeout(() => {
+            if (notification.parentNode) {
+                notification.remove();
+            }
+        }, 3000);
     }
 
     async function startAnalysis () {
@@ -238,7 +397,13 @@ document.addEventListener('DOMContentLoaded', function () {
             const startResp = await fetch(`/api/projects/${currentProjectId}/start-analysis`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify(bidders)  // 直接发送bidders数组，而不是包含bidders字段的对象
+                // 修复：根据API要求，需要发送包含bidders字段的对象，并且字段名应为name而不是confirmed_name
+                body: JSON.stringify({
+                    bidders: bidders.map(b => ({
+                        id: b.id,
+                        name: b.confirmed_name
+                    }))
+                })
             });
             if (!startResp.ok) {
                 const errorText = await startResp.text();
@@ -288,8 +453,8 @@ document.addEventListener('DOMContentLoaded', function () {
                 // 弹出确认窗口，让用户确认投标人名称（分析完成后）
                 await showConfirmBidderNamesModal(projectId);
 
-                // 询问是否删除临时文件
-                await askToDeleteTempFiles(projectId);
+                // 询问是否删除临时文件 - 暂时注释掉以便检查文本提取结果
+                // await askToDeleteTempFiles(projectId);
 
                 // 确认后显示结果
                 await fetchAndDisplayResults(projectId);

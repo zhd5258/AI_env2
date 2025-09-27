@@ -25,7 +25,6 @@ except ImportError:
     except ImportError:
         PDFProcessor = None
 
-import fitz  # PyMuPDF
 import pdfplumber
 
 
@@ -80,8 +79,8 @@ class TableAnalyzer:
         tables_info = []
 
         try:
-            with fitz.open(self.pdf_path) as doc:
-                for page_num, page in enumerate(doc, 1):
+            with pdfplumber.open(self.pdf_path) as doc:
+                for page_num, page in enumerate(doc.pages, 1):
                     try:
                         tables = page.find_tables()
                         for table_index, table in enumerate(tables):
@@ -104,48 +103,16 @@ class TableAnalyzer:
                                         'cols': cols,
                                         'headers': headers,
                                         'data': extracted_table,
-                                        'engine': 'pymupdf',
-                                    }
-                                )
-                    except Exception as page_e:
-                        self.logger.warning(f'处理第{page_num}页表格时出错: {page_e}')
-                        continue
-        except Exception as e:
-            self.logger.error(f'使用PyMuPDF提取表格时出错: {e}')
-
-        # 追加使用pdfplumber的表格识别，增强可编辑PDF提取效果
-        try:
-            with pdfplumber.open(self.pdf_path) as plumber_doc:
-                for page_num, page in enumerate(plumber_doc.pages, 1):
-                    try:
-                        plumber_tables = page.extract_tables() or []
-                        for table_index, extracted_table in enumerate(plumber_tables):
-                            if extracted_table and len(extracted_table) > 0:
-                                rows = len(extracted_table)
-                                cols = (
-                                    max(len(row) for row in extracted_table)
-                                    if extracted_table
-                                    else 0
-                                )
-                                headers = extracted_table[0] if extracted_table else []
-                                tables_info.append(
-                                    {
-                                        'page': page_num,
-                                        'table_index': table_index,
-                                        'rows': rows,
-                                        'cols': cols,
-                                        'headers': headers,
-                                        'data': extracted_table,
                                         'engine': 'pdfplumber',
                                     }
                                 )
-                    except Exception as p_e:
+                    except Exception as page_e:
                         self.logger.warning(
-                            f'pdfplumber处理第{page_num}页表格时出错: {p_e}'
+                            '处理第%s页表格时出错: %s', page_num, page_e
                         )
                         continue
         except Exception as e:
-            self.logger.error(f'使用pdfplumber提取表格时出错: {e}')
+            self.logger.error('使用pdfplumber提取表格时出错: %s', e)
 
         return tables_info
 

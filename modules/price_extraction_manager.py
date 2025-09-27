@@ -1,9 +1,17 @@
+#!/usr/bin/env python
+# -*- coding:utf-8 -*-
+#
+# 作者           : KingFreeDom
+# 创建时间         : 2025-09-26 18:12:11
+# 最近一次编辑者      : KingFreeDom
+# 最近一次编辑时间     : 2025-09-26 18:48:38
+# 文件相对于项目的路径   : \AI_env2\modules\price_extraction_manager.py
+#
+# Copyright (c) 2025 by 中车眉山车辆有限公司/KingFreeDom, All Rights Reserved.
+#
+import logging
 import re
 from typing import List, Dict, Any, Optional
-import logging
-
-# 设置日志
-logger = logging.getLogger(__name__)
 
 
 class ChineseNumberConverter:
@@ -88,8 +96,11 @@ class ChineseNumberConverter:
         return total
 
 
-class EnhancedPriceExtractor:
+class PriceExtractionManager:
+    """价格提取管理器，统一处理价格提取相关功能"""
+
     def __init__(self):
+        self.logger = logging.getLogger(__name__)
         self.converter = ChineseNumberConverter()
         # 优先匹配包含明确关键字的模式
         self.total_price_keywords = ['总价', '总报价', '投标报价', '合计', '总计']
@@ -121,15 +132,120 @@ class EnhancedPriceExtractor:
         ]
         # 通用价格模式，作为补充
         self.general_price_patterns = [
-            r'￥\\s*([\\d,]+\\.?\\d*)',
-            r'([\\d,]+\\.?\\d*)\\s*元',
+            r'￥\s*([\d,]+\.?\d*)',
+            r'([\d,]+\.?\d*)\s*元',
         ]
         # 专门针对价格一览表的模式
         self.price_summary_patterns = [
-            r'(小写).*?(\\d[\\d,]*\\.?\\d*)',
-            r'(大写).*?([壹贰叁肆伍陆柒捌玖拾佰仟万亿零一二三四五六七八九十百千万亿]+)',
-            r'(总报价|总价).*?(\\d[\\d,]*\\.?\\d*)',
+            # 投标一览表专用模式
+            r'(投标总价|投标报价|总报价|总价)[:：\s]*([\d,]+\.?\d*)\s*元?',
+            r'(小写)[:：\s]*([\d,]+\.?\d*)\s*元?',
+            r'(大写)[:：\s]*([壹贰叁肆伍陆柒捌玖拾佰仟万亿零一二三四五六七八九十百千万亿]+)',
+            r'([\d,]+\.?\d*)\s*元\s*(?:大写|小写)?',
+            # 表格格式的价格
+            r'(投标报价|总价|总报价)[\s\S]*?([\d,]+\.?\d*)\s*元',
+            r'([\d,]+\.?\d*)\s*元[\s\S]*?(投标报价|总价|总报价)',
         ]
+
+    def extract_prices_from_content(self, pages: List[str]) -> List[Dict[str, Any]]:
+        """
+        从PDF页面内容中提取价格信息
+
+        Args:
+            pages: PDF页面文本列表
+
+        Returns:
+            List[Dict[str, Any]]: 价格信息列表，每个元素包含value、confidence等字段
+        """
+        try:
+            # 使用增强的价格提取器提取价格
+            prices = self.extract_enhanced_prices(pages)
+
+            # 过滤掉明显不合理的低价（如小于1000元的价格）
+            filtered_prices = [p for p in prices if p['value'] >= 1000]
+
+            self.logger.info(
+                f'从{len(pages)}页内容中提取到{len(filtered_prices)}个有效价格'
+            )
+            return filtered_prices
+        except Exception as e:
+            self.logger.error(f'提取价格时出错: {e}')
+            return []
+
+    def select_best_price(
+        self, prices: List[Dict[str, Any]], pages: List[str]
+    ) -> Optional[float]:
+        """
+        选择最佳价格，优先选择"投标一览表"中的高置信度价格
+
+        Args:
+            prices: 价格信息列表
+            pages: PDF页面文本列表
+
+        Returns:
+            Optional[float]: 最佳价格，如果未找到则返回None
+        """
+        if not prices:
+            return None
+
+        # 1. 优先选择来自"投标一览表"且置信度大于80的价格
+        summary_page_prices = [
+            p
+            for p in prices
+            if p.get('confidence', 0) > 80
+            and ('一览表' in p.get('reason', '') or '投标一览表' in p.get('reason', ''))
+        ]
+
+        if summary_page_prices:
+            # 按置信度排序，选择置信度最高的
+            best_price = sorted(
+                summary_page_prices, key=lambda x: x['confidence'], reverse=True
+            )[0]
+            self.logger.info(
+                f'选择来自投标一览表的高置信度价格: {best_price["value"]} (置信度: {best_price["confidence"]})'
+            )
+            return best_price['value']
+
+        # 2. 如果没有投标一览表中的高置信度价格，则选择置信度最高的价格
+        prices_sorted = sorted(
+            prices, key=lambda x: x.get('confidence', 0), reverse=True
+        )
+        best_price = prices_sorted[0]
+
+        self.logger.info(
+            f'选择置信度最高的价格: {best_price["value"]} (置信度: {best_price["confidence"]})'
+        )
+        return best_price['value']
+
+    def extract_and_select_price(self, pages: List[str]) -> Optional[float]:
+        """
+        提取并选择最佳价格的一体化方法
+
+        Args:
+            pages: PDF页面文本列表
+
+        Returns:
+            Optional[float]: 最佳价格，如果未找到则返回None
+        """
+        self.logger.info(f'开始价格提取，共 {len(pages)} 页')
+
+        # 提取所有价格
+        prices = self.extract_prices_from_content(pages)
+        self.logger.info(f'提取到 {len(prices)} 个价格')
+
+        if not prices:
+            self.logger.warning('未提取到任何有效价格')
+            return None
+
+        # 选择最佳价格
+        best_price = self.select_best_price(prices, pages)
+
+        if best_price is not None:
+            self.logger.info(f'最终选择的最佳价格: {best_price}')
+        else:
+            self.logger.warning('未能选择出最佳价格')
+
+        return best_price
 
     def extract_enhanced_prices(self, pages: List[str]) -> List[Dict[str, Any]]:
         """
@@ -137,9 +253,17 @@ class EnhancedPriceExtractor:
         """
         all_prices = []
 
-        # 1. 识别关键章节
+        # 1. 识别关键章节 - 优先识别投标一览表
         price_summary_pages = self._identify_sections(
-            pages, ['投标一览表', '开标一览表', '价格一览表']
+            pages,
+            [
+                '投标一览表',
+                '开标一览表',
+                '价格一览表',
+                '投标报价一览表',
+                '报价一览表',
+                '投标文件一览表',
+            ],
         )
         price_doc_pages = self._identify_sections(pages, ['价格文件', '报价部分'])
 
@@ -227,6 +351,7 @@ class EnhancedPriceExtractor:
         """
         从价格一览表页面提取价格，特别处理小写和大写价格对照的情况
         """
+        self.logger.info(f'开始从第 {page_index} 页提取价格，页面包含"投标一览表"')
         prices = []
         xiaoxie_price = None
         daxie_price_text = None
@@ -248,6 +373,8 @@ class EnhancedPriceExtractor:
         for pattern in xiaoxie_patterns[:6]:  # 前6个模式是更明确的关键字
             xiaoxie_match = re.search(pattern, page_text, re.IGNORECASE)
             if xiaoxie_match:
+                self.logger.info(f'模式匹配成功: {pattern}')
+                self.logger.info(f'匹配结果: {xiaoxie_match.groups()}')
                 xiaoxie_price_str = xiaoxie_match.group(2)  # 获取价格组
                 # 行级过滤以排除保证金等干扰项
                 line_start = page_text.rfind('\n', 0, xiaoxie_match.start()) + 1
@@ -255,9 +382,12 @@ class EnhancedPriceExtractor:
                 if line_end == -1:
                     line_end = len(page_text)
                 line_text = page_text[line_start:line_end]
+                self.logger.info(f'匹配行文本: {line_text}')
                 if any(k in line_text for k in self.exclude_keywords):
+                    self.logger.info('该行包含排除关键词，跳过')
                     continue
                 xiaoxie_price = self._str_to_float(xiaoxie_price_str)
+                self.logger.info(f'解析的价格值: {xiaoxie_price}')
                 if (
                     xiaoxie_price is not None and xiaoxie_price > 1000
                 ):  # 过滤掉过小的价格（如1.00）
@@ -269,6 +399,7 @@ class EnhancedPriceExtractor:
                             'reason': f'价格一览表明确关键字价格 (pattern: {pattern})',
                         }
                     )
+                    self.logger.info(f'成功添加价格: {xiaoxie_price}')
                     break  # 找到第一个有效价格就停止
 
         # 如果没找到明确关键字，再使用通用模式
@@ -354,25 +485,6 @@ class EnhancedPriceExtractor:
                         break
 
         return prices
-
-    def select_best_total_price(self, prices: List[Dict[str, Any]]) -> Optional[float]:
-        """
-        根据置信度选择最可信的投标总价。
-        """
-        if not prices:
-            return None
-
-        # 按置信度降序排序，置信度相同则选择较大的价格
-        prices.sort(key=lambda x: (x['confidence'], x['value']), reverse=True)
-
-        # 打印排序后的价格列表以供调试
-        logger.info('按置信度排序后的价格列表:')
-        for p in prices[:5]:  # 只打印前5个
-            logger.info(
-                f'  - 价格: {p["value"]}, 置信度: {p["confidence"]}, 来源页: {p["page"] + 1}, 原因: {p.get("reason", "N/A")}'
-            )
-
-        return prices[0]['value']
 
     def _calculate_price_confidence(
         self,

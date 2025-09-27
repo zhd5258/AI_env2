@@ -3,6 +3,7 @@
 负责计算投标人的价格得分
 """
 
+import json
 import logging
 from typing import Dict, Any, Optional
 from sqlalchemy.orm import Session
@@ -100,13 +101,38 @@ class PriceScoreCalculator(PriceScoreCalculatorHelpers):
                 [f'{name}：{price}' for name, price in bidder_prices.items()]
             )
 
+            # 获取价格分的最高分
+            price_max_score = price_rule.Child_max_score or 40  # 默认40分
+
             # 构造发送给AI大模型的prompt
-            prompt = f"""你是一个评标专家，现在各投标人的投标总价为：『{bidder_info_str}』,价格评价标准为：『{price_rule.description}』,请计算各投标人的价格分。请返回格式为JSON格式：『投标人1：价格分1,投标人2：价格分2,投标人3：价格分3,.......』,请返回结果。"""
+            prompt = f"""你是一个专业的评标专家，请根据以下信息计算各投标人的价格分：
+
+【投标人报价信息】
+{bidder_info_str}
+
+【价格评价标准】
+{price_rule.description}
+
+【价格分满分】
+{price_max_score}分
+
+【计算要求】
+1. 根据价格评价标准计算每个投标人的价格分
+2. 价格分必须是0-{price_max_score}之间的数字（满分为{price_max_score}分）
+3. 最低价的投标人应该得到最高分（{price_max_score}分）
+4. 严格按照价格评价标准中的计算公式进行计算
+
+【重要】请严格按照以下JSON格式返回结果，不要返回任何解释文字：
+{{"投标人1": 价格分1, "投标人2": 价格分2, "投标人3": 价格分3}}
+
+示例（假设满分为40分）：
+{{"公司A": 38.2, "公司B": 40.0, "公司C": 35.3}}"""
 
             self.logger.info('=' * 50)
             self.logger.info('发送给AI大模型的价格分计算请求:')
             self.logger.info(f'投标人报价信息: {bidder_info_str}')
             self.logger.info(f'价格评价标准: {price_rule.description}')
+            self.logger.info(f'价格分满分: {price_max_score}分')
             self.logger.info('完整prompt:')
             self.logger.info(prompt)
             self.logger.info('=' * 50)
@@ -123,7 +149,25 @@ class PriceScoreCalculator(PriceScoreCalculatorHelpers):
 
                 # 解析AI响应
                 price_scores = self._parse_price_scores_from_ai_response(ai_response)
-                self.logger.info(f'解析后的价格分计算结果: {price_scores}')
+
+                # 验证和修正价格分，确保不超过最高分
+                validated_scores = {}
+                for bidder_name, score in price_scores.items():
+                    if score > price_max_score:
+                        self.logger.warning(
+                            f'投标人 {bidder_name} 的AI计算价格分 {score} 超过最高分 {price_max_score}，自动修正为最高分'
+                        )
+                        validated_scores[bidder_name] = price_max_score
+                    elif score < 0:
+                        self.logger.warning(
+                            f'投标人 {bidder_name} 的AI计算价格分 {score} 小于0，自动修正为0'
+                        )
+                        validated_scores[bidder_name] = 0
+                    else:
+                        validated_scores[bidder_name] = round(score, 2)
+
+                price_scores = validated_scores
+                self.logger.info(f'验证和修正后的价格分计算结果: {price_scores}')
 
             except Exception as e:
                 self.logger.error(f'调用AI大模型计算价格分时出错: {e}')
@@ -181,13 +225,19 @@ class PriceScoreCalculator(PriceScoreCalculatorHelpers):
                     other_scores_total = 0
                     if result.detailed_scores is not None:
                         try:
-                            detailed_scores = (
-                                result.detailed_scores
-                                if isinstance(result.detailed_scores, list)
-                                else []
-                            )
+                            # 解析JSON字符串格式的detailed_scores
+                            if isinstance(result.detailed_scores, str):
+                                detailed_scores = json.loads(result.detailed_scores)
+                            elif isinstance(result.detailed_scores, list):
+                                detailed_scores = result.detailed_scores
+                            else:
+                                detailed_scores = []
+
                             other_scores_total = self._calculate_other_scores_total(
                                 detailed_scores
+                            )
+                            self.logger.info(
+                                f'投标人 {bidder_name} 的子项得分总和: {other_scores_total}'
                             )
                         except Exception as e:
                             self.logger.error(
@@ -241,11 +291,45 @@ class PriceScoreCalculator(PriceScoreCalculatorHelpers):
                 clean_response = clean_response[:-3]
             clean_response = clean_response.strip()
 
-            # 解析响应内容
-            # 响应格式应该是："投标人1：价格分1,投标人2：价格分2,投标人3：价格分3,......."
+            # 尝试多种解析方式
             price_scores = {}
 
-            # 分割各个投标人的结果
+            # 方式1：尝试从响应中提取JSON部分
+            try:
+                # 使用正则表达式提取JSON部分，忽略垃圾数据
+                import re
+
+                # 更强大的JSON提取正则，支持嵌套和中文字符
+                json_match = re.search(r'\{[\s\S]*?\}', clean_response)
+                if json_match:
+                    json_str = json_match.group()
+                    # 进一步清理，移除可能的<|endoftext|>等标记
+                    json_str = re.sub(
+                        r'<\|endoftext\|>.*$', '', json_str, flags=re.DOTALL
+                    )
+                    json_str = json_str.strip()
+                    self.logger.info(f'提取到JSON字符串: {json_str}')
+                    json_data = json.loads(json_str)
+                    if isinstance(json_data, dict):
+                        for name, score in json_data.items():
+                            if isinstance(score, (int, float)):
+                                price_scores[str(name)] = float(score)
+                        self.logger.info(f'JSON解析成功: {price_scores}')
+                        return price_scores
+                else:
+                    # 如果没有找到JSON格式，尝试直接解析整个响应
+                    json_data = json.loads(clean_response)
+                    if isinstance(json_data, dict):
+                        for name, score in json_data.items():
+                            if isinstance(score, (int, float)):
+                                price_scores[str(name)] = float(score)
+                        self.logger.info(f'直接JSON解析成功: {price_scores}')
+                        return price_scores
+            except json.JSONDecodeError:
+                self.logger.warning('JSON解析失败，尝试文本解析')
+
+            # 方式2：文本解析
+            # 响应格式应该是："投标人1：价格分1,投标人2：价格分2,投标人3：价格分3,......."
             bidder_results = clean_response.split(',')
             for result in bidder_results:
                 # 分割投标人名称和价格分
@@ -282,7 +366,7 @@ class PriceScoreCalculator(PriceScoreCalculatorHelpers):
                             )
                             continue
 
-            self.logger.info(f'成功解析价格分: {price_scores}')
+            self.logger.info(f'文本解析成功: {price_scores}')
             return price_scores
         except Exception as e:
             self.logger.error(f'解析AI响应时出错: {e}')
@@ -301,9 +385,11 @@ class PriceScoreCalculator(PriceScoreCalculatorHelpers):
         total = 0
         try:
             for item in detailed_scores:
-                # 跳过价格分项
-                if item.get('is_price_criteria') or '价格' in item.get(
-                    'criteria_name', ''
+                # 跳过价格分项 - 修正字段名检查
+                if (
+                    item.get('is_price_criteria')
+                    or '价格' in item.get('Child_Item_Name', '')
+                    or '价格' in item.get('criteria_name', '')
                 ):
                     continue
 

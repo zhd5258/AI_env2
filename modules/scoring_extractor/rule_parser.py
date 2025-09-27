@@ -291,6 +291,7 @@ class ScoringRuleParser:
                     price_formula = None
                     if is_price_criteria:
                         # 对于价格规则，我们需要从整行数据中提取完整的价格评价规则
+                        # 只在处理父项时提取一次完整的价格评价规则
                         price_evaluation_rule = (
                             self._extract_full_price_evaluation_rule(row_values)
                         )
@@ -348,14 +349,8 @@ class ScoringRuleParser:
 
                         # 子项继承父项的价格公式（如果是价格项）
                         price_formula = None
-                        if is_detail_price_criteria:
-                            # 对于价格规则，我们需要从整行数据中提取完整的价格评价规则
-                            price_evaluation_rule = (
-                                self._extract_full_price_evaluation_rule(row_values)
-                            )
-                            price_formula = self._generate_price_formula_with_ai(
-                                price_evaluation_rule
-                            )
+                        # 对于子项，我们不再重复提取完整的价格评价规则
+                        # 如果是价格项，价格公式应该由父项提供
 
                         child_rule = {
                             'criteria_name': detail_value,
