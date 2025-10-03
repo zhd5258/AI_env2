@@ -1,0 +1,16 @@
+flask
+flask-cors
+sqlalchemy
+pypdf2
+PyMuPDF
+pikepdf
+pillow
+pytesseract
+requests
+jinja2
+pypdf
+pdfplumber
+mineru
+openpyxl
+python-docx
+pandas

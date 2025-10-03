@@ -9,7 +9,7 @@ OCRmyPDF处理器模块
 import os
 import subprocess
 import logging
-from typing import Optional
+from typing import List, Optional
 from PyPDF2 import PdfReader, PdfWriter
 
 

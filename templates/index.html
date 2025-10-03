@@ -1,208 +1,404 @@
+<!--
+ * @作者           : KingFreeDom
+ * @创建时间         : 2025-10-03 14:14:22
+ * @最近一次编辑者      : KingFreeDom
+ * @最近一次编辑时间     : 2025-10-03 15:07:10
+ * @文件相对于项目的路径   : \AI_env2\templates\index.html
+ * @
+ * @Copyright (c) 2025 by 中车眉山车辆有限公司/KingFreeDom, All Rights Reserved. 
+-->
 <!DOCTYPE html>
 <html lang="zh-CN">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>AI智能投标文件评价系统</title>
-    <!-- 引入 Bootstrap CSS -->
-    <!-- 将CDN引用改为本地引用 -->
-    <link href="/static/css/bootstrap.min.css" rel="stylesheet">
-    <!-- 引入 Font Awesome -->
-    <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css" rel="stylesheet">
-    <!-- 引入自定义CSS -->
-    <link href="/static/css/style.css" rel="stylesheet">
-    <!-- 加载 Chart.js -->
+    <title>智能评标系统</title>
+    <link rel="stylesheet" href="/public/css/style.css">
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            max-width: 800px;
+            margin: 0 auto;
+            padding: 20px;
+        }
+        .upload-section {
+            border: 1px solid #ddd;
+            padding: 20px;
+            border-radius: 5px;
+            margin-bottom: 20px;
+        }
+        .form-group {
+            margin-bottom: 15px;
+        }
+        label {
+            display: block;
+            margin-bottom: 5px;
+            font-weight: bold;
+        }
+        input[type="file"] {
+            width: 100%;
+            padding: 10px;
+            border: 1px solid #ddd;
+            border-radius: 3px;
+        }
+        button {
+            background-color: #007bff;
+            color: white;
+            padding: 10px 20px;
+            border: none;
+            border-radius: 3px;
+            cursor: pointer;
+        }
+        button:hover {
+            background-color: #0056b3;
+        }
+        .result {
+            margin-top: 20px;
+            padding: 15px;
+            border-radius: 3px;
+            display: none;
+        }
+        .result.success {
+            background-color: #d4edda;
+            border: 1px solid #c3e6cb;
+            color: #155724;
+        }
+        .result.error {
+            background-color: #f8d7da;
+            border: 1px solid #f5c6cb;
+            color: #721c24;
+        }
+        /* 分析进度样式 */
+        .progress-section {
+            display: none;
+            margin-top: 20px;
+            padding: 20px;
+            border: 1px solid #ddd;
+            border-radius: 5px;
+        }
+        .progress-bar-container {
+            width: 100%;
+            background-color: #f0f0f0;
+            border-radius: 5px;
+            margin: 10px 0;
+        }
+        .progress-bar {
+            height: 20px;
+            background-color: #007bff;
+            border-radius: 5px;
+            text-align: center;
+            line-height: 20px;
+            color: white;
+            font-size: 12px;
+        }
+        .document-progress {
+            margin: 15px 0;
+            padding: 10px;
+            border: 1px solid #eee;
+            border-radius: 3px;
+        }
+        .document-progress.completed {
+            background-color: #d4edda;
+        }
+        .document-progress.processing {
+            background-color: #cce7ff;
+        }
+        .document-progress.error {
+            background-color: #f8d7da;
+        }
+        /* 文件列表样式 */
+        .file-list-section {
+            margin-top: 20px;
+            padding: 15px;
+            border: 1px solid #ddd;
+            border-radius: 5px;
+            display: none;
+        }
+        .file-item {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 8px;
+            border-bottom: 1px solid #eee;
+        }
+        .file-item:last-child {
+            border-bottom: none;
+        }
+        .file-info {
+            flex-grow: 1;
+        }
+        .file-actions {
+            margin-left: 10px;
+        }
+        .remove-btn {
+            background-color: #dc3545;
+            color: white;
+            border: none;
+            padding: 5px 10px;
+            border-radius: 3px;
+            cursor: pointer;
+        }
+        .remove-btn:hover {
+            background-color: #c82333;
+        }
+    </style>
 </head>
 <body>
-    <div class="container">
-        <div class="header d-flex justify-content-between align-items-start">
-            <div>
-                <h1><i class="fas fa-file-contract me-2"></i>AI智能投标文件评价系统</h1>
-                <p class="lead">基于人工智能技术，自动分析和评估投标文件，提升评标效率和准确性</p>
+    <h1>智能评标系统</h1>
+    
+    <div class="upload-section">
+        <form id="uploadForm" enctype="multipart/form-data">
+            <div class="form-group">
+                <label for="tender_file">招标文件:</label>
+                <input type="file" id="tender_file" name="tender_file" accept=".pdf,.doc,.docx" required>
             </div>
-            <div class="mt-2">
-                <button class="btn btn-outline-secondary" id="btnOpenSettings">
-                    <i class="fas fa-sliders-h me-1"></i>系统设置
-                </button>
-                <button class="btn btn-outline-primary ms-2" id="btnHistory">
-                    <i class="fas fa-history me-1"></i>历史项目
-                </button>
+            
+            <div class="form-group">
+                <label for="bid_files">投标文件 (可多选):</label>
+                <input type="file" id="bid_files" name="bid_files" multiple accept=".pdf,.doc,.docx" required>
+            </div>
+            
+            <button type="submit">上传文件</button>
+        </form>
+    </div>
+    
+    <!-- 文件列表显示区域 -->
+    <div id="fileListSection" class="file-list-section">
+        <h3>已选择的文件</h3>
+        <div id="tenderFileList">
+            <h4>招标文件:</h4>
+            <div id="tenderFilesContainer"></div>
+        </div>
+        <div id="bidFileList">
+            <h4>投标文件:</h4>
+            <div id="bidFilesContainer"></div>
+        </div>
+    </div>
+    
+    <div id="result" class="result"></div>
+    
+    <!-- 分析进度显示区域 -->
+    <div id="progressSection" class="progress-section">
+        <h2>分析进度</h2>
+        <div>
+            <p>项目ID: <span id="projectId"></span></p>
+            <p>总进度: <span id="totalProgress">0%</span></p>
+            <div class="progress-bar-container">
+                <div id="totalProgressBar" class="progress-bar" style="width: 0%;">0%</div>
             </div>
         </div>
-        
-        <div class="upload-section">
-            <form id="uploadForm">
-                <div class="mb-4">
-                    <label for="tenderFile" class="form-label">
-                        <i class="fas fa-file-pdf me-2 text-danger"></i>选择招标文件
-                    </label>
-                    <input type="file" class="form-control" id="tenderFile" accept=".pdf,.doc,.docx">
-                </div>
-                
-                <div class="mb-4">
-                    <label for="bidFiles" class="form-label">
-                        <i class="fas fa-file-invoice me-2 text-info"></i>选择投标文件（可多选）
-                    </label>
-                    <input type="file" class="form-control" id="bidFiles" multiple accept=".pdf,.doc,.docx">
-                </div>
-                
-                <div id="fileList" class="file-list mb-4">
-                    <!-- 文件列表将在这里显示 -->
-                    <div class="text-muted">尚未选择任何文件</div>
-                </div>
-
-                <div class="d-grid">
-                    <button type="submit" class="btn btn-primary btn-lg">
-                        <i class="fas fa-cogs me-2"></i>开始智能分析
-                    </button>
-                </div>
-            </form>
-        </div>
-
-        <div class="progress-container" id="progressContainer" style="display: none;">
-            <h3 class="mb-4"><i class="fas fa-spinner me-2"></i>分析进度</h3>
-            <div class="progress mb-3">
-                <div class="progress-bar progress-bar-striped progress-bar-animated" 
-                     role="progressbar" 
-                     id="progressBar"
-                     style="width: 0%">
-                </div>
-            </div>
-            <div id="progressText" class="text-center fw-bold mb-4"></div>
-
-            <div id="detailedProgress">
-                <!-- Detailed progress will be shown here -->
-            </div>
-        </div>
-
-        <div id="resultArea" class="result-section">
-            <!-- 分析结果将在这里显示 -->
-        </div>
-
-        <!-- 结果详情模态框 -->
-        <div class="modal fade" id="resultDetailsModal" tabindex="-1" aria-labelledby="resultDetailsModalLabel">
-            <div class="modal-dialog modal-xl modal-dialog-scrollable">
-                <div class="modal-content">
-                    <div class="modal-header">
-                        <h5 class="modal-title" id="resultDetailsModalLabel">详细分析</h5>
-                        <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal" aria-label="Close"></button>
-                    </div>
-                    <div class="modal-body" id="modalBody">
-                        <!-- Section for Price Chart -->
-                        <div class="mb-5">
-                            <h4><i class="fas fa-dollar-sign me-2"></i>价格与价格分对比</h4>
-                            <div style="height: 400px;">
-                                <canvas id="priceChart"></canvas>
-                            </div>
-                        </div>
-                        
-                        <hr>
-
-                        <!-- Section for Detailed Scores Table -->
-                        <div>
-                            <h4><i class="fas fa-list me-2"></i>详细评分表</h4>
-                            <div class="table-responsive" id="detailedScoresTable">
-                                <!-- Detailed scores table will be inserted here -->
-                            </div>
-                        </div>
-                    </div>
-                    <div class="modal-footer">
-                        <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">关闭</button>
-                    </div>
-                </div>
-            </div>
-        </div>
-        
-        <!-- 系统设置模态框 -->
-        <div class="modal fade" id="settingsModal" tabindex="-1" aria-labelledby="settingsModalLabel">
-            <div class="modal-dialog">
-                <div class="modal-content">
-                    <div class="modal-header">
-                        <h5 class="modal-title" id="settingsModalLabel">系统设置</h5>
-                        <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
-                    </div>
-                    <div class="modal-body">
-                        <form id="settingsForm">
-                            <div class="mb-3">
-                                <label for="pdfPageMaxWorkers" class="form-label">PDF页面处理最大并发数</label>
-                                <input type="number" class="form-control" id="pdfPageMaxWorkers" min="1" max="32">
-                                <div class="form-text">建议值: 4-8 (根据CPU核心数调整)</div>
-                            </div>
-                            <div class="mb-3">
-                                <label for="pdfPageTimeoutSec" class="form-label">单页PDF处理超时(秒)</label>
-                                <input type="number" class="form-control" id="pdfPageTimeoutSec" min="5" max="300">
-                                <div class="form-text">建议值: 60-120</div>
-                            </div>
-                            <div class="mb-3">
-                                <label for="pdfOverallMinTimeoutSec" class="form-label">整体PDF处理最小超时(秒)</label>
-                                <input type="number" class="form-control" id="pdfOverallMinTimeoutSec" min="30" max="3600">
-                                <div class="form-text">建议值: 180-600</div>
-                            </div>
-                            <div class="mb-3">
-                                <label for="aiAnalysisPageLimit" class="form-label">AI分析页面数量限制</label>
-                                <input type="number" class="form-control" id="aiAnalysisPageLimit" min="1" max="100">
-                                <div class="form-text">发送给AI大模型分析的页面数量，默认为10页</div>
-                            </div>
-                            <div class="mb-3">
-                                <label class="form-label">OCR配置</label>
-                                <div class="form-check">
-                                    <input class="form-check-input" type="checkbox" id="useGpu">
-                                    <label class="form-check-label" for="useGpu">
-                                        启用GPU加速 (需要支持CUDA的显卡)
-                                    </label>
-                                </div>
-                            </div>
-                            <div id="cfg_feedback" class="form-text text-success"></div>
-                        </form>
-                    </div>
-                    <div class="modal-footer">
-                        <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">取消</button>
-                        <button type="button" class="btn btn-primary" id="saveSettings">保存设置</button>
-                    </div>
-                </div>
-            </div>
+        <div id="documentProgressList">
+            <!-- 各投标文件进度将在这里动态添加 -->
         </div>
     </div>
 
-    <!-- 引入 Bootstrap JS -->
-    <!-- 将CDN引用改为本地引用 -->
-    <script src="/static/js/bootstrap.bundle.min.js"></script>
-    <!-- 引入 Chart.js -->
-    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
-    <!-- 引入自定义 JS -->
-    <script src="/static/js/app.js?v=20250922"></script>
+    <script src="/public/js/main.js"></script>
     <script>
-        // 页面加载完成后添加按钮事件监听
-        document.addEventListener('DOMContentLoaded', function() {
-            // 系统设置按钮事件
-            const btnOpenSettings = document.getElementById('btnOpenSettings');
-            if (btnOpenSettings) {
-                btnOpenSettings.addEventListener('click', function() {
-                    // 触发app.js中的设置功能
-                    if (typeof loadRuntimeConfig === 'function') {
-                        loadRuntimeConfig().then(() => {
-                            // 注意：不要在这里重复创建模态框实例，app.js中已经创建了
-                            // 直接使用已存在的Bootstrap模态框实例
-                            const settingsModalElement = document.getElementById('settingsModal');
-                            if (settingsModalElement) {
-                                // 使用Bootstrap的Modal API显示模态框
-                                const modal = bootstrap.Modal.getInstance(settingsModalElement) || 
-                                             new bootstrap.Modal(settingsModalElement);
-                                modal.show();
-                            }
-                        });
-                    }
-                });
+        // 全局变量
+        let projectId = null;
+        let progressInterval = null;
+        let selectedTenderFile = null;
+        let selectedBidFiles = [];
+        
+        // 监听文件选择变化
+        document.getElementById('tender_file').addEventListener('change', function(e) {
+            selectedTenderFile = e.target.files[0];
+            updateFileList();
+        });
+        
+        document.getElementById('bid_files').addEventListener('change', function(e) {
+            selectedBidFiles = Array.from(e.target.files);
+            updateFileList();
+        });
+        
+        // 更新文件列表显示
+        function updateFileList() {
+            const fileListSection = document.getElementById('fileListSection');
+            const tenderFilesContainer = document.getElementById('tenderFilesContainer');
+            const bidFilesContainer = document.getElementById('bidFilesContainer');
+            
+            // 清空现有列表
+            tenderFilesContainer.innerHTML = '';
+            bidFilesContainer.innerHTML = '';
+            
+            // 显示招标文件
+            if (selectedTenderFile) {
+                const fileItem = document.createElement('div');
+                fileItem.className = 'file-item';
+                fileItem.innerHTML = `
+                    <div class="file-info">${selectedTenderFile.name}</div>
+                    <div class="file-actions">
+                        <button class="remove-btn" onclick="removeTenderFile()">删除</button>
+                    </div>
+                `;
+                tenderFilesContainer.appendChild(fileItem);
             }
             
-            // 历史项目按钮事件
-            const btnHistory = document.getElementById('btnHistory');
-            if (btnHistory) {
-                btnHistory.addEventListener('click', function() {
-                    window.location.href = '/history';
+            // 显示投标文件
+            selectedBidFiles.forEach((file, index) => {
+                const fileItem = document.createElement('div');
+                fileItem.className = 'file-item';
+                fileItem.innerHTML = `
+                    <div class="file-info">${file.name}</div>
+                    <div class="file-actions">
+                        <button class="remove-btn" onclick="removeBidFile(${index})">删除</button>
+                    </div>
+                `;
+                bidFilesContainer.appendChild(fileItem);
+            });
+            
+            // 如果有文件则显示列表区域
+            if (selectedTenderFile || selectedBidFiles.length > 0) {
+                fileListSection.style.display = 'block';
+            } else {
+                fileListSection.style.display = 'none';
+            }
+        }
+        
+        // 删除招标文件
+        function removeTenderFile() {
+            selectedTenderFile = null;
+            document.getElementById('tender_file').value = '';
+            updateFileList();
+        }
+        
+        // 删除投标文件
+        function removeBidFile(index) {
+            selectedBidFiles.splice(index, 1);
+            // 重新构建FileList对象
+            const dataTransfer = new DataTransfer();
+            selectedBidFiles.forEach(file => {
+                dataTransfer.items.add(file);
+            });
+            document.getElementById('bid_files').files = dataTransfer.files;
+            updateFileList();
+        }
+        
+        document.getElementById('uploadForm').addEventListener('submit', async function(e) {
+            e.preventDefault();
+            
+            // 检查是否有文件被选中
+            if (!selectedTenderFile && selectedBidFiles.length === 0) {
+                alert('请至少选择一个文件');
+                return;
+            }
+            
+            const formData = new FormData();
+            if (selectedTenderFile) {
+                formData.append('tender_file', selectedTenderFile);
+            }
+            
+            selectedBidFiles.forEach(file => {
+                formData.append('bid_files', file);
+            });
+            
+            const resultDiv = document.getElementById('result');
+            const progressSection = document.getElementById('progressSection');
+            const fileListSection = document.getElementById('fileListSection');
+            resultDiv.style.display = 'none';
+            progressSection.style.display = 'none';
+            
+            try {
+                const response = await fetch('/api/init-upload', {
+                    method: 'POST',
+                    body: formData
                 });
+                
+                const data = await response.json();
+                
+                if (response.ok) {
+                    // 上传成功，显示分析进度界面
+                    projectId = data.project_id;
+                    document.getElementById('projectId').textContent = projectId;
+                    
+                    // 隐藏上传表单和文件列表，显示进度界面
+                    document.querySelector('.upload-section').style.display = 'none';
+                    fileListSection.style.display = 'none';
+                    progressSection.style.display = 'block';
+                    
+                    // 开始轮询进度
+                    startProgressPolling();
+                } else {
+                    resultDiv.className = 'result error';
+                    resultDiv.innerHTML = `<h3>上传失败!</h3><p>${data.error}</p>`;
+                    resultDiv.style.display = 'block';
+                }
+            } catch (error) {
+                resultDiv.className = 'result error';
+                resultDiv.innerHTML = `<h3>请求失败!</h3><p>${error.message}</p>`;
+                resultDiv.style.display = 'block';
             }
         });
+        
+        // 开始轮询进度
+        function startProgressPolling() {
+            // 立即获取一次进度
+            updateProgress();
+            
+            // 每2秒轮询一次进度
+            progressInterval = setInterval(updateProgress, 2000);
+        }
+        
+        // 更新进度显示
+        async function updateProgress() {
+            if (!projectId) return;
+            
+            try {
+                const response = await fetch(`/api/projects/${projectId}/analysis-status`);
+                const data = await response.json();
+                
+                if (response.ok) {
+                    // 更新总进度
+                    document.getElementById('totalProgress').textContent = data.progress_percentage.toFixed(1) + '%';
+                    document.getElementById('totalProgressBar').style.width = data.progress_percentage + '%';
+                    document.getElementById('totalProgressBar').textContent = data.progress_percentage.toFixed(1) + '%';
+                    
+                    // 更新各投标文件进度
+                    const documentProgressList = document.getElementById('documentProgressList');
+                    documentProgressList.innerHTML = '';
+                    
+                    data.document_statuses.forEach(doc => {
+                        const docDiv = document.createElement('div');
+                        docDiv.className = `document-progress ${doc.processing_status}`;
+                        
+                        let statusText = '';
+                        switch (doc.processing_status) {
+                            case 'completed':
+                                statusText = '已完成';
+                                break;
+                            case 'processing':
+                                statusText = '处理中';
+                                break;
+                            case 'error':
+                                statusText = '错误';
+                                break;
+                            default:
+                                statusText = '待处理';
+                        }
+                        
+                        // 修改显示格式，使用"投标文件：{文件名}"而不是"投标人: {投标人名}"
+                        docDiv.innerHTML = `
+                            <p><strong>投标文件：${doc.filename}</strong></p>
+                            <p>投标人: ${doc.bidder_name}</p>
+                            <p>状态: ${statusText}</p>
+                            ${doc.total_score ? `<p>总分: ${doc.total_score.toFixed(2)}</p>` : ''}
+                        `;
+                        
+                        documentProgressList.appendChild(docDiv);
+                    });
+                    
+                    // 如果所有文件都已完成，停止轮询
+                    if (data.progress_percentage >= 100) {
+                        clearInterval(progressInterval);
+                        // 可以在这里添加分析完成后的提示
+                    }
+                } else {
+                    console.error('获取进度失败:', data.error);
+                }
+            } catch (error) {
+                console.error('轮询进度时出错:', error);
+            }
+        }
     </script>
 </body>
 </html>

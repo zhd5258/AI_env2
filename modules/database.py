@@ -28,9 +28,7 @@ class TenderProject(Base):
     description = Column(String)
     tender_file_path = Column(String)
     scoring_rules_summary = Column(JSON)
-    created_at = Column(
-        DateTime, default=lambda: datetime.datetime.now(datetime.timezone.utc)
-    )
+    created_at = Column(DateTime, default=datetime.datetime.utcnow)
     status = Column(String, default='new')
     bid_documents = relationship('BidDocument', back_populates='project')
     analysis_results = relationship('AnalysisResult', back_populates='project')
@@ -45,9 +43,7 @@ class BidDocument(Base):
     bidder_name = Column(String)
     file_path = Column(String)
     file_size = Column(Integer)
-    upload_time = Column(
-        DateTime, default=lambda: datetime.datetime.now(datetime.timezone.utc)
-    )
+    upload_time = Column(DateTime, default=datetime.datetime.utcnow)
     processing_status = Column(String, default='pending')
     error_message = Column(String, nullable=True)
 
@@ -80,16 +76,12 @@ class AnalysisResult(Base):
     bidder_name = Column(String)
     total_score = Column(Float)
     price_score = Column(Float)  # Adding price score field
-    extracted_price = Column(Float)  # Extracted bid price
+    extracted_price = Column(Float) # Extracted bid price
     detailed_scores = Column(JSON)
     # 添加动态评分项字段，用于存储各评分项的得分
-    dynamic_scores = Column(
-        JSON, default=dict
-    )  # 存储动态评分项得分，key为评分项简称，value为得分
+    dynamic_scores = Column(JSON, default=dict)  # 存储动态评分项得分，key为评分项简称，value为得分
     analysis_summary = Column(String)
-    analyzed_at = Column(
-        DateTime, default=lambda: datetime.datetime.now(datetime.timezone.utc)
-    )
+    analyzed_at = Column(DateTime, default=datetime.datetime.utcnow)
     scoring_method = Column(String, default='AI')
     ai_model = Column(String, nullable=True)  # To store the AI model name
     is_modified = Column(Boolean, default=False)
@@ -116,7 +108,7 @@ class ScoringRule(Base):
     is_veto = Column(Boolean)
     is_price_criteria = Column(Boolean)
     price_formula = Column(String(100))
-
+    
     project = relationship('TenderProject', back_populates='scoring_rules')
 
 
@@ -131,9 +123,7 @@ class ScoreModificationHistory(Base):
     new_reason = Column(String)
     modification_type = Column(String)
     modified_by = Column(String)
-    modified_at = Column(
-        DateTime, default=lambda: datetime.datetime.now(datetime.timezone.utc)
-    )
+    modified_at = Column(DateTime, default=datetime.datetime.utcnow)
     modification_reason = Column(String)
     approval_status = Column(String, default='approved')
     approved_by = Column(String)
@@ -150,12 +140,39 @@ class ProjectAuditLog(Base):
     operation_type = Column(String)
     operation_details = Column(JSON)
     operator = Column(String)
-    operation_time = Column(
-        DateTime, default=lambda: datetime.datetime.now(datetime.timezone.utc)
-    )
+    operation_time = Column(DateTime, default=datetime.datetime.utcnow)
     ip_address = Column(String)
     user_agent = Column(String)
     project = relationship('TenderProject', back_populates='audit_logs')
 
 
 Base.metadata.create_all(bind=engine)
+
+# 为了符合系统规则，此文件已废弃
+# 数据库模型已移动到 models/database.py
+# 请直接从 models.database 导入所需的模型
+
+# 保持此文件以确保向后兼容性
+from models.database import (
+    engine,
+    SessionLocal,
+    Base,
+    TenderProject,
+    BidDocument,
+    AnalysisResult,
+    ScoringRule,
+    ScoreModificationHistory,
+    ProjectAuditLog,
+)
+
+__all__ = [
+    'engine',
+    'SessionLocal',
+    'Base',
+    'TenderProject',
+    'BidDocument',
+    'AnalysisResult',
+    'ScoringRule',
+    'ScoreModificationHistory',
+    'ProjectAuditLog',
+]
