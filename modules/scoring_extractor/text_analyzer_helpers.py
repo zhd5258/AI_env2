@@ -5,14 +5,33 @@
 
 import re
 import logging
-from typing import List, Dict, Any, Tuple
+from typing import List, Dict, Any
+from .utils import clean_criteria_name, is_similar_criteria, find_and_add_price_rule, is_valid_score, normalize_text
 
 
-class TextAnalyzerHelpers:
-    """文本分析辅助类"""
+class TextAnalyzerHelpersMixin:
+    """文本分析助手混入类"""
 
-    def __init__(self):
-        self.logger = logging.getLogger(__name__)
+    def _clean_criteria_name(self, name: str) -> str:
+        """
+        清理评分项名称
+        
+        Args:
+            name: 原始评分项名称
+            
+        Returns:
+            str: 清理后的评分项名称
+        """
+        # 使用新的标准化函数处理全角字符和特殊空格
+        name = normalize_text(name)
+        
+        # 移除多余的空格
+        name = re.sub(r'\s+', ' ', name.strip())
+        
+        # 移除常见的冗余字符
+        name = re.sub(r'[（(]\d+(?:\.\d+)?分[)）]', '', name).strip()
+        
+        return name
 
     def _extract_scoring_section(self, text: str) -> str:
         """
@@ -125,24 +144,6 @@ class TextAnalyzerHelpers:
 
         self.logger.info(f'从文本中解析到 {len(rules)} 条评分规则')
         return rules
-
-    def _clean_criteria_name(self, name: str) -> str:
-        """
-        清理评分项名称
-        
-        Args:
-            name: 原始评分项名称
-            
-        Returns:
-            str: 清理后的评分项名称
-        """
-        # 移除多余的空格
-        name = re.sub(r'\s+', ' ', name.strip())
-        
-        # 移除常见的冗余字符
-        name = re.sub(r'[（(]\d+(?:\.\d+)?分[)）]', '', name).strip()
-        
-        return name
 
     def _extract_rule_descriptions(self, text: str, rules: List[Dict[str, Any]]):
         """

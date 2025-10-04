@@ -124,7 +124,8 @@ class ResultDisplay:
                     'name': '价格分',
                     'max_score': float(getattr(rule, 'Parent_max_score', 0) or 0),
                     'description': getattr(rule, 'description', '')
-                }]
+                }],
+                'is_price_criteria': True  # 添加这个属性以正确识别价格评分规则
             })
             
         return rules_tree
@@ -162,28 +163,85 @@ class ResultDisplay:
                 
         return bidder_scores
     
-    def _generate_headers(self, rules_tree: List[Dict[str, Any]]) -> List[List[str]]:
+    def _generate_headers(self, rules_tree: List[Dict[str, Any]]) -> List[List[Dict[str, Any]]]:
         """
-        生成单行表头
-        表头只有一行，内容为：排名、投标方、各Child_Item_Name、价格分、总分
+        生成双行表头（分级表头）
+        第一行：排名、投标方、各Parent_Item_Name（合并单元格）、价格分、总分
+        第二行：各Child_Item_Name、价格分、总分
+        返回结构：
+        [
+            [{'name': '排名', 'rowspan': 2}, {'name': '投标人', 'rowspan': 2}, 
+             {'name': '技术方案(60分)', 'colspan': 2}, 
+             {'name': '价格分(40分)', 'rowspan': 2}, 
+             {'name': '总分(100)', 'rowspan': 2}],
+            ['', '', 
+             {'name': '技术方案完整性(30分)'}, 
+             {'name': '技术方案可行性(30分)'}, 
+             '', '']
+        ]
         """
-        header_row = ['排名', '投标方']  # 表头行
-        
-        # 添加所有子项名称作为表头
+        # 获取价格分满分值
+        price_parent_name = '价格分'  # 默认名称
         for parent_item in rules_tree:
+            if parent_item.get('is_price_criteria', False):
+                # 使用价格评分规则的父项名称，但只取名称部分，不包含分值
+                price_parent_name = parent_item['name']
+                # 从父项名称中移除分值信息，使用字符串分割
+                if '（' in price_parent_name:
+                    price_parent_name = price_parent_name.split('（')[0].strip()
+                if not price_parent_name:
+                    price_parent_name = '价格分'  # 如果移除后为空，使用默认名称
+                # 如果名称中包含"价格"，确保最终名称是"价格分"
+                if '价格' in price_parent_name and '分' not in price_parent_name:
+                    price_parent_name = '价格分'
+                break
+        
+        # 第一行表头
+        header_row1 = [
+            {'name': '排名', 'rowspan': 2},
+            {'name': '投标人', 'rowspan': 2}
+        ]
+        
+        # 第二行表头
+        header_row2 = ['', '']  # 对应固定列的占位符
+        
+        # 根据规则树生成分级表头
+        for parent_item in rules_tree:
+            # 跳过价格评分项，因为价格分会在最后由前端单独处理
+            if parent_item.get('is_price_criteria', False):
+                continue
+                
             children = parent_item['children']
             if children:
-                # 有子项的父项 - 添加每个子项名称作为表头
-                for child_item in children:
-                    # 特殊处理价格评分项，不添加到子项列表中
-                    if child_item.get('name') != '价格分':
-                        header_row.append(child_item['name'])  # 只显示子项名称
+                # 有子项的父项 - 在第一行添加父项名称并合并单元格
+                parent_name = parent_item['name']
+                # 只显示父项名称，不显示分值
+                parent_header = parent_name
+                
+                # 分离价格分项和其他子项
+                non_price_children = [child for child in children if child.get('name') != '价格分']
+                
+                if non_price_children:
+                    # 如果有非价格分的子项，在第一行添加父项并设置colspan
+                    header_row1.append({'name': parent_header, 'colspan': len(non_price_children)})
+                    
+                    # 在第二行添加对应的子项
+                    for child_item in non_price_children:
+                        # 只显示子项名称，不添加分值（因为名称中已经包含了分值）
+                        child_header = child_item['name']
+                        header_row2.append({'name': child_header})
+                else:
+                    # 如果没有非价格分的子项，在第一行添加父项并设置rowspan
+                    header_row1.append({'name': parent_header, 'rowspan': 2})
+                    # 第二行不需要添加占位符，因为父项跨越两行
         
-        # 添加价格分和总分列
-        header_row.append("价格分")
-        header_row.append("总分")
+        # 添加价格分和总分列（价格分需要跨越两行）
+        header_row1.append({'name': price_parent_name, 'rowspan': 2})
+        header_row1.append({'name': '总分', 'rowspan': 2})
+        header_row2.append('')  # 价格分在第二行不需要子项
+        header_row2.append('')  # 总分在第二行不需要子项
         
-        return [header_row]  # 返回单行表头
+        return [header_row1, header_row2]  # 返回双行表头结构
     
     def _generate_data(self, bid_documents: List[BidDocument], 
                       bidder_scores: Dict[str, Dict[str, float]], 

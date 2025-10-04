@@ -4,8 +4,18 @@ from typing import List, Dict, Any
 
 def clean_criteria_name(name: str) -> str:
     """清理评分项名称"""
-    # 移除多余的空白字符
+    # 移除多余的空白字符（包括各种Unicode空格）
     name = re.sub(r'\s+', ' ', name.strip())
+    
+    # 标准化全角字符为半角字符
+    # 全角空格替换为半角空格
+    name = name.replace('\u3000', ' ')
+    # 全角括号替换为半角括号
+    name = name.replace('（', '(').replace('）', ')')
+    # 全角逗号替换为半角逗号
+    name = name.replace('，', ',')
+    # 全角冒号替换为半角冒号
+    name = name.replace('：', ':')
     
     # 移除常见的前缀和后缀
     name = re.sub(r'^[（\(]*\d+[\.\-]?\d*[）\)]*\s*', '', name)
@@ -13,6 +23,9 @@ def clean_criteria_name(name: str) -> str:
     
     # 移除特殊字符
     name = re.sub(r'[※★▲●○◆■□△▽◇◆]', '', name)
+    
+    # 再次清理多余的空格
+    name = re.sub(r'\s+', ' ', name.strip())
     
     return name.strip()
 
@@ -42,8 +55,36 @@ def is_similar_criteria(name1: str, name2: str) -> bool:
     return similarity > 0.8
 
 
+def normalize_text(text: str) -> str:
+    """标准化文本，处理全角字符和特殊空格"""
+    if not text:
+        return text
+    
+    # 标准化各种Unicode空格为普通空格
+    # 包括不间断空格、窄空格、全角空格等
+    text = re.sub(r'[\u00A0\u2000-\u200F\u2028-\u202F\u3000]', ' ', text)
+    
+    # 标准化全角字符为半角字符
+    # 全角括号替换为半角括号
+    text = text.replace('（', '(').replace('）', ')')
+    # 全角逗号替换为半角逗号
+    text = text.replace('，', ',')
+    # 全角冒号替换为半角冒号
+    text = text.replace('：', ':')
+    # 全角分号替换为半角分号
+    text = text.replace('；', ';')
+    
+    # 清理多余的空格
+    text = re.sub(r'\s+', ' ', text)
+    
+    return text.strip()
+
+
 def find_and_add_price_rule(text: str, structured_rules: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     """从文本中查找价格分计算公式，并将其添加/更新到规则列表中"""
+    # 标准化文本
+    normalized_text = normalize_text(text)
+    
     # 查找价格分计算公式
     price_patterns = [
         r'(评标基准价.*?价格分.*?)',
@@ -55,7 +96,7 @@ def find_and_add_price_rule(text: str, structured_rules: List[Dict[str, Any]]) -
 
     price_description = ''
     for pattern in price_patterns:
-        match = re.search(pattern, text, re.DOTALL)
+        match = re.search(pattern, normalized_text, re.DOTALL)
         if match:
             price_description = match.group(1).strip()
             break
@@ -69,7 +110,7 @@ def find_and_add_price_rule(text: str, structured_rules: List[Dict[str, Any]]) -
 
     price_score = 0.0
     for pattern in score_patterns:
-        match = re.search(pattern, text)
+        match = re.search(pattern, normalized_text)
         if match:
             # 只有当分数合理时才接受（通常价格分较高）
             score = float(match.group(1))

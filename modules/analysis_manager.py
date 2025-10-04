@@ -175,10 +175,29 @@ class AnalysisManager:
                 if result_record:
                     # 更新投标人名称（如果AI提取到了）
                     details = analysis_result.get('details', {})
+                    bidder_name_extracted = False
                     if '投标人名称' in details and details['投标人名称'] != '未提取':
                         bid_document.bidder_name = details['投标人名称']
                         result_record.bidder_name = details['投标人名称']
+                        bidder_name_extracted = True
 
+                    # 如果AI没有提取到投标人名称，则尝试从文件中提取
+                    if not bidder_name_extracted:
+                        try:
+                            from modules.bidder_name_extractor import extract_bidder_name_from_file
+                            # 优先从MD文件提取投标人名称
+                            pdf_processor = PDFProcessor(bid_document.file_path)
+                            md_file_path = pdf_processor.get_md_file_path()
+                            if os.path.exists(md_file_path):
+                                extracted_name = extract_bidder_name_from_file(md_file_path)
+                            else:
+                                extracted_name = extract_bidder_name_from_file(bid_document.file_path)
+                            if extracted_name and extracted_name != '未提取':
+                                bid_document.bidder_name = extracted_name
+                                result_record.bidder_name = extracted_name
+                        except Exception as e:
+                            self.logger.warning(f'从文件中提取投标人名称时出错: {e}')
+                    
                     # 更新投标总价（如果AI提取到了）
                     if '投标总价' in details and details['投标总价'] != '未提取':
                         try:
@@ -255,7 +274,7 @@ class AnalysisManager:
                     project_id,
                     bid_info['id'],
                     tender_file_path,
-                    bid_info['path'],
+                    bid_info['bid_file_path'],  # 修复键名
                 )
                 futures.append(future)
             except Exception as e:

@@ -111,14 +111,14 @@ class ScoringRule(Base):
     __tablename__ = 'scoring_rule'
     id = Column(Integer, primary_key=True, index=True, autoincrement=True)
     project_id = Column(Integer, ForeignKey('tender_project.id'))
-    Parent_Item_Name = Column(String(20))
+    Parent_Item_Name = Column(String(100))  # 增加长度以容纳清理后的名称
     Parent_max_score = Column(Integer)
-    Child_Item_Name = Column(String(20))
+    Child_Item_Name = Column(String(100))   # 增加长度以容纳清理后的名称
     Child_max_score = Column(Integer)
-    description = Column(String(100))
+    description = Column(String(500))       # 增加描述字段长度
     is_veto = Column(Boolean)
     is_price_criteria = Column(Boolean)
-    price_formula = Column(String(100))
+    price_formula = Column(String(500))     # 增加价格公式字段长度
     
     project = relationship('TenderProject', back_populates='scoring_rules')
 

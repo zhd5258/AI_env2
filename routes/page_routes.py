@@ -53,3 +53,11 @@ def history_page():
         return render_template('history.html')
     except Exception as e:
         return f'<h1>错误</h1><p>历史页面模板加载失败: {str(e)}</p>', 500
+
+@router.route('/settings', methods=['GET'])
+def settings_page():
+    """系统设置页面"""
+    try:
+        return render_template('settings.html')
+    except Exception as e:
+        return f'<h1>错误</h1><p>系统设置页面加载失败: {str(e)}</p>', 500

@@ -132,14 +132,19 @@ class PriceExtractionManager:
         ]
         # 通用价格模式，作为补充
         self.general_price_patterns = [
-            r'￥\\s*([\\d,]+\\.?\\d*)',
-            r'([\\d,]+\\.?\\d*)\\s*元',
+            r'￥\s*([\d,]+\.?\d*)',
+            r'([\d,]+\.?\d*)\s*元',
         ]
         # 专门针对价格一览表的模式
         self.price_summary_patterns = [
-            r'(小写).*?(\\d[\\d,]*\\.?\\d*)',
-            r'(大写).*?([壹贰叁肆伍陆柒捌玖拾佰仟万亿零一二三四五六七八九十百千万亿]+)',
-            r'(总报价|总价).*?(\\d[\\d,]*\\.?\\d*)',
+            # 投标一览表专用模式
+            r'(投标总价|投标报价|总报价|总价)[:：\s]*([\d,]+\.?\d*)\s*元?',
+            r'(小写)[:：\s]*([\d,]+\.?\d*)\s*元?',
+            r'(大写)[:：\s]*([壹贰叁肆伍陆柒捌玖拾佰仟万亿零一二三四五六七八九十百千万亿]+)',
+            r'([\d,]+\.?\d*)\s*元\s*(?:大写|小写)?',
+            # 表格格式的价格
+            r'(投标报价|总价|总报价)[\s\S]*?([\d,]+\.?\d*)\s*元',
+            r'([\d,]+\.?\d*)\s*元[\s\S]*?(投标报价|总价|总报价)',
         ]
 
     def extract_prices_from_content(self, pages: List[str]) -> List[Dict[str, Any]]:
@@ -183,11 +188,12 @@ class PriceExtractionManager:
         if not prices:
             return None
 
-        # 1. 优先选择来自"投标一览表"且置信度大于90的价格
+        # 1. 优先选择来自"投标一览表"且置信度大于80的价格
         summary_page_prices = [
             p
             for p in prices
-            if p.get('confidence', 0) > 90 and '一览表' in p.get('reason', '')
+            if p.get('confidence', 0) > 80
+            and ('一览表' in p.get('reason', '') or '投标一览表' in p.get('reason', ''))
         ]
 
         if summary_page_prices:
@@ -221,8 +227,11 @@ class PriceExtractionManager:
         Returns:
             Optional[float]: 最佳价格，如果未找到则返回None
         """
+        self.logger.info(f'开始价格提取，共 {len(pages)} 页')
+
         # 提取所有价格
         prices = self.extract_prices_from_content(pages)
+        self.logger.info(f'提取到 {len(prices)} 个价格')
 
         if not prices:
             self.logger.warning('未提取到任何有效价格')
@@ -244,9 +253,17 @@ class PriceExtractionManager:
         """
         all_prices = []
 
-        # 1. 识别关键章节
+        # 1. 识别关键章节 - 优先识别投标一览表
         price_summary_pages = self._identify_sections(
-            pages, ['投标一览表', '开标一览表', '价格一览表']
+            pages,
+            [
+                '投标一览表',
+                '开标一览表',
+                '价格一览表',
+                '投标报价一览表',
+                '报价一览表',
+                '投标文件一览表',
+            ],
         )
         price_doc_pages = self._identify_sections(pages, ['价格文件', '报价部分'])
 
@@ -334,6 +351,7 @@ class PriceExtractionManager:
         """
         从价格一览表页面提取价格，特别处理小写和大写价格对照的情况
         """
+        self.logger.info(f'开始从第 {page_index} 页提取价格，页面包含"投标一览表"')
         prices = []
         xiaoxie_price = None
         daxie_price_text = None
@@ -355,6 +373,8 @@ class PriceExtractionManager:
         for pattern in xiaoxie_patterns[:6]:  # 前6个模式是更明确的关键字
             xiaoxie_match = re.search(pattern, page_text, re.IGNORECASE)
             if xiaoxie_match:
+                self.logger.info(f'模式匹配成功: {pattern}')
+                self.logger.info(f'匹配结果: {xiaoxie_match.groups()}')
                 xiaoxie_price_str = xiaoxie_match.group(2)  # 获取价格组
                 # 行级过滤以排除保证金等干扰项
                 line_start = page_text.rfind('\n', 0, xiaoxie_match.start()) + 1
@@ -362,9 +382,12 @@ class PriceExtractionManager:
                 if line_end == -1:
                     line_end = len(page_text)
                 line_text = page_text[line_start:line_end]
+                self.logger.info(f'匹配行文本: {line_text}')
                 if any(k in line_text for k in self.exclude_keywords):
+                    self.logger.info('该行包含排除关键词，跳过')
                     continue
                 xiaoxie_price = self._str_to_float(xiaoxie_price_str)
+                self.logger.info(f'解析的价格值: {xiaoxie_price}')
                 if (
                     xiaoxie_price is not None and xiaoxie_price > 1000
                 ):  # 过滤掉过小的价格（如1.00）
@@ -376,6 +399,7 @@ class PriceExtractionManager:
                             'reason': f'价格一览表明确关键字价格 (pattern: {pattern})',
                         }
                     )
+                    self.logger.info(f'成功添加价格: {xiaoxie_price}')
                     break  # 找到第一个有效价格就停止
 
         # 如果没找到明确关键字，再使用通用模式

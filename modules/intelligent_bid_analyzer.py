@@ -52,7 +52,7 @@ class IntelligentBidAnalyzer(BidAnalyzerHelpers):
         else:
             # 保持旧的兼容性，如果未提供文本，则初始化处理器以便后续提取
             self.logger.warning(f'No pre-extracted text provided for {self.bid_file_path}. PDFProcessor will be used.')
-            self.bid_processor = PDFProcessor(self.bid_file_path)
+            self.bid_processor = PDFProcessor(self.bid_file_path)  # 使用新的PDF处理器
             self.bid_pages = None
 
     def _update_progress(self, completed, total, current_rule, partial_results=None):
@@ -101,7 +101,7 @@ class IntelligentBidAnalyzer(BidAnalyzerHelpers):
         # 作为后备方案，如果文本未提供，则调用PDF处理器
         if self.bid_processor:
             self.logger.info(f"No pre-extracted text found, processing PDF for {self.bid_file_path} on demand.")
-            self.bid_pages = self.bid_processor.process_pdf_per_page()
+            self.bid_pages = self.bid_processor.extract_text_per_page()  # 使用新的方法
             self._save_failed_pages_info(self.bid_processor)
             return self.bid_pages
         
@@ -122,8 +122,8 @@ class IntelligentBidAnalyzer(BidAnalyzerHelpers):
         file_key = os.path.splitext(pdf_filename)[0]
         md_filename = f"{file_key}.md"
         
-        # MD文件存放在temp_md目录下
-        md_file_path = os.path.join('temp_md', md_filename)
+        # MD文件存放在temp/md目录下
+        md_file_path = os.path.join('temp/md', md_filename)
         
         # 检查文件是否存在
         if os.path.exists(md_file_path):
@@ -330,6 +330,7 @@ class IntelligentBidAnalyzer(BidAnalyzerHelpers):
           "reason": "<你的理由>"
         }}
         ```
+
         """
 
     def _calculate_price_score(self, price_rule, best_price):

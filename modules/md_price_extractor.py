@@ -8,7 +8,7 @@
 import logging
 import re
 import os
-from typing import Optional, List, Dict, Any
+from typing import Any
 from pathlib import Path
 
 
@@ -16,7 +16,7 @@ class MDPriceExtractor:
     """MD文件价格提取器"""
 
     def __init__(self):
-        self.logger = logging.getLogger(__name__)
+        self.logger: logging.Logger = logging.getLogger(__name__)
         
         # 投标一览表关键词（按优先级排序）
         self.bid_summary_keywords = [
@@ -73,7 +73,7 @@ class MDPriceExtractor:
             '净资产',
         ]
 
-    def extract_price_from_md_file(self, md_file_path: str) -> Optional[float]:
+    def extract_price_from_md_file(self, md_file_path: str) -> float | None:
         """
         从MD文件中提取投标总价
 
@@ -105,7 +105,7 @@ class MDPriceExtractor:
             self.logger.error(f'从MD文件提取价格时出错: {e}')
             return None
 
-    def _extract_price_from_content(self, content: str) -> Optional[float]:
+    def _extract_price_from_content(self, content: str) -> float | None:
         """
         从内容中提取价格
 
@@ -138,7 +138,7 @@ class MDPriceExtractor:
         self.logger.info('未能从任何区域提取到有效价格')
         return None
 
-    def _locate_bid_summary_sections(self, content: str) -> List[str]:
+    def _locate_bid_summary_sections(self, content: str) -> list[str]:
         """
         定位包含投标一览表的区域
 
@@ -167,7 +167,7 @@ class MDPriceExtractor:
 
         return sections
 
-    def _extract_price_from_section(self, section: str) -> Optional[float]:
+    def _extract_price_from_section(self, section: str) -> float | None:
         """
         从特定区域提取价格，优先从投标一览表中提取，并进行小写和大写金额的交叉对比验证
 
@@ -184,23 +184,31 @@ class MDPriceExtractor:
         large_confidence = 0.0
         
         # 首先查找投标一览表中的特殊格式价格（小写和大写在同一单元格中）
-        bid_table_pattern = r'（小写）[￥¥]?\s*([\d,]+\.?\d*)元（大写）([壹贰叁肆伍陆柒捌玖拾佰仟万亿零一二三四五六七八九十百千万亿元整]+)'
-        bid_table_match = re.search(bid_table_pattern, section)
-        if bid_table_match:
-            small_price_str = bid_table_match.group(1)
-            chinese_num = bid_table_match.group(2)
-            
-            small_number_price = self._str_to_float(small_price_str)
-            large_number_price = self._chinese_to_number(chinese_num)
-            
-            self.logger.info(f'从投标一览表中提取到小写价格: {small_number_price} (原始字符串: {small_price_str})')
-            self.logger.info(f'从投标一览表中提取到大写价格: {large_number_price} (原始字符串: {chinese_num})')
-            
-            # 设置高置信度
-            small_confidence = 95.0
-            large_confidence = 95.0
-        else:
-            # 如果没有找到特殊格式，使用原有方法
+        # 支持多种格式，包括用户提到的"小写）203 万元  （大写）贰佰零叁万元"
+        bid_table_patterns = [
+            r'（小写）[￥¥]?\s*([\d,]+\.?\d*)元（大写）([壹贰叁肆伍陆柒捌玖拾佰仟万亿零一二三四五六七八九十百千万亿元整]+)',
+            r'小写[）\)]\s*([\d,]+\.?\d*)\s*(?:万元|元)\s*[(（]大写[)）]\s*([壹贰叁肆伍陆柒捌玖拾佰仟万亿零一二三四五六七八九十百千万亿元万元整]+)',
+        ]
+        
+        for pattern in bid_table_patterns:
+            bid_table_match = re.search(pattern, section)
+            if bid_table_match:
+                small_price_str = bid_table_match.group(1)
+                chinese_num = bid_table_match.group(2)
+                
+                small_number_price = self._str_to_float(small_price_str)
+                large_number_price = self._chinese_to_number(chinese_num)
+                
+                self.logger.info(f'从投标一览表中提取到小写价格: {small_number_price} (原始字符串: {small_price_str})')
+                self.logger.info(f'从投标一览表中提取到大写价格: {large_number_price} (原始字符串: {chinese_num})')
+                
+                # 设置高置信度
+                small_confidence = 95.0
+                large_confidence = 95.0
+                break  # 找到一个匹配就足够了
+
+        # 如果没有找到特殊格式，使用原有方法
+        if small_number_price is None and large_number_price is None:
             for keyword in self.price_field_keywords:
                 pattern = rf'{keyword}[:：\s]*\(?(?:小写)?\)?[:：\s]*([￥¥]?\s*[\d,]+\.?\d*)'
                 match = re.search(pattern, section)
@@ -314,7 +322,7 @@ class MDPriceExtractor:
 
         return None
 
-    def _extract_price_from_table(self, section: str) -> Optional[float]:
+    def _extract_price_from_table(self, section: str) -> float | None:
         """
         从表格中提取价格，分别提取阿拉伯数字和汉字大写金额并进行置信度评估
 
@@ -374,6 +382,23 @@ class MDPriceExtractor:
                 cells = data_line.split('|')
                 for cell in cells:
                     cell_content = cell.strip()
+                    
+                    # 新增支持用户提到的格式：小写）203 万元  （大写）贰佰零叁万元
+                    mixed_pattern = r'小写[）\)]\s*([\d,]+\.?\d*)\s*(?:万元|元)\s*[(（]大写[)）]\s*([壹贰叁肆伍陆柒捌玖拾佰仟万亿零一二三四五六七八九十百千万亿元万元整]+)'
+                    mixed_match = re.search(mixed_pattern, cell_content)
+                    if mixed_match:
+                        small_price_str = mixed_match.group(1)
+                        chinese_num = mixed_match.group(2)
+                        
+                        small_number_price = self._str_to_float(small_price_str)
+                        large_number_price = self._chinese_to_number(chinese_num)
+                        
+                        if small_number_price is not None and large_number_price is not None:
+                            self.logger.info(f'从表格中提取到混合格式价格: 小写={small_number_price}, 大写={large_number_price}')
+                            small_confidence = 98.0  # 最高置信度
+                            large_confidence = 98.0  # 最高置信度
+                            # 直接返回，因为这是最高置信度的格式
+                            return small_number_price
                     
                     # 查找阿拉伯数字价格
                     small_pattern = r'[￥¥]?\s*([\d,]+\.?\d*)'
@@ -464,7 +489,7 @@ class MDPriceExtractor:
 
         return None
 
-    def _parse_markdown_table(self, section: str) -> List[Dict[str, str]]:
+    def _parse_markdown_table(self, section: str) -> list[dict[str, str]]:
         """
         解析Markdown表格或HTML表格，返回结构化的表格数据
 
@@ -472,7 +497,7 @@ class MDPriceExtractor:
             section: 包含表格的文本区域
 
         Returns:
-            List[Dict[str, str]]: 结构化的表格数据，每个元素是一行数据的字典
+            list[dict[str, str]]: 结构化的表格数据，每个元素是一行数据的字典
         """
         # 首先尝试解析HTML表格
         html_table_data = self._parse_html_table(section)
@@ -500,7 +525,7 @@ class MDPriceExtractor:
         
         return table_data
 
-    def _parse_html_table(self, section: str) -> List[Dict[str, str]]:
+    def _parse_html_table(self, section: str) -> list[dict[str, str]]:
         """
         解析HTML表格，返回结构化的表格数据
 
@@ -508,7 +533,7 @@ class MDPriceExtractor:
             section: 包含HTML表格的文本区域
 
         Returns:
-            List[Dict[str, str]]: 结构化的表格数据，每个元素是一行数据的字典
+            list[dict[str, str]]: 结构化的表格数据，每个元素是一行数据的字典
         """
         # 检查是否包含HTML表格标签
         if '<table' not in section:
@@ -609,7 +634,7 @@ class MDPriceExtractor:
         
         return clean_text
     
-    def _extract_price_from_structured_table(self, table_data: List[Dict[str, str]]) -> Optional[float]:
+    def _extract_price_from_structured_table(self, table_data: list[dict[str, str]]) -> float | None:
         """
         从结构化的表格数据中提取价格
 
@@ -654,6 +679,21 @@ class MDPriceExtractor:
                         if large_number_price is not None:
                             self.logger.debug(f'从结构化表格中提取到汉字大写价格: {large_number_price} (原始字符串: {chinese_num})')
                             large_confidence = 95.0  # 高置信度
+                    
+                    # 新增支持用户提到的格式：小写）203 万元  （大写）贰佰零叁万元
+                    mixed_pattern = r'小写[）\)]\s*([\d,]+\.?\d*)\s*(?:万元|元)\s*[(（]大写[)）]\s*([壹贰叁肆伍陆柒捌玖拾佰仟万亿零一二三四五六七八九十百千万亿元万元整]+)'
+                    mixed_match = re.search(mixed_pattern, value)
+                    if mixed_match:
+                        small_price_str = mixed_match.group(1)
+                        chinese_num = mixed_match.group(2)
+                        
+                        small_number_price = self._str_to_float(small_price_str)
+                        large_number_price = self._chinese_to_number(chinese_num)
+                        
+                        if small_number_price is not None and large_number_price is not None:
+                            self.logger.debug(f'从结构化表格中提取到混合格式价格: 小写={small_number_price}, 大写={large_number_price}')
+                            small_confidence = 98.0  # 最高置信度
+                            large_confidence = 98.0  # 最高置信度
                     
                     # 如果同时找到了小写和大写价格
                     if small_number_price is not None and large_number_price is not None:
@@ -737,6 +777,21 @@ class MDPriceExtractor:
                             self.logger.debug(f'从结构化表格中提取到汉字大写价格: {large_number_price} (原始字符串: {chinese_num})')
                             large_confidence = 95.0  # 高置信度
                     
+                    # 新增支持用户提到的格式：小写）203 万元  （大写）贰佰零叁万元
+                    mixed_pattern = r'小写[）\)]\s*([\d,]+\.?\d*)\s*(?:万元|元)\s*[(（]大写[)）]\s*([壹贰叁肆伍陆柒捌玖拾佰仟万亿零一二三四五六七八九十百千万亿元万元整]+)'
+                    mixed_match = re.search(mixed_pattern, value)
+                    if mixed_match:
+                        small_price_str = mixed_match.group(1)
+                        chinese_num = mixed_match.group(2)
+                        
+                        small_number_price = self._str_to_float(small_price_str)
+                        large_number_price = self._chinese_to_number(chinese_num)
+                        
+                        if small_number_price is not None and large_number_price is not None:
+                            self.logger.debug(f'从结构化表格中提取到混合格式价格: 小写={small_number_price}, 大写={large_number_price}')
+                            small_confidence = 98.0  # 最高置信度
+                            large_confidence = 98.0  # 最高置信度
+                    
                     # 如果同时找到了小写和大写价格
                     if small_number_price is not None and large_number_price is not None:
                         self.logger.debug(f'找到两个价格: 小写金额={small_number_price}(置信度{small_confidence}), 大写金额={large_number_price}(置信度{large_confidence})')
@@ -806,7 +861,7 @@ class MDPriceExtractor:
         self.logger.info('未能从结构化表格中提取到高置信度的价格')
         return None
 
-    def _extract_price_from_full_content(self, content: str) -> Optional[float]:
+    def _extract_price_from_full_content(self, content: str) -> float | None:
         """
         从全文中提取价格
 
@@ -829,7 +884,7 @@ class MDPriceExtractor:
         self.logger.info('从全文中未能找到有效价格')
         return None
 
-    def _str_to_float(self, s: str) -> Optional[float]:
+    def _str_to_float(self, s: str) -> float | None:
         """
         将字符串转换为浮点数，处理逗号分隔符
 
@@ -849,7 +904,7 @@ class MDPriceExtractor:
         except ValueError:
             return None
 
-    def _chinese_to_number(self, chinese_num: str) -> Optional[float]:
+    def _chinese_to_number(self, chinese_num: str) -> float | None:
         """
         将中文大写数字转换为阿拉伯数字
 
@@ -918,7 +973,7 @@ class MDPriceExtractor:
         result = self._convert_chinese_segment(cleaned, char_to_digit, unit_map)
         return float(result)
     
-    def _convert_chinese_segment(self, segment: str, char_to_digit: dict, unit_map: dict) -> int:
+    def _convert_chinese_segment(self, segment: str, char_to_digit: dict[str, int], unit_map: dict[str, int]) -> int:
         """
         转换中文数字片段
         """
@@ -962,7 +1017,7 @@ class MDPriceExtractor:
         result += temp
         return result
         
-    def _extract_price_from_text(self, text: str, pattern: str) -> Optional[float]:
+    def _extract_price_from_text(self, text: str, pattern: str) -> float | None:
         """
         从文本中提取价格
         
@@ -979,7 +1034,7 @@ class MDPriceExtractor:
             return self._str_to_float(price_str)
         return None
         
-    def _extract_chinese_price_from_text(self, text: str, pattern: str) -> Optional[float]:
+    def _extract_chinese_price_from_text(self, text: str, pattern: str) -> float | None:
         """
         从文本中提取中文大写价格
         

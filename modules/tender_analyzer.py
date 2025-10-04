@@ -48,7 +48,7 @@ class TenderAnalyzer:
             # 生成基于文件路径的唯一文件名
             file_key = self._get_cache_key(file_path)
             temp_word_filename = f'{file_key}.txt'
-            temp_word_dir = 'temp_word'
+            temp_word_dir = 'temp/word'
             temp_word_path = os.path.join(temp_word_dir, temp_word_filename)
 
             if os.path.exists(temp_word_path):

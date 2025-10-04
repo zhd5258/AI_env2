@@ -29,11 +29,26 @@ pip install -r requirements.txt
 uvicorn main:app --reload
 ```
 
-## 高级PDF处理功能
+## 常见问题与解决方案
+
+### 1. 关于pydevd警告
+
+在使用VS Code等IDE的调试器运行项目时，可能会遇到以下警告：
+
+```
+UserWarning: incompatible copy of pydevd already imported
+```
+
+这是由于环境中存在多个版本的pydevd（Python调试器）导致的冲突。这个警告不会影响程序的正常运行，但可以通过以下方式消除：
+
+1. 使用我们提供的`run_without_warnings.bat`脚本运行项目
+2. 或者在环境变量中设置`DISABLE_WARNINGS=true`后运行项目
+
+### 2. 高级PDF处理功能
 
 本系统集成了AdvancedPDFProcessor，支持处理图形格式、签名、加密等PDF文件，并能准确识别表格和公式等复杂内容。
 
-### 特性
+#### 特性
 
 - 支持多种OCR技术处理图形格式PDF
 - 精确识别表格、公式等复杂内容
@@ -41,7 +56,7 @@ uvicorn main:app --reload
 - 支持加密PDF文件处理
 - 输出Markdown格式文档
 
-### 使用方法
+#### 使用方法
 
 系统会自动检测PDF文件类型并选择最适合的处理方法：
 1. 首先尝试直接提取文本

@@ -4,41 +4,39 @@
 #作者           : KingFreeDom
 #创建时间         : 2025-10-03 14:14:03
 #最近一次编辑者      : KingFreeDom
-#最近一次编辑时间     : 2025-10-03 20:10:40
+#最近一次编辑时间     : 2025-10-04 10:55:43
 #文件相对于项目的路径   : \AI_env2\app.py
 #
 #Copyright (c) 2025 by 中车眉山车辆有限公司/KingFreeDom, All Rights Reserved. 
 #
+#!/usr/bin/env python
+# -*- coding:utf-8 -*-
+"""
+主应用文件
+"""
 
-
-import os
-import sys
 import logging
-from pathlib import Path
 from flask import Flask, render_template, send_from_directory
-
-# 添加项目根目录到Python路径
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-
-# 导入配置
 from config.app_config import Config
-
-# 导入中间件
+# 修复导入路径 - 从 cors_middleware 导入而不是 cors
 from middleware.cors_middleware import setup_cors
 
 # 配置日志
 logging.basicConfig(
     level=logging.INFO,
-    format='%(asctime)s [%(levelname)s] %(message)s',
-    handlers=[
-        logging.FileHandler(os.path.join('logs', 'analysis.log'), encoding='utf-8'),
-        logging.StreamHandler(),
-    ]
+    format='%(asctime)s - %(levelname)s - %(message)s'
 )
 
 # 创建Flask应用
 app = Flask(__name__, template_folder='templates')
+
+# 从配置类加载配置
 app.config.from_object(Config)
+
+# 启动资源监控器
+from modules.resource_monitor import start_resource_monitoring
+start_resource_monitoring()
+
 
 # 设置中间件
 setup_cors(app)

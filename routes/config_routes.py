@@ -84,14 +84,12 @@ def update_runtime_config():
         RUNTIME_CONFIG.update(updates)
 
         # 保存到文件
-        if save_config(RUNTIME_CONFIG):
-            logging.info(f'全局运行配置已更新: {updates}')
-            return jsonify({
-                'message': '配置更新成功',
-                'config': RUNTIME_CONFIG
-            })
-        else:
-            return jsonify({'error': '配置保存失败'}), 500
+        save_config(RUNTIME_CONFIG)
+        logging.info(f'全局运行配置已更新: {updates}')
+        return jsonify({
+            'message': '配置更新成功',
+            'config': RUNTIME_CONFIG
+        })
 
     except Exception as e:
         logging.error(f'更新运行配置时出错: {e}')

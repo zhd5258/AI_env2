@@ -1,12 +1,3 @@
-<!--
- * @作者           : KingFreeDom
- * @创建时间         : 2025-10-03 14:14:22
- * @最近一次编辑者      : KingFreeDom
- * @最近一次编辑时间     : 2025-10-03 15:07:10
- * @文件相对于项目的路径   : \AI_env2\templates\index.html
- * @
- * @Copyright (c) 2025 by 中车眉山车辆有限公司/KingFreeDom, All Rights Reserved. 
--->
 <!DOCTYPE html>
 <html lang="zh-CN">
 <head>
@@ -141,9 +132,134 @@
         .remove-btn:hover {
             background-color: #c82333;
         }
+        /* 汇总表格样式 */
+        .summary-section {
+            display: none;
+            margin-top: 20px;
+            padding: 20px;
+            border: 1px solid #ddd;
+            border-radius: 5px;
+        }
+        .table-container {
+            overflow: auto;
+            max-height: 70vh;
+            margin-top: 15px;
+            border: 1px solid #ddd;
+        }
+        .summary-table {
+            width: 100%;
+            border-collapse: collapse;
+            min-width: 100%;
+        }
+        .summary-table th, .summary-table td {
+            border: 1px solid #ddd;
+            padding: 8px;
+            text-align: center;
+            white-space: nowrap;
+        }
+        .summary-table th {
+            background-color: #f2f2f2;
+            font-weight: bold;
+            position: sticky;
+            top: 0;
+            z-index: 10;
+        }
+        .summary-table td:first-child, .summary-table th:first-child,
+        .summary-table td:nth-child(2), .summary-table th:nth-child(2) {
+            position: sticky;
+            left: 0;
+            background-color: #f2f2f2;
+            z-index: 5;
+        }
+        .summary-table td:nth-child(2), .summary-table th:nth-child(2) {
+            left: 50px; /* 排名列宽度，根据实际内容调整 */
+        }
+        .summary-table tr:nth-child(even) {
+            background-color: #f9f9f9;
+        }
+        .summary-table tr:hover {
+            background-color: #f5f5f5;
+        }
+        /* 投标人名称悬停显示 */
+        .bidder-name {
+            display: inline-block;
+            max-width: 150px;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+            position: relative;
+        }
+        .bidder-name:hover::after {
+            content: attr(data-full-name);
+            position: absolute;
+            left: 0;
+            top: 100%;
+            background-color: #333;
+            color: white;
+            padding: 5px;
+            border-radius: 3px;
+            white-space: normal;
+            word-wrap: break-word;
+            max-width: 300px;
+            z-index: 100;
+            box-shadow: 0 2px 5px rgba(0,0,0,0.2);
+        }
+        /* 导航栏样式 */
+        .navbar {
+            background-color: #007bff;
+            padding: 10px 0;
+            margin-bottom: 20px;
+        }
+        .navbar ul {
+            list-style-type: none;
+            margin: 0;
+            padding: 0;
+            display: flex;
+        }
+        .navbar li {
+            margin-right: 20px;
+        }
+        .navbar a {
+            color: white;
+            text-decoration: none;
+            padding: 10px 15px;
+            border-radius: 3px;
+        }
+        .navbar a:hover, .navbar a.active {
+            background-color: #0056b3;
+        }
+        /* 响应式设计 */
+        @media (max-width: 768px) {
+            .table-container {
+                max-height: 60vh;
+            }
+            .summary-table th, .summary-table td {
+                padding: 6px;
+                font-size: 14px;
+            }
+            .bidder-name {
+                max-width: 100px;
+            }
+            .navbar ul {
+                flex-direction: column;
+            }
+            .navbar li {
+                margin-right: 0;
+                margin-bottom: 5px;
+            }
+        }
     </style>
 </head>
 <body>
+    <!-- 导航栏 -->
+    <div class="navbar">
+        <ul>
+            <li><a href="/" class="active">首页</a></li>
+            <li><a href="/history">历史项目</a></li>
+            <li><a href="/settings">系统设置</a></li>
+        </ul>
+    </div>
+    
     <h1>智能评标系统</h1>
     
     <div class="upload-section">
@@ -189,6 +305,21 @@
         </div>
         <div id="documentProgressList">
             <!-- 各投标文件进度将在这里动态添加 -->
+        </div>
+        <!-- 汇总表格按钮 -->
+        <div style="margin-top: 20px;">
+            <button id="showSummaryBtn" style="display: none;" onclick="showSummaryTable()">显示汇总表格</button>
+        </div>
+    </div>
+    
+    <!-- 汇总表格显示区域 -->
+    <div id="summarySection" class="summary-section">
+        <h2>评分汇总表</h2>
+        <div class="table-container">
+            <div id="summaryTableContainer"></div>
+        </div>
+        <div style="margin-top: 20px;">
+            <button onclick="hideSummaryTable()">返回进度</button>
         </div>
     </div>
 
@@ -283,6 +414,12 @@
                 return;
             }
             
+            // 重置轮询状态
+            if (progressInterval) {
+                clearInterval(progressInterval);
+                progressInterval = null;
+            }
+            
             const formData = new FormData();
             if (selectedTenderFile) {
                 formData.append('tender_file', selectedTenderFile);
@@ -319,8 +456,14 @@
                     // 开始轮询进度
                     startProgressPolling();
                 } else {
-                    resultDiv.className = 'result error';
-                    resultDiv.innerHTML = `<h3>上传失败!</h3><p>${data.error}</p>`;
+                    // 特别处理413错误
+                    if (response.status === 413) {
+                        resultDiv.className = 'result error';
+                        resultDiv.innerHTML = `<h3>上传失败!</h3><p>文件大小超出限制，请确保单个文件不超过500MB。</p>`;
+                    } else {
+                        resultDiv.className = 'result error';
+                        resultDiv.innerHTML = `<h3>上传失败!</h3><p>${data.error}</p>`;
+                    }
                     resultDiv.style.display = 'block';
                 }
             } catch (error) {
@@ -332,6 +475,12 @@
         
         // 开始轮询进度
         function startProgressPolling() {
+            // 清除之前的轮询（如果有的话）
+            if (progressInterval) {
+                clearInterval(progressInterval);
+                progressInterval = null;
+            }
+            
             // 立即获取一次进度
             updateProgress();
             
@@ -349,9 +498,10 @@
                 
                 if (response.ok) {
                     // 更新总进度
-                    document.getElementById('totalProgress').textContent = data.progress_percentage.toFixed(1) + '%';
-                    document.getElementById('totalProgressBar').style.width = data.progress_percentage + '%';
-                    document.getElementById('totalProgressBar').textContent = data.progress_percentage.toFixed(1) + '%';
+                    const progressPercentage = Math.min(100, Math.max(0, data.progress_percentage));
+                    document.getElementById('totalProgress').textContent = progressPercentage.toFixed(1) + '%';
+                    document.getElementById('totalProgressBar').style.width = progressPercentage + '%';
+                    document.getElementById('totalProgressBar').textContent = progressPercentage.toFixed(1) + '%';
                     
                     // 更新各投标文件进度
                     const documentProgressList = document.getElementById('documentProgressList');
@@ -376,10 +526,22 @@
                                 statusText = '待处理';
                         }
                         
-                        // 修改显示格式，使用"投标文件：{文件名}"而不是"投标人: {投标人名}"
+                        // 使用原始文件名显示投标文件，而不是使用"待确认"这样的默认名称
+                        const displayFilename = doc.filename || '未知文件';
+                        // 显示真实的投标人名称，如果还没有则使用文件名作为占位符
+                        let displayBidderName = doc.bidder_name || '未知投标方';
+                        // 如果投标人名称是默认值，则使用文件名作为占位符
+                        if (displayBidderName === '未知投标方' || displayBidderName === '待确认' || displayBidderName === 'pdf') {
+                            // 从文件名中提取投标人名称（去除扩展名）
+                            const filenameWithoutExt = displayFilename.replace(/\.[^/.]+$/, "");
+                            if (filenameWithoutExt) {
+                                displayBidderName = filenameWithoutExt;
+                            }
+                        }
+                        
                         docDiv.innerHTML = `
-                            <p><strong>投标文件：${doc.filename}</strong></p>
-                            <p>投标人: ${doc.bidder_name}</p>
+                            <p><strong>投标文件：${displayFilename}</strong></p>
+                            <p>投标人: <span class="bidder-name" data-full-name="${displayBidderName}">${displayBidderName}</span></p>
                             <p>状态: ${statusText}</p>
                             ${doc.total_score ? `<p>总分: ${doc.total_score.toFixed(2)}</p>` : ''}
                         `;
@@ -387,10 +549,13 @@
                         documentProgressList.appendChild(docDiv);
                     });
                     
-                    // 如果所有文件都已完成，停止轮询
+                    // 如果所有文件都已完成，显示汇总表格按钮
                     if (data.progress_percentage >= 100) {
                         clearInterval(progressInterval);
-                        // 可以在这里添加分析完成后的提示
+                        progressInterval = null; // 清除引用
+                        // 显示汇总表格按钮
+                        document.getElementById('showSummaryBtn').style.display = 'block';
+                        console.log('分析已完成');
                     }
                 } else {
                     console.error('获取进度失败:', data.error);
@@ -398,6 +563,125 @@
             } catch (error) {
                 console.error('轮询进度时出错:', error);
             }
+        }
+        
+        // 显示汇总表格
+        async function showSummaryTable() {
+            if (!projectId) return;
+            
+            try {
+                const response = await fetch(`/api/projects/${projectId}/summary-table`);
+                const data = await response.json();
+                
+                if (response.ok) {
+                    // 隐藏进度区域，显示汇总表格区域
+                    document.getElementById('progressSection').style.display = 'none';
+                    const summarySection = document.getElementById('summarySection');
+                    summarySection.style.display = 'block';
+                    
+                    // 生成汇总表格
+                    const tableContainer = document.getElementById('summaryTableContainer');
+                    tableContainer.innerHTML = generateSummaryTableHTML(data);
+                } else {
+                    console.error('获取汇总表格失败:', data.error);
+                }
+            } catch (error) {
+                console.error('获取汇总表格时出错:', error);
+            }
+        }
+        
+        // 隐藏汇总表格，返回进度显示
+        function hideSummaryTable() {
+            document.getElementById('summarySection').style.display = 'none';
+            document.getElementById('progressSection').style.display = 'block';
+        }
+        
+        // 生成汇总表格HTML
+        function generateSummaryTableHTML(data) {
+            if (!data.headers || !data.data) {
+                return '<p>无法生成汇总表格：数据格式不正确</p>';
+            }
+            
+            let html = '<table class="summary-table">';
+            
+            // 生成表头（支持双行表头）
+            if (data.headers.length >= 2) {
+                // 生成第一行表头
+                html += '<tr>';
+                data.headers[0].forEach(header => {
+                    if (typeof header === 'string') {
+                        html += `<th>${header}</th>`;
+                    } else if (header.rowspan) {
+                        html += `<th rowspan="${header.rowspan}">${header.name}</th>`;
+                    } else if (header.colspan) {
+                        html += `<th colspan="${header.colspan}">${header.name}</th>`;
+                    } else {
+                        html += `<th>${header.name}</th>`;
+                    }
+                });
+                html += '</tr>';
+                
+                // 生成第二行表头（如果存在且不为空）
+                if (data.headers.length > 1 && data.headers[1].length > 0) {
+                    html += '<tr>';
+                    data.headers[1].forEach(header => {
+                        if (typeof header === 'string' && header !== '') {
+                            html += `<th>${header}</th>`;
+                        } else if (typeof header === 'object' && header.name) {
+                            html += `<th>${header.name}</th>`;
+                        } else if (header !== '' && header !== undefined) {
+                            html += `<th>${header}</th>`;
+                        }
+                        // 空字符串或undefined则跳过，保持单元格合并效果
+                    });
+                    html += '</tr>';
+                }
+            } else {
+                // 兼容单行表头
+                data.headers.forEach(headerRow => {
+                    html += '<tr>';
+                    headerRow.forEach(header => {
+                        if (typeof header === 'string') {
+                            html += `<th>${header}</th>`;
+                        } else if (header.name) {
+                            // 处理带有rowspan或colspan的表头
+                            if (header.rowspan) {
+                                html += `<th rowspan="${header.rowspan}">${header.name}</th>`;
+                            } else if (header.colspan) {
+                                html += `<th colspan="${header.colspan}">${header.name}</th>`;
+                            } else {
+                                html += `<th>${header.name}</th>`;
+                            }
+                        } else {
+                            html += `<th>${header}</th>`;
+                        }
+                    });
+                    html += '</tr>';
+                });
+            }
+            
+            // 生成数据行
+            data.data.forEach(row => {
+                html += '<tr>';
+                row.forEach((cell, index) => {
+                    // 如果是投标人名称列（第二列），添加悬停显示功能
+                    if (index === 1 && typeof cell === 'string') {
+                        // 转义HTML特殊字符以防止XSS攻击
+                        const escapedName = cell.replace(/&/g, '&amp;')
+                                               .replace(/</g, '&lt;')
+                                               .replace(/>/g, '&gt;')
+                                               .replace(/"/g, '&quot;')
+                                               .replace(/'/g, '&#039;');
+                        html += `<td><span class="bidder-name" data-full-name="${escapedName}">${escapedName}</span></td>`;
+                    } else {
+                        html += `<td>${cell}</td>`;
+                    }
+                });
+                html += '</tr>';
+            });
+
+            html += '</table>';
+            return html;
         }
     </script>
 </body>

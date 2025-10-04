@@ -37,7 +37,7 @@ def cleanup_temp_files():
                     logging.warning(f'无法删除文件 {file_path}: {e}')
         
         # 清理temp_uploads目录
-        temp_uploads_dir = Path('temp_uploads')
+        temp_uploads_dir = Path('temp/uploads')
         if temp_uploads_dir.exists():
             for file_path in temp_uploads_dir.glob('*'):
                 try:

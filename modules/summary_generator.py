@@ -18,7 +18,23 @@ def get_score_for_rule(detailed_scores, rule_name):
     """从详细评分中查找特定规则的分数"""
     if not detailed_scores:
         return None
+
+    # 确保detailed_scores是列表格式
+    if isinstance(detailed_scores, str):
+        try:
+            detailed_scores = json.loads(detailed_scores)
+        except json.JSONDecodeError:
+            return None
+
+    # 确保detailed_scores是列表
+    if not isinstance(detailed_scores, list):
+        return None
+
     for item in detailed_scores:
+        # 确保item是字典格式
+        if not isinstance(item, dict):
+            continue
+
         # 支持两种格式：旧格式使用criteria_name，新格式使用Child_Item_Name
         criteria_name = item.get('Child_Item_Name') or item.get('criteria_name')
         if criteria_name == rule_name:
@@ -79,11 +95,8 @@ def generate_summary_data(project_id: int, db: Session):
     rows_data = []
     rank = 1
     for result in results:
-        detailed_scores = (
-            json.loads(result.detailed_scores)
-            if isinstance(result.detailed_scores, str)
-            else result.detailed_scores
-        )
+        # 直接使用存储的detailed_scores，避免重复解析
+        detailed_scores = result.detailed_scores
 
         scores = []
         # 只计算子项得分
@@ -91,17 +104,14 @@ def generate_summary_data(project_id: int, db: Session):
             score = get_score_for_rule(detailed_scores, item['name'])
             scores.append(score)
 
-        # 计算总分：只包括子项得分和价格分
-        total_score = sum(s for s in scores if s is not None)
-        if result.price_score is not None:
-            total_score += result.price_score
-
+        # 直接使用数据库中存储的总分，避免重复计算
+        # 总分已经包含了子项得分和价格分
         bidder_row = {
             'rank': rank,
             'bidder_name': result.bidder_name,
             'scores': scores,
             'price_score': result.price_score,
-            'total_score': round(total_score, 2),
+            'total_score': round(result.total_score or 0, 2),
         }
         rows_data.append(bidder_row)
         rank += 1
@@ -128,6 +138,7 @@ def generate_summary_data(project_id: int, db: Session):
     for parent_name in parent_order:
         children = parent_to_children.get(parent_name, [])
         if children:
+            # 只显示父项名称，不显示分值
             header_top.append({'name': parent_name, 'colspan': len(children)})
 
     # 追加价格分与总分（与数据列对齐）
@@ -138,8 +149,9 @@ def generate_summary_data(project_id: int, db: Session):
     header_bottom = []
     for parent_name in parent_order:
         for child in parent_to_children.get(parent_name, []):
+            # 只显示子项名称，不添加分值（因为名称中已经包含了分值）
             header_bottom.append(
-                {'name': child['name'], 'max_score': child['max_score']}
+                {'name': child['name']}
             )
 
     header_rows = [header_top, header_bottom]

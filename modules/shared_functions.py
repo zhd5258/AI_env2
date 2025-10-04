@@ -20,7 +20,7 @@ import json
 import asyncio
 import time
 import threading
-import traceback
+import traceback  # 确保导入
 from typing import List, Dict, Any
 from concurrent.futures import ProcessPoolExecutor
 from pathlib import Path
@@ -37,7 +37,7 @@ from modules.database import (
 from modules.intelligent_bid_analyzer import IntelligentBidAnalyzer
 from modules.price_score_calculator import PriceScoreCalculator
 from modules.scoring_extractor import IntelligentScoringExtractor
-
+from modules.bidder_name_extractor import extract_bidder_name_from_file_after_analysis
 
 # 创建一个进程池
 executor = ProcessPoolExecutor(max_workers=4)
@@ -53,9 +53,14 @@ def extract_bidder_name_from_file_after_analysis(file_path: str) -> str:
     Returns:
         str: 提取的投标人名称
     """
-    # 这里应该实现从分析后的文件中提取投标人名称的逻辑
-    # 暂时返回一个默认值
-    return '待确认投标方'
+    # 实际调用投标人名称提取模块
+    try:
+        from modules.bidder_name_extractor import extract_bidder_name_from_file
+        extracted_name = extract_bidder_name_from_file(file_path)
+        return extracted_name if extracted_name else '待确认投标方'
+    except Exception as e:
+        logging.error(f'从文件中提取投标人名称时出错: {e}')
+        return '待确认投标方'
 
 
 def analysis_task(project_id: int, bid_document_id: int):
@@ -297,6 +302,25 @@ def _extract_price_score_from_detailed_scores(detailed_scores):
         return 0.0
 
 
+def analyze_single_bid_document(project_id: int, bid_document_id: int):
+    """
+    分析单个投标文件
+    这个函数用于并行处理，每个投标文件独立分析
+    """
+    logging.info(f'开始分析投标文件 project_id: {project_id}, bid_document_id: {bid_document_id}')
+    
+    # 为每个分析任务创建独立的数据库会话
+    db = SessionLocal()
+    try:
+        # 调用现有的分析任务函数
+        analysis_task(project_id, bid_document_id)
+        logging.info(f'完成分析投标文件 project_id: {project_id}, bid_document_id: {bid_document_id}')
+    except Exception as e:
+        logging.error(f'分析投标文件时出错 project_id: {project_id}, bid_document_id: {bid_document_id}: {e}')
+    finally:
+        db.close()
+
+
 def run_analysis_and_calculate_prices(project_id: int, bid_files_info: list):
     logging.info(f'开始为项目 {project_id} 执行后台分析和价格计算任务。')
 
@@ -386,16 +410,9 @@ def run_analysis_and_calculate_prices(project_id: int, bid_files_info: list):
     finally:
         db.close()
 
-    loop = asyncio.new_event_loop()
-    asyncio.set_event_loop(loop)
-
-    futures = [
-        loop.run_in_executor(executor, analysis_task, project_id, bid_info['id'])
-        for bid_info in bid_files_info
-    ]
-
-    loop.run_until_complete(asyncio.gather(*futures))
-    logging.info(f'项目 {project_id} 的所有分析任务已完成。')
+    # 注意：并行处理逻辑已移至控制器中实现，这里不再需要执行并行分析任务
+    # 等待控制器中的并行任务完成后再调用价格计算
+    logging.info(f'项目 {project_id} 的分析任务已启动，等待完成...')
 
     db = SessionLocal()
     try:
