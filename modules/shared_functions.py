@@ -36,7 +36,7 @@ from modules.database import (
 )
 from modules.intelligent_bid_analyzer import IntelligentBidAnalyzer
 from modules.price_score_calculator import PriceScoreCalculator
-from modules.scoring_extractor import IntelligentScoringExtractor
+from modules.intelligent_scoring_extractor import IntelligentScoringExtractor
 from modules.bidder_name_extractor import extract_bidder_name_from_file_after_analysis
 
 # 创建一个进程池
@@ -411,49 +411,4 @@ def run_analysis_and_calculate_prices(project_id: int, bid_files_info: list):
         db.close()
 
     # 注意：并行处理逻辑已移至控制器中实现，这里不再需要执行并行分析任务
-    # 等待控制器中的并行任务完成后再调用价格计算
-    logging.info(f'项目 {project_id} 的分析任务已启动，等待完成...')
-
-    db = SessionLocal()
-    try:
-        logging.info(f'开始为项目 {project_id} 计算价格分。')
-        calculator = PriceScoreCalculator(db_session=db)
-        price_scores_result = calculator.calculate_project_price_scores(project_id)
-
-        if price_scores_result:
-            # 重新获取分析结果以计算更新了多少个投标人
-            analysis_results = (
-                db.query(AnalysisResult)
-                .filter(AnalysisResult.project_id == project_id)
-                .all()
-            )
-            logging.info(
-                '项目 %s 价格分计算完成，更新了 %s 个投标方。',
-                project_id,
-                len(analysis_results),
-            )
-        else:
-            logging.warning('项目 %s 未能计算出任何价格分。', project_id)
-
-        project = db.query(TenderProject).filter(TenderProject.id == project_id).first()
-        if project is not None:
-            has_errors = (
-                db.query(BidDocument)
-                .filter(
-                    BidDocument.project_id == project_id,
-                    BidDocument.processing_status == 'error',
-                )
-                .count()
-                > 0
-            )
-
-            project.status = 'completed_with_errors' if has_errors else 'completed'
-            db.commit()
-            logging.info('项目 %s 的状态已更新为 %s。', project_id, project.status)
-
-    except Exception as e:
-        logging.error(f'为项目 {project_id} 计算价格分时出错: {e}')
-        logging.error(traceback.format_exc())
-    finally:
-        db.close()
-        loop.close()
+    logging.info(f'项目 {project_id} 的评分规则提取完成，等待控制器中的并行处理任务完成...')

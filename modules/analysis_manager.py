@@ -34,7 +34,7 @@ from concurrent.futures import ProcessPoolExecutor
 import os
 
 from modules.database import TenderProject, BidDocument, AnalysisResult
-from modules.scoring_extractor.core import IntelligentScoringExtractor
+from modules.intelligent_scoring_extractor import IntelligentScoringExtractor
 from modules.scoring_rules_manager import ScoringRulesManager
 from modules.price_score_calculator import PriceScoreCalculator
 from modules.intelligent_bid_analyzer import IntelligentBidAnalyzer
@@ -83,9 +83,10 @@ class AnalysisManager:
 
             self.logger.info(f'项目 {project_id} 没有评分规则，开始从招标文件提取...')
 
-            # 从招标文件中提取评分规则
-            extractor = IntelligentScoringExtractor()
-            scoring_rules = extractor.extract(tender_file_path)
+            # 使用TenderAnalyzer提取评分规则
+            from modules.tender_analyzer import TenderAnalyzer
+            analyzer = TenderAnalyzer(tender_file_path, self.db, project_id)
+            scoring_rules = analyzer.extract_scoring_rules()
 
             if scoring_rules:
                 # 使用统一的评分规则管理器保存评分规则

@@ -43,9 +43,7 @@ def export_project_results_excel(project_id):
     """导出项目结果到Excel文件"""
     try:
         # 使用上下文管理器获取数据库会话
-        db_gen = get_db()
-        db = next(db_gen)
-        try:
+        with get_db() as db:
             # 验证项目存在
             project = db.query(TenderProject).filter(TenderProject.id == project_id).first()
             if not project:
@@ -166,12 +164,6 @@ def export_project_results_excel(project_id):
             logging.info(f'项目 {project_id} Excel导出完成: {filename}')
 
             return send_file(temp_file_path, as_attachment=True, download_name=filename)
-        finally:
-            try:
-                next(db_gen)  # 触发finally块
-            except StopIteration:
-                pass
-
     except Exception as e:
         logging.error(f'导出Excel时出错: {e}')
         return jsonify({'error': f'导出Excel失败: {str(e)}'}), 500
@@ -181,9 +173,7 @@ def export_project_results_word(project_id):
     """导出项目结果到Word文件"""
     try:
         # 使用上下文管理器获取数据库会话
-        db_gen = get_db()
-        db = next(db_gen)
-        try:
+        with get_db() as db:
             # 验证项目存在
             project = db.query(TenderProject).filter(TenderProject.id == project_id).first()
             if not project:
@@ -240,71 +230,55 @@ def export_project_results_word(project_id):
                 project_table.cell(i, 0).text = key
                 project_table.cell(i, 1).text = value
 
-            # 详细分析结果
-            doc.add_heading('2. 详细分析结果', level=1)
+            # 投标结果汇总
+            doc.add_heading('2. 投标结果汇总', level=1)
 
             # 按总分排序
             sorted_results = sorted(results, key=lambda x: x.total_score or 0, reverse=True)
 
-            for i, result in enumerate(sorted_results, 1):
-                doc.add_heading(f'2.{i} {result.bidder_name}', level=2)
+            if sorted_results:
+                # 创建结果表格
+                table = doc.add_table(rows=1, cols=4)
+                table.style = 'Table Grid'
 
-                # 基本信息表格
-                info_table = doc.add_table(rows=3, cols=2)
-                info_table.style = 'Table Grid'
-                info_table.cell(0, 0).text = '总分'
-                info_table.cell(0, 1).text = str(result.total_score or 0)
-                info_table.cell(1, 0).text = '投标价格'
-                info_table.cell(1, 1).text = str(result.extracted_price or 0)
-                info_table.cell(2, 0).text = '分析时间'
-                info_table.cell(2, 1).text = (
-                    result.analyzed_at.strftime('%Y-%m-%d %H:%M:%S')
-                    if result.analyzed_at
-                    else ''
-                )
+                # 表头
+                hdr_cells = table.rows[0].cells
+                hdr_cells[0].text = '排名'
+                hdr_cells[1].text = '投标人'
+                hdr_cells[2].text = '总分'
+                hdr_cells[3].text = '投标价格'
 
-                # 详细评分
-                if result.detailed_scores:
-                    try:
-                        detailed_scores = json.loads(result.detailed_scores)
-                        if isinstance(detailed_scores, list) and detailed_scores:
-                            doc.add_paragraph('详细评分:', style='Heading 3')
-
-                            scores_table = doc.add_table(
-                                rows=len(detailed_scores) + 1, cols=2
-                            )
-                            scores_table.style = 'Table Grid'
-                            scores_table.cell(0, 0).text = '评分项'
-                            scores_table.cell(0, 1).text = '得分'
-
-                            for j, score_item in enumerate(detailed_scores):
-                                if isinstance(score_item, dict):
-                                    for score_name, score_value in score_item.items():
-                                        scores_table.cell(j + 1, 0).text = score_name
-                                        scores_table.cell(j + 1, 1).text = str(score_value)
-                    except (json.JSONDecodeError, TypeError):
-                        pass
-
-                doc.add_paragraph()  # 添加空行
+                # 填充数据
+                for i, result in enumerate(sorted_results, 1):
+                    row_cells = table.add_row().cells
+                    row_cells[0].text = str(i)
+                    row_cells[1].text = result.bidder_name
+                    row_cells[2].text = f"{result.total_score:.2f}" if result.total_score is not None else "N/A"
+                    row_cells[3].text = f"{result.extracted_price:.2f}" if result.extracted_price is not None else "N/A"
 
             # 评分规则
             if scoring_rules:
                 doc.add_heading('3. 评分规则', level=1)
 
-                rules_table = doc.add_table(rows=len(scoring_rules) + 1, cols=5)
+                rules_table = doc.add_table(rows=1, cols=5)
                 rules_table.style = 'Table Grid'
-                rules_table.cell(0, 0).text = '父级评分项'
-                rules_table.cell(0, 1).text = '子级评分项'
-                rules_table.cell(0, 2).text = '父级最高分'
-                rules_table.cell(0, 3).text = '子级最高分'
-                rules_table.cell(0, 4).text = '评分说明'
 
-                for i, rule in enumerate(scoring_rules):
-                    rules_table.cell(i + 1, 0).text = rule.Parent_Item_Name or ''
-                    rules_table.cell(i + 1, 1).text = rule.Child_Item_Name or ''
-                    rules_table.cell(i + 1, 2).text = str(rule.Parent_max_score or '')
-                    rules_table.cell(i + 1, 3).text = str(rule.Child_max_score or '')
-                    rules_table.cell(i + 1, 4).text = rule.description or ''
+                # 表头
+                hdr_cells = rules_table.rows[0].cells
+                hdr_cells[0].text = '父级评分项'
+                hdr_cells[1].text = '子级评分项'
+                hdr_cells[2].text = '父级最高分'
+                hdr_cells[3].text = '子级最高分'
+                hdr_cells[4].text = '评分说明'
+
+                # 填充数据
+                for rule in scoring_rules:
+                    row_cells = rules_table.add_row().cells
+                    row_cells[0].text = rule.Parent_Item_Name or ''
+                    row_cells[1].text = rule.Child_Item_Name or ''
+                    row_cells[2].text = str(rule.Parent_max_score or '')
+                    row_cells[3].text = str(rule.Child_max_score or '')
+                    row_cells[4].text = rule.description or ''
 
             # 保存到临时文件
             timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
@@ -316,12 +290,6 @@ def export_project_results_word(project_id):
             logging.info(f'项目 {project_id} Word导出完成: {filename}')
 
             return send_file(temp_file_path, as_attachment=True, download_name=filename)
-        finally:
-            try:
-                next(db_gen)  # 触发finally块
-            except StopIteration:
-                pass
-
     except Exception as e:
         logging.error(f'导出Word时出错: {e}')
         return jsonify({'error': f'导出Word失败: {str(e)}'}), 500

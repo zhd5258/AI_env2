@@ -14,7 +14,7 @@ AI_env2 是一个基于AI的投标文件分析系统，用于处理PDF格式的�
 
 ## 技术架构
 
-- 后端：Python + FastAPI
+- 后端：Python + Flask
 - 前端：Jinja2 + 原生 JS + CSS
 - OCR：PyTesseract + pdfplumber + pikepdf + MinerU
 - 数据库：SQLAlchemy
@@ -26,7 +26,29 @@ AI_env2 是一个基于AI的投标文件分析系统，用于处理PDF格式的�
 pip install -r requirements.txt
 
 # 运行服务
-uvicorn main:app --reload
+python app.py
+```
+
+## 投标文件处理与分析流程
+
+```mermaid
+graph TD
+    A[开始] --> B[上传招标文件和投标文件]
+    B --> C[保存文件到uploads目录]
+    C --> D[使用PDF处理器将投标文件转换为MD文件]
+    D --> E[保存MD文件到temp/md目录]
+    E --> F[从数据库加载评分规则]
+    F --> G[为每个投标文件启动独立分析线程]
+    G --> H[分析线程读取对应的MD文件]
+    H --> I[遍历数据库中的评分规则]
+    I --> J[为每个评分规则创建Prompt]
+    J --> K[发送Prompt给AI大模型打分]
+    K --> L[收集AI打分结果]
+    L --> M[保存除价格外的评分结果]
+    M --> N[所有投标文件分析完成]
+    N --> O[统一计算价格分]
+    O --> P[更新项目状态]
+    P --> Q[结束]
 ```
 
 ## 常见问题与解决方案

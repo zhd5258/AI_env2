@@ -52,7 +52,7 @@ class IntelligentBidAnalyzer(BidAnalyzerHelpers):
         else:
             # 保持旧的兼容性，如果未提供文本，则初始化处理器以便后续提取
             self.logger.warning(f'No pre-extracted text provided for {self.bid_file_path}. PDFProcessor will be used.')
-            self.bid_processor = PDFProcessor(self.bid_file_path)  # 使用新的PDF处理器
+            self.bid_processor = PDFProcessor(self.bid_file_path, file_type="bid")  # 使用新的PDF处理器，指定为投标文件类型
             self.bid_pages = None
 
     def _update_progress(self, completed, total, current_rule, partial_results=None):
@@ -152,6 +152,42 @@ class IntelligentBidAnalyzer(BidAnalyzerHelpers):
             self.logger.error(f"从MD文件加载内容时出错: {e}")
             return None
 
+    def analyze_rule_parallel(self, rule, bid_pages):
+        """并行分析单个评分规则"""
+        try:
+            self.logger.info(f'正在为投标人 {self.bidder_name} 分析子项规则: {rule.Child_Item_Name}')
+            
+            # 查找相关上下文（使用从MD文件读取的内容）
+            relevant_context = self._find_relevant_context_for_child_rule(rule, bid_pages)
+            
+            # 创建prompt
+            prompt = self._create_prompt_for_child_rule(rule, relevant_context)
+            
+            # 提交AI分析
+            ai_response = self.ai_analyzer.analyze_text(prompt)
+            if 'Error:' in ai_response:
+                score, reason = 0, f'AI分析失败: {ai_response}'
+            else:
+                score, reason = self._parse_ai_score_response(ai_response, rule.Child_max_score)
+            
+            # 返回分析结果
+            return {
+                'Child_Item_Name': rule.Child_Item_Name,
+                'max_score': rule.Child_max_score,
+                'score': score,
+                'reason': reason,
+                'Parent_Item_Name': rule.Parent_Item_Name
+            }
+        except Exception as e:
+            self.logger.error(f'分析规则 {rule.Child_Item_Name} 时出错: {e}')
+            return {
+                'Child_Item_Name': rule.Child_Item_Name,
+                'max_score': rule.Child_max_score,
+                'score': 0,
+                'reason': f'分析失败: {str(e)}',
+                'Parent_Item_Name': rule.Parent_Item_Name
+            }
+
     def analyze(self):
         try:
             # 1. 从数据库加载评分规则
@@ -196,49 +232,54 @@ class IntelligentBidAnalyzer(BidAnalyzerHelpers):
             self.total_rules_to_analyze = len(child_rules)
             self._update_progress(0, self.total_rules_to_analyze, f'[{self.bidder_name}] 初始化分析...', [])
             
-            # 分析每个子项规则
+            # 并行分析每个子项规则
             analyzed_scores = []  # 改为列表格式以匹配数据库期望的格式
             analyzed_scores_for_progress = []
-            for rule in child_rules:
-                self.progress_counter += 1
-                current_rule_name = f'分析规则 {self.progress_counter}/{self.total_rules_to_analyze}: {rule.Child_Item_Name}'
-                self.logger.info(f'正在为投标人 {self.bidder_name} 分析子项规则: {rule.Child_Item_Name}')
-                
-                # 查找相关上下文（使用从MD文件读取的内容）
-                relevant_context = self._find_relevant_context_for_child_rule(rule, bid_pages)
-                
-                # 创建prompt
-                prompt = self._create_prompt_for_child_rule(rule, relevant_context)
-                
-                # 提交AI分析
-                ai_response = self.ai_analyzer.analyze_text(prompt)
-                if 'Error:' in ai_response:
-                    score, reason = 0, f'AI分析失败: {ai_response}'
-                else:
-                    score, reason = self._parse_ai_score_response(ai_response, rule.Child_max_score)
-                
-                # 保存分析结果到列表
-                analyzed_rule = {
-                    'Child_Item_Name': rule.Child_Item_Name,
-                    'max_score': rule.Child_max_score,
-                    'score': score,
-                    'reason': reason,
-                    'Parent_Item_Name': rule.Parent_Item_Name
+            
+            # 使用线程池并行处理规则分析
+            import concurrent.futures
+            from concurrent.futures import ThreadPoolExecutor, as_completed
+            
+            with ThreadPoolExecutor(max_workers=min(len(child_rules), 5)) as executor:
+                # 提交所有任务
+                future_to_rule = {
+                    executor.submit(self.analyze_rule_parallel, rule, bid_pages): rule 
+                    for rule in child_rules
                 }
-                analyzed_scores.append(analyzed_rule)
                 
-                # 为进度更新创建一个单独的列表
-                analyzed_rule_for_progress = {
-                    'Child_Item_Name': rule.Child_Item_Name,
-                    'max_score': rule.Child_max_score,
-                    'score': score,
-                    'reason': reason,
-                    'Parent_Item_Name': rule.Parent_Item_Name
-                }
-                analyzed_scores_for_progress.append(analyzed_rule_for_progress)
-                
-                # 更新进度
-                self._update_progress(self.progress_counter, self.total_rules_to_analyze, current_rule_name, analyzed_scores_for_progress)
+                # 收集结果
+                completed_count = 0
+                for future in as_completed(future_to_rule):
+                    rule = future_to_rule[future]
+                    try:
+                        result = future.result()
+                        analyzed_scores.append(result)
+                        
+                        # 为进度更新创建一个单独的列表
+                        analyzed_scores_for_progress.append(result)
+                        
+                        # 更新进度
+                        completed_count += 1
+                        current_rule_name = f'分析规则 {completed_count}/{self.total_rules_to_analyze}: {rule.Child_Item_Name}'
+                        self._update_progress(completed_count, self.total_rules_to_analyze, current_rule_name, analyzed_scores_for_progress)
+                        
+                    except Exception as e:
+                        self.logger.error(f'分析规则 {rule.Child_Item_Name} 时发生异常: {e}')
+                        # 添加一个默认的失败结果
+                        failed_result = {
+                            'Child_Item_Name': rule.Child_Item_Name,
+                            'max_score': rule.Child_max_score,
+                            'score': 0,
+                            'reason': f'分析失败: {str(e)}',
+                            'Parent_Item_Name': rule.Parent_Item_Name
+                        }
+                        analyzed_scores.append(failed_result)
+                        analyzed_scores_for_progress.append(failed_result)
+                        
+                        # 更新进度
+                        completed_count += 1
+                        current_rule_name = f'分析规则 {completed_count}/{self.total_rules_to_analyze}: {rule.Child_Item_Name} (失败)'
+                        self._update_progress(completed_count, self.total_rules_to_analyze, current_rule_name, analyzed_scores_for_progress)
             
             # 5. 计算价格分（注意：价格分应该在所有投标人都分析完成后统一计算，这里仅保存提取的价格）
             price_score = 0

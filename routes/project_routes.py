@@ -55,41 +55,68 @@ class CleanupRequest:
 @router.route('/projects', methods=['GET'])
 def get_all_projects():
     """获取所有项目列表"""
-    # 使用上下文管理器获取数据库会话
-    db_gen = get_db()
-    db = next(db_gen)
     try:
-        projects = db.query(TenderProject).all()
+        # 使用上下文管理器获取数据库会话
+        with get_db() as db:
+            projects = db.query(TenderProject).all()
 
-        # 使用单次查询获取所有相关的投标文件和分析结果信息
-        project_data = []
-        for project in projects:
-            bid_docs = (
-                db.query(BidDocument).filter(BidDocument.project_id == project.id).all()
-            )
+            # 使用单次查询获取所有相关的投标文件和分析结果信息
+            project_data = []
+            for project in projects:
+                bid_docs = (
+                    db.query(BidDocument).filter(BidDocument.project_id == project.id).all()
+                )
 
-            # 统计分析结果
-            completed_count = (
-                db.query(AnalysisResult)
-                .join(BidDocument, AnalysisResult.bid_document_id == BidDocument.id)
-                .filter(BidDocument.project_id == project.id)
-                .filter(AnalysisResult.total_score.isnot(None))
-                .count()
-            )
+                # 统计分析结果
+                completed_count = (
+                    db.query(AnalysisResult)
+                    .join(BidDocument, AnalysisResult.bid_document_id == BidDocument.id)
+                    .filter(BidDocument.project_id == project.id)
+                    .filter(AnalysisResult.total_score.isnot(None))
+                    .count()
+                )
 
-            project_info = {
-                'id': project.id,
-                'project_code': project.project_code,
-                'name': project.name,
-                'description': project.description,
-                'tender_file_path': project.tender_file_path,
-                'created_at': project.created_at.isoformat()
-                if project.created_at
-                else None,
-                'bid_count': len(bid_docs),
-                'result_count': completed_count,
-                'status': project.status,
-                'bid_documents': [
+                project_info = {
+                    'id': project.id,
+                    'project_code': project.project_code,
+                    'name': project.name,
+                    'description': project.description,
+                    'tender_file_path': project.tender_file_path,
+                    'created_at': project.created_at.isoformat()
+                    if project.created_at
+                    else None,
+                    'bid_count': len(bid_docs),
+                    'result_count': completed_count,
+                    'status': project.status,
+                    'bid_documents': [
+                        {
+                            'id': doc.id,
+                            'filename': get_filename_from_path(doc.file_path or ''),
+                            'bidder_name': doc.bidder_name,
+                            'processing_status': doc.processing_status,
+                            'file_path': doc.file_path,
+                        }
+                        for doc in bid_docs
+                    ],
+                }
+                project_data.append(project_info)
+
+            return jsonify(project_data)
+    except Exception as e:
+        logging.error(f'获取所有项目列表时出错: {e}')
+        return jsonify({'error': f'获取项目列表失败: {str(e)}'}), 500
+
+@router.route('/projects/<int:project_id>/bidders', methods=['GET'])
+def list_project_bidders(project_id):
+    """列出项目下的投标文件与当前名称，供前端展示和编辑。"""
+    try:
+        # 使用上下文管理器获取数据库会话
+        with get_db() as db:
+            docs = db.query(BidDocument).filter(BidDocument.project_id == project_id).all()
+
+            bidders = []
+            for doc in docs:
+                bidders.append(
                     {
                         'id': doc.id,
                         'filename': get_filename_from_path(doc.file_path or ''),
@@ -97,54 +124,19 @@ def get_all_projects():
                         'processing_status': doc.processing_status,
                         'file_path': doc.file_path,
                     }
-                    for doc in bid_docs
-                ],
-            }
-            project_data.append(project_info)
+                )
 
-        return jsonify(project_data)
-    finally:
-        try:
-            next(db_gen)  # 触发finally块
-        except StopIteration:
-            pass
-
-@router.route('/projects/<int:project_id>/bidders', methods=['GET'])
-def list_project_bidders(project_id):
-    """列出项目下的投标文件与当前名称，供前端展示和编辑。"""
-    # 使用上下文管理器获取数据库会话
-    db_gen = get_db()
-    db = next(db_gen)
-    try:
-        docs = db.query(BidDocument).filter(BidDocument.project_id == project_id).all()
-
-        bidders = []
-        for doc in docs:
-            bidders.append(
-                {
-                    'id': doc.id,
-                    'filename': get_filename_from_path(doc.file_path or ''),
-                    'bidder_name': doc.bidder_name,
-                    'processing_status': doc.processing_status,
-                    'file_path': doc.file_path,
-                }
-            )
-
-        return jsonify({'bidders': bidders})
-    finally:
-        try:
-            next(db_gen)  # 触发finally块
-        except StopIteration:
-            pass
+            return jsonify({'bidders': bidders})
+    except Exception as e:
+        logging.error(f'列出项目投标方时出错: {e}')
+        return jsonify({'error': f'获取投标方列表失败: {str(e)}'}), 500
 
 @router.route('/bids/<int:bid_id>/name', methods=['PATCH'])
 def update_bidder_name(bid_id):
     """更新投标人名称"""
     try:
         # 使用上下文管理器获取数据库会话
-        db_gen = get_db()
-        db = next(db_gen)
-        try:
+        with get_db() as db:
             data = request.get_json()
             payload = UpdateBidderNameRequest(data.get('bidder_name', ''))
             
@@ -178,12 +170,6 @@ def update_bidder_name(bid_id):
                 'old_name': old_name,
                 'new_name': payload.bidder_name,
             })
-        finally:
-            try:
-                next(db_gen)  # 触发finally块
-            except StopIteration:
-                pass
-
     except Exception as e:
         logging.error(f'更新投标人名称时出错: {e}')
         return jsonify({'error': f'更新失败: {str(e)}'}), 500
@@ -193,9 +179,7 @@ def delete_bid_documents_batch(project_id):
     """批量删除投标文件"""
     try:
         # 使用上下文管理器获取数据库会话
-        db_gen = get_db()
-        db = next(db_gen)
-        try:
+        with get_db() as db:
             # 解析请求体
             data = request.get_json()
             bid_document_ids = data.get('bid_document_ids', [])
@@ -253,19 +237,13 @@ def delete_bid_documents_batch(project_id):
             db.commit()
 
             return jsonify({
-                'message': f'成功删除 {len(deleted_files)} 个文件，失败 {len(failed_files)} 个文件',
+                'message': f'成功删除 {len(deleted_files)} 个文件',
                 'deleted_files': deleted_files,
                 'failed_files': failed_files,
             })
-        finally:
-            try:
-                next(db_gen)  # 触发finally块
-            except StopIteration:
-                pass
-
     except Exception as e:
         logging.error(f'批量删除投标文件时出错: {e}')
-        return jsonify({'error': f'删除失败: {str(e)}'}), 500
+        return jsonify({'error': f'批量删除失败: {str(e)}'}), 500
 
 @router.route('/projects/<int:project_id>/bid-documents/<int:bid_document_id>/failed-pages', methods=['GET'])
 def get_failed_pages_info(project_id, bid_document_id):
@@ -362,7 +340,7 @@ def cleanup_temp_files(project_id):
             # 清理 temp_word
             if payload.cleanup_temp_word:
                 try:
-                    temp_word_path = 'temp/word'
+                    temp_word_path = 'temp/md'
                     if os.path.exists(temp_word_path):
                         file_count = len([f for f in os.listdir(temp_word_path) if f.endswith('.txt')])
                         cleanup_results['temp_word'] = {
@@ -383,7 +361,7 @@ def cleanup_temp_files(project_id):
             # 清理 temp_pdf_cache
             if payload.cleanup_temp_pdf_cache:
                 try:
-                    temp_pdf_cache_path = 'temp/pdf_cache'
+                    temp_pdf_cache_path = 'temp/mineru'
                     if os.path.exists(temp_pdf_cache_path):
                         file_count = len(
                             [

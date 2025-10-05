@@ -543,6 +543,7 @@
                             <p><strong>投标文件：${displayFilename}</strong></p>
                             <p>投标人: <span class="bidder-name" data-full-name="${displayBidderName}">${displayBidderName}</span></p>
                             <p>状态: ${statusText}</p>
+                            ${doc.processing_phase ? `<p>阶段: ${doc.processing_phase}</p>` : ''}
                             ${doc.total_score ? `<p>总分: ${doc.total_score.toFixed(2)}</p>` : ''}
                         `;
                         

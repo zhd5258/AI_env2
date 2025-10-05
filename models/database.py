@@ -24,7 +24,8 @@ from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import sessionmaker, relationship
 import datetime
 
-DATABASE_URL = 'sqlite:///./tender_evaluation.db'
+import os
+DATABASE_URL = 'sqlite:///' + os.path.abspath(os.path.join(os.path.dirname(__file__), '..', 'db', 'tender_evaluation.db'))
 
 engine = create_engine(DATABASE_URL, connect_args={'check_same_thread': False})
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
@@ -66,6 +67,8 @@ class BidDocument(Base):
     partial_analysis_results = Column(String, nullable=True)
     # Adding detailed progress information field
     detailed_progress_info = Column(String, nullable=True)
+    # Adding processing phase field
+    processing_phase = Column(String, nullable=True)
     # Adding PDF processing failed page record field
     failed_pages_info = Column(String, nullable=True)
     # Adding price extraction tracking fields

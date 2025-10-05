@@ -16,7 +16,7 @@ class Config:
     MAX_CONTENT_LENGTH = 500 * 1024 * 1024  # 500MB限制，增加文件上传大小限制
     
     # 数据库配置
-    DATABASE_URL = 'sqlite:///./tender_evaluation.db'
+    DATABASE_URL = 'sqlite:///./db/tender_evaluation.db'
     
     # 创建上传目录
     UPLOADS_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'uploads')

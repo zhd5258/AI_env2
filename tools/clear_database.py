@@ -4,7 +4,7 @@
 # 作者           : KingFreeDom
 # 创建时间         : 2025-09-11 21:40:09
 #最近一次编辑者      : KingFreeDom
-#最近一次编辑时间     : 2025-10-04 09:58:08
+#最近一次编辑时间     : 2025-10-05 17:01:04
 #文件相对于项目的路径   : \AI_env2\tools\clear_database.py
 #
 # Copyright (c) 2025 by 中车眉山车辆有限公司/KingFreeDom, All Rights Reserved.
@@ -22,7 +22,7 @@ import os
 
 def clear_database():
     """清空数据库中的所有数据"""
-    db_path = './tender_evaluation.db'
+    db_path = r'D:\user\PythonProject\AI_env2\db\tender_evaluation.db'
 
     if not os.path.exists(db_path):
         print('数据库文件不存在')

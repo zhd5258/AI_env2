@@ -29,7 +29,11 @@ def migrate_database():
         new_columns = [
             ('price_extraction_attempts', 'INTEGER'),
             ('price_extraction_error', 'TEXT'),
-            ('price_extracted', 'BOOLEAN')
+            ('price_extracted', 'BOOLEAN'),
+            ('processing_phase', 'TEXT'),
+            ('detailed_progress_info', 'TEXT'),
+            ('failed_pages_info', 'TEXT'),
+            ('partial_analysis_results', 'TEXT')
         ]
         
         for column_name, column_type in new_columns:

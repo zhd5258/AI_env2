@@ -4,7 +4,7 @@
 #作者           : KingFreeDom
 #创建时间         : 2025-10-03 14:14:03
 #最近一次编辑者      : KingFreeDom
-#最近一次编辑时间     : 2025-10-04 10:55:43
+#最近一次编辑时间     : 2025-10-05 17:59:02
 #文件相对于项目的路径   : \AI_env2\app.py
 #
 #Copyright (c) 2025 by 中车眉山车辆有限公司/KingFreeDom, All Rights Reserved. 
@@ -36,7 +36,6 @@ app.config.from_object(Config)
 # 启动资源监控器
 from modules.resource_monitor import start_resource_monitoring
 start_resource_monitoring()
-
 
 # 设置中间件
 setup_cors(app)
@@ -75,4 +74,4 @@ def static_files(filename):
     return send_from_directory('public', filename)
 
 if __name__ == '__main__':
-    app.run(host='0.0.0.0', port=8000, debug=True)
+    app.run(host='0.0.0.0', port=8000, debug=False)

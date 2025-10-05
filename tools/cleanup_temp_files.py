@@ -170,9 +170,9 @@ def main(clear_database=False):
     # 定义需要清理的目录
     directories_to_clean = [
         'temp/uploads',
-        'temp/word',
+        'temp/md',
         'uploads',
-        'temp/pdf_cache',  # 添加对temp/pdf_cache目录的清理
+        'temp/mineru',  # 添加对temp/mineru目录的清理
         # 如果有其他临时目录也可以添加到这里
     ]
 

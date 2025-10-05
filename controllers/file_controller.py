@@ -117,6 +117,36 @@ def save_upload_file(upload_file, destination: str, original_filename: str = Non
 UPLOADS_DIR = get_platform_safe_path('uploads')
 safe_makedirs(UPLOADS_DIR)
 
+
+def update_processing_phase(bid_document_id: int, phase: str):
+    """更新投标文件的处理阶段"""
+    db = SessionLocal()
+    try:
+        bid_document = db.query(BidDocument).filter(BidDocument.id == bid_document_id).first()
+        if bid_document:
+            bid_document.processing_phase = phase
+            db.commit()
+            logging.info(f"更新投标文件 {bid_document_id} 的处理阶段为: {phase}")
+    except Exception as e:
+        logging.error(f"更新处理阶段时出错: {e}")
+    finally:
+        db.close()
+
+
+def update_project_status(project_id: int, status: str):
+    """更新项目状态"""
+    db = SessionLocal()
+    try:
+        project = db.query(TenderProject).filter(TenderProject.id == project_id).first()
+        if project:
+            project.status = status
+            db.commit()
+            logging.info(f"更新项目 {project_id} 的状态为: {status}")
+    except Exception as e:
+        logging.error(f"更新项目状态时出错: {e}")
+    finally:
+        db.close()
+
 def init_upload_logic(tender_file, bid_files):
     """初始化上传业务逻辑"""
     db = None
@@ -168,54 +198,24 @@ def init_upload_logic(tender_file, bid_files):
                 bid_original_filename
             )
 
-            # 立即使用MinerU处理PDF文件生成MD文件
+            # 从PDF文件中提取投标人名称（在并行处理中会再次提取，这里仅作为初步信息）
             try:
-                pdf_processor = PDFProcessor(bid_file_path)
-                md_file_path = pdf_processor.process_pdf_to_md()
-                logging.info(f"成功使用MinerU处理PDF文件，生成MD文件: {md_file_path}")
+                extracted_bidder_name = extract_bidder_name_from_file(bid_file_path)
+                if not extracted_bidder_name or extracted_bidder_name == '未提取':
+                    # 如果提取失败，使用文件名作为备用方案
+                    extracted_bidder_name = (
+                        f'{Path(bid_original_filename).stem}'
+                        if bid_original_filename
+                        else '未知投标方'
+                    )
             except Exception as e:
-                logging.error(f"使用MinerU处理PDF文件时出错: {e}")
-                md_file_path = None
-
-            # 从MD文件中提取投标人名称
-            extracted_bidder_name = '未知投标方'
-            if md_file_path and os.path.exists(md_file_path):
-                try:
-                    extracted_bidder_name = extract_bidder_name_from_file(md_file_path)
-                    if not extracted_bidder_name or extracted_bidder_name == '未提取':
-                        # 如果提取失败，使用文件名作为备用方案
-                        extracted_bidder_name = (
-                            f'{Path(bid_original_filename).stem}'
-                            if bid_original_filename
-                            else '未知投标方'
-                        )
-                except Exception as e:
-                    logging.warning(f'从MD文件中提取投标人名称时出错: {e}')
-                    # 如果提取失败，使用文件名作为备用方案
-                    extracted_bidder_name = (
-                        f'{Path(bid_original_filename).stem}'
-                        if bid_original_filename
-                        else '未知投标方'
-                    )
-            else:
-                # 如果没有MD文件，则尝试直接从PDF文件提取
-                try:
-                    extracted_bidder_name = extract_bidder_name_from_file(bid_file_path)
-                    if not extracted_bidder_name or extracted_bidder_name == '未提取':
-                        # 如果提取失败，使用文件名作为备用方案
-                        extracted_bidder_name = (
-                            f'{Path(bid_original_filename).stem}'
-                            if bid_original_filename
-                            else '未知投标方'
-                        )
-                except Exception as e:
-                    logging.warning(f'从文件中提取投标人名称时出错: {e}')
-                    # 如果提取失败，使用文件名作为备用方案
-                    extracted_bidder_name = (
-                        f'{Path(bid_original_filename).stem}'
-                        if bid_original_filename
-                        else '未知投标方'
-                    )
+                logging.warning(f'从PDF文件中提取投标人名称时出错: {e}')
+                # 如果提取失败，使用文件名作为备用方案
+                extracted_bidder_name = (
+                    f'{Path(bid_original_filename).stem}'
+                    if bid_original_filename
+                    else '未知投标方'
+                )
 
             # 确保投标人名称不为空且不是默认值
             if not extracted_bidder_name or extracted_bidder_name in ['未知投标方', '未提取']:
@@ -261,31 +261,139 @@ def init_upload_logic(tender_file, bid_files):
         # 启动后台分析任务（修改为并行处理）
         def start_analysis_in_background():
             try:
-                # 为每个投标文件启动独立的分析任务
-                analysis_threads = []
-                for bid_info in bid_files_info:
-                    def analyze_single_bid(bid_info_local):
-                        try:
-                            # 为每个投标文件创建单独的分析任务
-                            from modules.shared_functions import analyze_single_bid_document
-                            analyze_single_bid_document(project_id, bid_info_local['id'])
-                        except Exception as e:
-                            logging.error(f'分析投标文件 {bid_info_local["id"]} 时出错: {e}')
-                    
-                    # 创建并启动分析线程
-                    analysis_thread = threading.Thread(target=analyze_single_bid, args=(bid_info,))
-                    analysis_thread.daemon = True
-                    analysis_thread.start()
-                    analysis_threads.append(analysis_thread)
+                # 使用生产者-消费者模式实现并行处理
+                # 一边处理PDF转换为MD，一边对已转换完成的MD文件进行AI分析
                 
-                # 等待所有分析任务完成
-                for thread in analysis_threads:
-                    thread.join()
+                import queue
+                import threading
+                import time
+                
+                # 创建队列用于存储已完成PDF处理的文件
+                processed_queue = queue.Queue()
+                processing_complete = threading.Event()
+                
+                # PDF处理线程函数
+                def process_pdfs():
+                    try:
+                        logging.info(f"PDF处理线程启动，共需处理 {len(bid_files_info)} 个文件")
+                        # 按顺序处理每个PDF文件
+                        for i, bid_info in enumerate(bid_files_info):
+                            bid_document_id = bid_info['id']
+                            bid_file_path = bid_info['bid_file_path']
+                            
+                            logging.info(f"[{i+1}/{len(bid_files_info)}] 开始处理PDF文件: {bid_file_path}")
+                            
+                            # 更新处理阶段为PDF转换阶段
+                            update_processing_phase(bid_info['id'], 'PDF转换中')
+                            
+                            # 处理PDF文件生成MD文件
+                            try:
+                                pdf_processor = PDFProcessor(bid_file_path)
+                                
+                                # 检查temp/md目录中是否已存在对应的txt（招标文件）或md文档（投标文件）
+                                existing_file_path = pdf_processor._check_output_exists()
+                                if existing_file_path:
+                                    md_file_path = existing_file_path
+                                    logging.info(f"[{i+1}/{len(bid_files_info)}] 文件已存在，跳过PDF转换: {md_file_path}")
+                                else:
+                                    md_file_path = pdf_processor.process_pdf_to_md()
+                                    logging.info(f"[{i+1}/{len(bid_files_info)}] 成功处理PDF文件，生成MD文件: {md_file_path}")
+                                
+                                # 将处理完成的文件信息放入队列
+                                processed_queue.put({
+                                    'bid_info': bid_info,
+                                    'md_file_path': md_file_path,
+                                    'status': 'success'
+                                })
+                                logging.info(f"[{i+1}/{len(bid_files_info)}] 已将处理完成的文件放入队列: {bid_file_path}")
+                            except Exception as e:
+                                logging.error(f"[{i+1}/{len(bid_files_info)}] 处理PDF文件时出错: {e}")
+                                # 将错误信息放入队列
+                                processed_queue.put({
+                                    'bid_info': bid_info,
+                                    'error': str(e),
+                                    'status': 'error'
+                                })
+                        
+                        # 标记PDF处理完成
+                        processing_complete.set()
+                        logging.info(f"所有PDF文件处理完成，共处理 {len(bid_files_info)} 个文件")
+                    except Exception as e:
+                        logging.error(f"PDF处理线程出错: {e}")
+                        processing_complete.set()
+                
+                # AI分析线程函数
+                def analyze_mds():
+                    try:
+                        completed_analyses = 0
+                        total_files = len(bid_files_info)
+                        
+                        logging.info(f"AI分析线程启动，共需分析 {total_files} 个文件")
+                        
+                        while not (processing_complete.is_set() and processed_queue.empty()):
+                            try:
+                                # 从队列中获取已完成处理的文件
+                                try:
+                                    # 使用阻塞方式获取队列数据，超时1秒
+                                    processed_item = processed_queue.get(timeout=1.0)
+                                    
+                                    if processed_item['status'] == 'success':
+                                        # 更新处理阶段为AI分析阶段
+                                        update_processing_phase(processed_item['bid_info']['id'], 'AI分析中')
+                                        
+                                        # 启动AI分析
+                                        bid_info = processed_item['bid_info']
+                                        logging.info(f"[{completed_analyses+1}/{total_files}] 开始AI分析投标文件: {bid_info['id']}")
+                                        
+                                        try:
+                                            from modules.shared_functions import analyze_single_bid_document
+                                            analyze_single_bid_document(project_id, bid_info['id'])
+                                            logging.info(f"[{completed_analyses+1}/{total_files}] 完成AI分析投标文件: {bid_info['id']}")
+                                        except Exception as e:
+                                            logging.error(f"[{completed_analyses+1}/{total_files}] 分析投标文件 {bid_info['id']} 时出错: {e}")
+                                    elif processed_item['status'] == 'error':
+                                        logging.error(f"PDF处理出错: {processed_item.get('error', '未知错误')}")
+                                    
+                                    completed_analyses += 1
+                                    logging.info(f"AI分析进度: {completed_analyses}/{total_files}")
+                                    
+                                    # 标记任务完成
+                                    processed_queue.task_done()
+                                except queue.Empty:
+                                    # 队列为空，继续等待
+                                    logging.debug("队列为空，继续等待...")
+                                    continue
+                            except Exception as e:
+                                logging.error(f"AI分析线程处理时出错: {e}")
+                                time.sleep(0.1)
+                        
+                        logging.info(f"所有AI分析任务完成，共分析 {completed_analyses} 个文件")
+                    except Exception as e:
+                        logging.error(f"AI分析线程出错: {e}")
+                
+                # 创建并启动PDF处理线程和AI分析线程
+                logging.info("创建PDF处理线程和AI分析线程")
+                pdf_thread = threading.Thread(target=process_pdfs, name="PDFProcessor")
+                ai_thread = threading.Thread(target=analyze_mds, name="AIAnalyzer")
+                
+                pdf_thread.daemon = True
+                ai_thread.daemon = True
+                
+                # 先启动AI分析线程，使其处于等待状态
+                logging.info("启动AI分析线程")
+                ai_thread.start()
+                # 稍后启动PDF处理线程
+                logging.info("启动PDF处理线程")
+                pdf_thread.start()
+                
+                # 等待所有线程完成
+                pdf_thread.join()
+                ai_thread.join()
                 
                 # 所有分析完成后，统一计算价格分
-                db_session = SessionLocal()
                 try:
                     logging.info(f'开始为项目 {project_id} 计算价格分。')
+                    db_session = SessionLocal()
                     from modules.price_score_calculator import PriceScoreCalculator
                     calculator = PriceScoreCalculator(db_session)
                     price_scores_result = calculator.calculate_project_price_scores(project_id)
@@ -324,11 +432,16 @@ def init_upload_logic(tender_file, bid_files):
                 except Exception as e:
                     logging.error(f'为项目 {project_id} 计算价格分时出错: {e}')
                     logging.error(traceback.format_exc())
+                    # 更新项目状态为错误
+                    update_project_status(project_id, 'error')
                 finally:
-                    db_session.close()
+                    if 'db_session' in locals():
+                        db_session.close()
                     
             except Exception as e:
                 logging.error(f'后台分析任务启动失败: {e}')
+                # 更新项目状态为错误
+                update_project_status(project_id, 'error')
 
         # 在后台线程中启动分析
         analysis_thread = threading.Thread(target=start_analysis_in_background)

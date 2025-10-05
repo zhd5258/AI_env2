@@ -358,15 +358,15 @@ document.addEventListener('DOMContentLoaded', function () {
 
     function updateProgressDisplay (data) {
         let overallProgress = 0;
-        let totalBids = data.bids ? data.bids.length : 0;
+        let totalBids = data.document_statuses ? data.document_statuses.length : 0;
         let completedBids = 0;
 
         detailedProgress.innerHTML = ''; // Clear previous entries
 
-        if (data.bids) {
-            data.bids.forEach(bid => {
+        if (data.document_statuses) {
+            data.document_statuses.forEach(bid => {
                 let bidProgress = bid.progress_total > 0 ? (bid.progress_completed / bid.progress_total * 100) : 0;
-                if (bid.status === 'completed' || bid.status === 'error') {
+                if (bid.processing_status === 'completed' || bid.processing_status === 'error') {
                     completedBids++;
                 }
                 detailedProgress.innerHTML += createBidProgressItem(bid, bidProgress);
@@ -379,28 +379,57 @@ document.addEventListener('DOMContentLoaded', function () {
 
         progressBar.style.width = `${overallProgress}%`;
         progressBar.setAttribute('aria-valuenow', overallProgress);
-        progressText.textContent = `总体进度: ${data.project_status} (${completedBids}/${totalBids} 个文件完成)`;
+
+        // 显示更详细的处理阶段信息
+        let phaseInfo = '';
+        if (data.document_statuses && data.document_statuses.length > 0) {
+            const phases = data.document_statuses.map(doc => doc.processing_phase).filter(phase => phase);
+            if (phases.length > 0) {
+                // 统计各阶段的文件数量
+                const phaseCounts = {};
+                phases.forEach(phase => {
+                    phaseCounts[phase] = (phaseCounts[phase] || 0) + 1;
+                });
+
+                // 构建阶段信息字符串
+                const phaseTexts = Object.entries(phaseCounts).map(([phase, count]) => `${phase}: ${count}个`);
+                phaseInfo = ` (${phaseTexts.join(', ')})`;
+            }
+        }
+
+        progressText.textContent = `总体进度: ${data.processing_status} (${completedBids}/${totalBids} 个文件完成)${phaseInfo}`;
     }
 
     function createBidProgressItem (bid, progress) {
         let statusIcon = '';
         let statusClass = '';
-        switch (bid.status) {
-            case 'completed':
-                statusIcon = '<i class="fas fa-check-circle text-success me-2"></i>';
-                statusClass = 'bg-success';
-                break;
-            case 'error':
-                statusIcon = '<i class="fas fa-exclamation-circle text-danger me-2"></i>';
-                statusClass = 'bg-danger';
-                break;
-            case 'processing':
-                statusIcon = '<i class="fas fa-spinner fa-spin me-2"></i>';
-                statusClass = 'progress-bar-striped progress-bar-animated';
-                break;
-            default:
-                statusIcon = '<i class="fas fa-clock me-2"></i>';
-                statusClass = 'bg-secondary';
+        let statusText = '';
+
+        // 根据处理阶段显示不同的状态
+        if (bid.processing_phase) {
+            statusText = bid.processing_phase;
+        } else {
+            switch (bid.status) {
+                case 'completed':
+                    statusIcon = '<i class="fas fa-check-circle text-success me-2"></i>';
+                    statusClass = 'bg-success';
+                    statusText = '分析完成';
+                    break;
+                case 'error':
+                    statusIcon = '<i class="fas fa-exclamation-circle text-danger me-2"></i>';
+                    statusClass = 'bg-danger';
+                    statusText = '处理出错';
+                    break;
+                case 'processing':
+                    statusIcon = '<i class="fas fa-spinner fa-spin me-2"></i>';
+                    statusClass = 'progress-bar-striped progress-bar-animated';
+                    statusText = '处理中';
+                    break;
+                default:
+                    statusIcon = '<i class="fas fa-clock me-2"></i>';
+                    statusClass = 'bg-secondary';
+                    statusText = '等待处理';
+            }
         }
 
         return `
@@ -411,7 +440,7 @@ document.addEventListener('DOMContentLoaded', function () {
                 </div>
                 <div class="progress" style="height: 20px;">
                     <div class="progress-bar ${statusClass}" role="progressbar" style="width: ${progress}%" aria-valuenow="${progress}" aria-valuemin="0" aria-valuemax="100">
-                        ${bid.current_rule || ''}
+                        ${statusText}
                     </div>
                 </div>
                 ${bid.error_message ? `<div class="alert alert-danger mt-1 mb-0 py-1 small">${bid.error_message}</div>` : ''}

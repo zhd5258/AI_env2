@@ -302,9 +302,12 @@ class ResourceMonitor:
                     # 检查子进程运行时间
                     create_time = child.create_time()
                     # 检查子进程是否为python.exe且不是当前主进程
+                    # 添加额外的安全检查，确保不杀死主进程或关键进程
                     if (time.time() - create_time > 1800 and  # 30分钟
                         child.pid != current_pid and  # 不是当前进程
-                        'python' in child.name().lower()):  # 是python进程
+                        'python' in child.name().lower() and  # 是python进程
+                        not child.name().lower().endswith('app.py') and  # 不是主应用进程
+                        'flask' not in child.name().lower()):  # 不是Flask相关进程
                         self.logger.warning(
                             f'杀死长时间运行的Python子进程: PID {child.pid}, '
                             f'名称 {child.name()}'
@@ -352,7 +355,7 @@ class ResourceMonitor:
     def _cleanup_temp_files(self):
         """清理临时文件"""
         try:
-            temp_dirs = ['temp/uploads', 'temp/word', 'temp/pdf_cache']
+            temp_dirs = ['temp/uploads', 'temp/md', 'temp/mineru']
             cleaned_count = 0
 
             for temp_dir in temp_dirs:

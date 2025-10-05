@@ -218,198 +218,201 @@ def confirm_names_and_start_analysis(project_id):
 def get_analysis_status(project_id):
     """获取项目分析状态"""
     import os  # 添加导入
-    # 使用上下文管理器获取数据库会话
-    db_gen = get_db()
-    db = next(db_gen)
     try:
-        project = db.query(TenderProject).filter(TenderProject.id == project_id).first()
-        if not project:
-            return jsonify({'error': '项目不存在'}), 404
+        # 使用上下文管理器获取数据库会话
+        with get_db() as db:
+            project = db.query(TenderProject).filter(TenderProject.id == project_id).first()
+            if not project:
+                return jsonify({'error': '项目不存在'}), 404
 
-        # 统计分析进度
-        total_docs = (
-            db.query(BidDocument).filter(BidDocument.project_id == project_id).count()
-        )
-
-        # 修正：只统计处理状态为completed的文档
-        completed_docs = (
-            db.query(BidDocument)
-            .filter(BidDocument.project_id == project_id)
-            .filter(BidDocument.processing_status == 'completed')
-            .count()
-        )
-
-        # 获取详细状态
-        bid_docs = db.query(BidDocument).filter(BidDocument.project_id == project_id).all()
-        document_statuses = []
-
-        for doc in bid_docs:
-            analysis_result = (
-                db.query(AnalysisResult)
-                .filter(AnalysisResult.bid_document_id == doc.id)
-                .first()
+            # 统计分析进度
+            total_docs = (
+                db.query(BidDocument).filter(BidDocument.project_id == project_id).count()
             )
 
-            # 确保显示正确的投标人名称
-            display_bidder_name = doc.bidder_name
-            if not display_bidder_name or display_bidder_name in ['未知投标方', '待确认', 'pdf']:
-                # 如果还没有有效的投标人名称，尝试重新提取
-                try:
-                    from modules.bidder_name_extractor import extract_bidder_name_from_file
-                    from modules.pdf_processor import PDFProcessor
-                    # 优先从MD文件提取投标人名称
-                    pdf_processor = PDFProcessor(doc.file_path)
-                    md_file_path = pdf_processor.get_md_file_path()
-                    if os.path.exists(md_file_path):
-                        extracted_name = extract_bidder_name_from_file(md_file_path)
-                    else:
-                        extracted_name = extract_bidder_name_from_file(doc.file_path)
-                    if extracted_name and extracted_name != '未提取':
-                        display_bidder_name = extracted_name
-                        # 更新数据库中的投标人名称
-                        doc.bidder_name = extracted_name
-                        db.commit()
-                    else:
+            # 修正：只统计处理状态为completed的文档
+            completed_docs = (
+                db.query(BidDocument)
+                .filter(BidDocument.project_id == project_id)
+                .filter(BidDocument.processing_status == 'completed')
+                .count()
+            )
+
+            # 获取详细状态
+            bid_docs = db.query(BidDocument).filter(BidDocument.project_id == project_id).all()
+            document_statuses = []
+
+            for doc in bid_docs:
+                analysis_result = (
+                    db.query(AnalysisResult)
+                    .filter(AnalysisResult.bid_document_id == doc.id)
+                    .first()
+                )
+
+                # 确保显示正确的投标人名称
+                display_bidder_name = doc.bidder_name
+                if not display_bidder_name or display_bidder_name in ['未知投标方', '待确认', 'pdf']:
+                    # 如果还没有有效的投标人名称，尝试重新提取
+                    try:
+                        from modules.bidder_name_extractor import extract_bidder_name_from_file
+                        from modules.pdf_processor import PDFProcessor
+                        # 优先从MD文件提取投标人名称
+                        pdf_processor = PDFProcessor(doc.file_path)
+                        md_file_path = pdf_processor.get_md_file_path()
+                        if os.path.exists(md_file_path):
+                            extracted_name = extract_bidder_name_from_file(md_file_path)
+                        else:
+                            extracted_name = extract_bidder_name_from_file(doc.file_path)
+                        if extracted_name and extracted_name != '未提取':
+                            display_bidder_name = extracted_name
+                            # 更新数据库中的投标人名称
+                            doc.bidder_name = extracted_name
+                            db.commit()
+                        else:
+                            # 如果提取失败，使用文件名作为备用方案
+                            if doc.file_path:
+                                filename = os.path.basename(doc.file_path)
+                                display_bidder_name = os.path.splitext(filename)[0]
+                            else:
+                                display_bidder_name = doc.bidder_name  # 保持原值
+                    except Exception as e:
+                        logging.warning(f'重新提取投标人名称时出错: {e}')
                         # 如果提取失败，使用文件名作为备用方案
                         if doc.file_path:
                             filename = os.path.basename(doc.file_path)
                             display_bidder_name = os.path.splitext(filename)[0]
                         else:
                             display_bidder_name = doc.bidder_name  # 保持原值
-                except Exception as e:
-                    logging.warning(f'重新提取投标人名称时出错: {e}')
-                    # 如果提取失败，使用文件名作为备用方案
-                    if doc.file_path:
-                        filename = os.path.basename(doc.file_path)
-                        display_bidder_name = os.path.splitext(filename)[0]
-                    else:
-                        display_bidder_name = doc.bidder_name  # 保持原值
 
-            document_statuses.append(
-                {
-                    'id': doc.id,
-                    'filename': get_filename_from_path(doc.file_path or ''),  # 使用原始文件名
-                    'bidder_name': display_bidder_name,
-                    'processing_status': doc.processing_status,
-                    'has_analysis_result': analysis_result is not None,
-                    'total_score': analysis_result.total_score if analysis_result else None,
-                }
-            )
+                document_statuses.append(
+                    {
+                        'id': doc.id,
+                        'filename': get_filename_from_path(doc.file_path or ''),  # 使用原始文件名
+                        'bidder_name': display_bidder_name,
+                        'processing_status': doc.processing_status,
+                        'processing_phase': getattr(doc, 'processing_phase', None),
+                        'has_analysis_result': analysis_result is not None,
+                        'total_score': analysis_result.total_score if analysis_result else None,
+                    }
+                )
 
-        # 确保进度百分比不超过100%
-        progress_percentage = 0
-        if total_docs > 0:
-            progress_percentage = min(100.0, (completed_docs / total_docs * 100))
+            # 确保进度百分比不超过100%
+            progress_percentage = 0
+            if total_docs > 0:
+                progress_percentage = min(100.0, (completed_docs / total_docs * 100))
 
-        return jsonify({
-            'project_id': project_id,
-            'processing_status': project.status,
-            'total_documents': total_docs,
-            'completed_documents': completed_docs,
-            'progress_percentage': progress_percentage,
-            'document_statuses': document_statuses,
-        })
-    finally:
-        try:
-            next(db_gen)  # 触发finally块
-        except StopIteration:
-            pass
+            return jsonify({
+                'project_id': project_id,
+                'processing_status': project.status,
+                'total_documents': total_docs,
+                'completed_documents': completed_docs,
+                'progress_percentage': progress_percentage,
+                'document_statuses': document_statuses,
+            })
+    except Exception as e:
+        logging.error(f'获取项目分析状态时出错: {e}')
+        return jsonify({'error': f'获取分析状态失败: {str(e)}'}), 500
 
 @router.route('/projects/<int:project_id>/results', methods=['GET'])
 def get_analysis_results(project_id):
     """获取项目分析结果"""
-    # 使用上下文管理器获取数据库会话
-    db_gen = get_db()
-    db = next(db_gen)
     try:
-        results = (
-            db.query(AnalysisResult)
-            .join(BidDocument, AnalysisResult.bid_document_id == BidDocument.id)
-            .filter(BidDocument.project_id == project_id)
-            .all()
-        )
+        # 使用上下文管理器获取数据库会话
+        with get_db() as db:
+            results = (
+                db.query(AnalysisResult)
+                .join(BidDocument, AnalysisResult.bid_document_id == BidDocument.id)
+                .filter(BidDocument.project_id == project_id)
+                .all()
+            )
 
-        if not results:
-            return jsonify({'results': []})
+            if not results:
+                return jsonify({'results': []})
 
-        # 格式化结果
-        formatted_results = []
-        for result in results:
-            # 获取详细的评分信息
-            detailed_scores = []
-            if result.detailed_scores:
-                try:
-                    if isinstance(result.detailed_scores, str):
-                        import json
-                        detailed_scores = json.loads(result.detailed_scores)
-                    else:
-                        detailed_scores = result.detailed_scores
-                except Exception as e:
-                    logging.warning(f"解析详细评分时出错: {e}")
-                    detailed_scores = []
+            # 格式化结果
+            formatted_results = []
+            for result in results:
+                # 获取详细的评分信息
+                detailed_scores = []
+                if result.detailed_scores:
+                    try:
+                        if isinstance(result.detailed_scores, str):
+                            import json
+                            detailed_scores = json.loads(result.detailed_scores)
+                        else:
+                            detailed_scores = result.detailed_scores
+                    except Exception as e:
+                        logging.warning(f"解析详细评分时出错: {e}")
+                        detailed_scores = []
 
-            formatted_results.append({
-                'id': result.id,
-                'bid_document_id': result.bid_document_id,
-                'bidder_name': result.bidder_name,
-                'total_score': float(result.total_score) if result.total_score is not None else 0,
-                'price_score': float(result.price_score) if result.price_score is not None else 0,
-                'extracted_price': float(result.extracted_price) if result.extracted_price is not None else 0,
-                'analysis_summary': result.analysis_summary,
-                'analyzed_at': result.analyzed_at.isoformat() if result.analyzed_at else None,
-                'detailed_scores': detailed_scores,
-                'scoring_method': result.scoring_method,
-                'ai_model': result.ai_model,
-                'is_modified': result.is_modified,
-                'modification_count': result.modification_count,
-            })
+                formatted_results.append({
+                    'id': result.id,
+                    'bid_document_id': result.bid_document_id,
+                    'bidder_name': result.bidder_name,
+                    'total_score': float(result.total_score) if result.total_score is not None else 0,
+                    'price_score': float(result.price_score) if result.price_score is not None else 0,
+                    'extracted_price': float(result.extracted_price) if result.extracted_price is not None else 0,
+                    'analysis_summary': result.analysis_summary,
+                    'analyzed_at': result.analyzed_at.isoformat() if result.analyzed_at else None,
+                    'detailed_scores': detailed_scores,
+                    'scoring_method': result.scoring_method,
+                    'ai_model': result.ai_model,
+                    'is_modified': result.is_modified,
+                    'modification_count': result.modification_count,
+                })
 
-        return jsonify({'results': formatted_results})
-    finally:
-        try:
-            next(db_gen)  # 触发finally块
-        except StopIteration:
-            pass
+            return jsonify({'results': formatted_results})
+    except Exception as e:
+        logging.error(f'获取项目分析结果时出错: {e}')
+        return jsonify({'error': f'获取分析结果失败: {str(e)}'}), 500
 
 @router.route('/projects/<int:project_id>/scoring-rules', methods=['GET'])
 def get_scoring_rules(project_id):
     """获取项目评分规则"""
-    # 获取数据库会话
-    db_gen = get_db()
-    db = next(db_gen)
-    
-    project = db.query(TenderProject).filter(TenderProject.id == project_id).first()
-    if not project:
-        return jsonify({'error': '项目不存在'}), 404
+    try:
+        # 获取数据库会话
+        with get_db() as db:
+            project = db.query(TenderProject).filter(TenderProject.id == project_id).first()
+            if not project:
+                return jsonify({'error': '项目不存在'}), 404
 
-    rules = db.query(ScoringRule).filter(ScoringRule.project_id == project_id).all()
+            rules = db.query(ScoringRule).filter(ScoringRule.project_id == project_id).all()
 
-    formatted_rules = []
-    for rule in rules:
-        formatted_rules.append(
-            {
-                'id': rule.id,
-                'Parent_Item_Name': rule.Parent_Item_Name,
-                'Child_Item_Name': rule.Child_Item_Name,
-                'Parent_max_score': rule.Parent_max_score,
-                'Child_max_score': rule.Child_max_score,
-                'description': rule.description,
-                'project_id': rule.project_id,
-            }
-        )
+            formatted_rules = []
+            for rule in rules:
+                formatted_rules.append(
+                    {
+                        'id': rule.id,
+                        'Parent_Item_Name': rule.Parent_Item_Name,
+                        'Child_Item_Name': rule.Child_Item_Name,
+                        'Parent_max_score': rule.Parent_max_score,
+                        'Child_max_score': rule.Child_max_score,
+                        'description': rule.description,
+                        'project_id': rule.project_id,
+                    }
+                )
 
-    return jsonify({'scoring_rules': formatted_rules})
+            return jsonify({'scoring_rules': formatted_rules})
+    except Exception as e:
+        logging.error(f'获取项目评分规则时出错: {e}')
+        return jsonify({'error': f'获取评分规则失败: {str(e)}'}), 500
 
 @router.route('/projects/<int:project_id>/dynamic-summary', methods=['GET'])
 def get_dynamic_summary(project_id):
     """获取项目动态汇总信息"""
     try:
         # 获取数据库会话
-        db_gen = get_db()
-        db = next(db_gen)
-        
-        summary_data = generate_summary_data(project_id, db)
-        return jsonify(summary_data)
+        db = SessionLocal()
+        try:
+            summary_data = generate_summary_data(project_id, db)
+            
+            # 检查是否有错误信息
+            if isinstance(summary_data, dict) and 'error' in summary_data:
+                return jsonify(summary_data), 404
+            
+            return jsonify(summary_data)
+        finally:
+            db.close()
     except Exception as e:
         logging.error(f'生成项目 {project_id} 动态汇总时出错: {e}')
         return jsonify({'error': f'生成汇总信息失败: {str(e)}'}), 500

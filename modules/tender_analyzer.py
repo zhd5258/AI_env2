@@ -3,7 +3,7 @@ import json
 from typing import List, Dict, Any
 from .pdf_processor import PDFProcessor
 from .database import ScoringRule
-from modules.scoring_extractor.core import IntelligentScoringExtractor
+from .correct_scoring_extractor import CorrectScoringExtractor
 
 
 class TenderAnalyzer:
@@ -48,27 +48,26 @@ class TenderAnalyzer:
 
     def extract_scoring_rules(self) -> List[Dict[str, Any]]:
         """
-        从招标文件PDF中提取评分规则，使用新的 IntelligentScoringExtractor。
+        从招标文件PDF中提取评分规则，使用 CorrectScoringExtractor。
         """
-        self.logger.info('开始使用 IntelligentScoringExtractor 提取评分规则...')
+        self.logger.info('开始使用 CorrectScoringExtractor 提取评分规则...')
 
         try:
-            # 1. 初始化并使用新的提取器
-            extractor = IntelligentScoringExtractor()
+            # 直接使用PDF文件路径初始化提取器（严格按照用户要求）
+            extractor = CorrectScoringExtractor(self.tender_file_path)
             
-            # 2. 直接从PDF路径提取规则
-            #    extract 方法返回的是一个扁平化的规则列表，可以直接使用
-            rules = extractor.extract(self.tender_file_path)
+            # 提取规则
+            rules = extractor.extract_scoring_rules()
 
             if not rules:
-                self.logger.warning('IntelligentScoringExtractor 未能提取到任何评分规则。')
+                self.logger.warning('CorrectScoringExtractor 未能提取到任何评分规则。')
                 return []
 
             self.logger.info(f'成功提取 {len(rules)} 条评分规则')
             return rules
 
         except Exception as e:
-            self.logger.error(f'使用 IntelligentScoringExtractor 提取评分规则时出错: {e}', exc_info=True)
+            self.logger.error(f'使用 CorrectScoringExtractor 提取评分规则时出错: {e}', exc_info=True)
             return []
 
     def save_scoring_rules_to_db(self, rules: List[Dict[str, Any]]) -> bool:
