@@ -42,6 +42,9 @@ class TenderProject(Base):
     scoring_rules_summary = Column(JSON)
     created_at = Column(DateTime, default=datetime.datetime.utcnow)
     status = Column(String, default='new')
+    # 添加评标开始和结束时间字段
+    analysis_start_time = Column(DateTime, nullable=True)
+    analysis_end_time = Column(DateTime, nullable=True)
     bid_documents = relationship('BidDocument', back_populates='project')
     analysis_results = relationship('AnalysisResult', back_populates='project')
     scoring_rules = relationship('ScoringRule', back_populates='project')

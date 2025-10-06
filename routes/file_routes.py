@@ -8,6 +8,7 @@ import logging
 from flask import Blueprint, request, jsonify
 from controllers.file_controller import init_upload_logic, list_project_bidders_logic
 from werkzeug.exceptions import RequestEntityTooLarge
+from modules.runtime_config import load_config
 
 # 创建路由实例
 router = Blueprint('file', __name__, url_prefix='/api')
@@ -35,9 +36,9 @@ def init_upload():
         # 调用业务逻辑控制器
         result = init_upload_logic(tender_file, bid_files)
         return jsonify(result)
-    except RequestEntityTooLarge:
+    except RequestEntityTooLarge as e:
         logging.error('文件上传大小超出限制')
-        return jsonify({'error': '文件大小超出限制，请上传小于500MB的文件'}), 413
+        return jsonify({'error': str(e)}), 413
     except Exception as e:
         logging.error(f'初始化上传失败: {e}')
         return jsonify({'error': f'初始化上传失败: {str(e)}'}), 500

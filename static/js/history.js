@@ -115,13 +115,33 @@ document.addEventListener('DOMContentLoaded', function () {
         }
 
         projects.forEach(project => {
+            // 计算用时信息
+            let timeInfo = '';
+            if (project.analysis_start_time) {
+                if (project.analysis_end_time) {
+                    // 分析已完成，计算总用时
+                    const start = new Date(project.analysis_start_time);
+                    const end = new Date(project.analysis_end_time);
+                    const totalTime = (end - start) / 1000; // 转换为秒
+                    const minutes = Math.floor(totalTime / 60);
+                    const seconds = Math.floor(totalTime % 60);
+                    timeInfo = `<span class="badge bg-success">总用时: ${minutes}分${seconds}秒</span>`;
+                } else if (project.status === 'processing' || project.status === 'analyzing') {
+                    // 分析进行中，显示"进行中"
+                    timeInfo = '<span class="badge bg-info">分析中</span>';
+                }
+            }
+
             const row = document.createElement('tr');
             row.innerHTML = `
                 <td>${project.project_code}</td>
                 <td>${project.name}</td>
                 <td>${project.description}</td>
                 <td>${new Date(project.created_at).toLocaleString()}</td>
-                <td><span class="badge bg-${getStatusColor(project.status)}">${project.status}</span></td>
+                <td>
+                    <span class="badge bg-${getStatusColor(project.status)}">${project.status}</span>
+                    ${timeInfo}
+                </td>
                 <td>${project.bid_count}</td>
                 <td>${project.result_count}</td>
                 <td>
@@ -170,6 +190,11 @@ document.addEventListener('DOMContentLoaded', function () {
         modal.show();
 
         try {
+            // 获取项目进度信息以获取用时数据
+            const progressResponse = await fetch(`/api/projects/${projectId}/progress`);
+            const progressData = await progressResponse.json();
+
+            // 获取项目汇总数据
             const response = await fetch(`/api/projects/${projectId}/dynamic-summary`);
 
             if (!response.ok) {
@@ -180,6 +205,17 @@ document.addEventListener('DOMContentLoaded', function () {
             const summaryData = await response.json();
 
             let content = `<h5>项目ID: ${projectId}</h5>`;
+
+            // 添加用时信息
+            if (progressData.total_time !== null) {
+                const minutes = Math.floor(progressData.total_time / 60);
+                const seconds = Math.floor(progressData.total_time % 60);
+                content += `<p><strong>总用时:</strong> ${minutes}分${seconds}秒</p>`;
+            } else if (progressData.elapsed_time !== null) {
+                const minutes = Math.floor(progressData.elapsed_time / 60);
+                const seconds = Math.floor(progressData.elapsed_time % 60);
+                content += `<p><strong>已用时:</strong> ${minutes}分${seconds}秒</p>`;
+            }
 
             content += '<h6><i class="fas fa-table me-2"></i>评标汇总表</h6>';
             if (summaryData && summaryData.header_rows && summaryData.rows) {

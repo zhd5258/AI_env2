@@ -117,6 +117,25 @@
     <h1>系统参数设置</h1>
     
     <div class="settings-section">
+        <h2>文件上传设置</h2>
+        <form id="uploadConfigForm">
+            <div class="form-group">
+                <label for="max_content_length">文件上传大小限制(MB):</label>
+                <input type="number" id="max_content_length" name="max_content_length" min="1" max="1000" required>
+                <small>单个文件上传大小限制（1-1000MB）</small>
+            </div>
+            
+            <div class="form-group">
+                <label for="single_file_max_size">单个文件大小限制(MB):</label>
+                <input type="number" id="single_file_max_size" name="single_file_max_size" min="1" max="500" required>
+                <small>单个文件的最大大小限制（1-500MB）</small>
+            </div>
+            
+            <button type="submit" id="uploadConfigSubmitBtn">保存设置</button>
+        </form>
+    </div>
+    
+    <div class="settings-section">
         <h2>运行参数配置</h2>
         <form id="runtimeConfigForm">
             <div class="form-group">
@@ -137,7 +156,7 @@
                 <small>单个PDF文件的最小总处理时间（30-600秒）</small>
             </div>
             
-            <button type="submit">保存设置</button>
+            <button type="submit" id="runtimeConfigSubmitBtn">保存设置</button>
         </form>
     </div>
     
@@ -171,7 +190,7 @@
                 </select>
             </div>
             
-            <button type="submit">保存OCR设置</button>
+            <button type="submit" id="ocrConfigSubmitBtn">保存OCR设置</button>
         </form>
     </div>
     
@@ -189,8 +208,52 @@
     <div id="result" class="result"></div>
 
     <script>
+        // 显示结果消息的函数
+        function showResult(message, isSuccess = true, autoHide = true) {
+            const resultDiv = document.getElementById('result');
+            resultDiv.className = 'result ' + (isSuccess ? 'success' : 'error');
+            resultDiv.innerHTML = `<h3>${isSuccess ? '成功' : '错误'}!</h3><p>${message}</p>`;
+            resultDiv.style.display = 'block';
+            
+            // 3秒后自动隐藏结果提示
+            if (autoHide) {
+                setTimeout(() => {
+                    resultDiv.style.display = 'none';
+                }, 3000);
+            }
+        }
+
+        // 设置按钮加载状态
+        function setButtonLoading(button, loading) {
+            if (loading) {
+                button.disabled = true;
+                button.innerHTML = '保存中...';
+            } else {
+                button.disabled = false;
+                button.innerHTML = button.id === 'ocrConfigSubmitBtn' ? '保存OCR设置' : '保存设置';
+            }
+        }
+
         // 页面加载时获取当前配置
         document.addEventListener('DOMContentLoaded', async function() {
+            // 获取文件上传配置
+            try {
+                const uploadResponse = await fetch('/api/runtime-config');
+                if (uploadResponse.ok) {
+                    const uploadConfig = await uploadResponse.json();
+                    // 将字节转换为MB显示
+                    const maxContentLengthMB = Math.round((uploadConfig.max_content_length || 500 * 1024 * 1024) / (1024 * 1024));
+                    document.getElementById('max_content_length').value = maxContentLengthMB;
+                    
+                    // 单个文件大小限制
+                    const singleFileMaxSizeMB = Math.round((uploadConfig.single_file_max_size || 100 * 1024 * 1024) / (1024 * 1024));
+                    document.getElementById('single_file_max_size').value = singleFileMaxSizeMB;
+                }
+            } catch (error) {
+                console.error('获取文件上传配置失败:', error);
+                showResult('获取文件上传配置失败: ' + error.message, false);
+            }
+            
             // 获取运行时配置
             try {
                 const runtimeResponse = await fetch('/api/runtime-config');
@@ -202,6 +265,7 @@
                 }
             } catch (error) {
                 console.error('获取运行时配置失败:', error);
+                showResult('获取运行时配置失败: ' + error.message, false);
             }
             
             // 获取OCR配置
@@ -216,12 +280,53 @@
                 }
             } catch (error) {
                 console.error('获取OCR配置失败:', error);
+                showResult('获取OCR配置失败: ' + error.message, false);
+            }
+        });
+        
+        // 保存文件上传配置
+        document.getElementById('uploadConfigForm').addEventListener('submit', async function(e) {
+            e.preventDefault();
+            
+            const submitBtn = document.getElementById('uploadConfigSubmitBtn');
+            setButtonLoading(submitBtn, true);
+            
+            const formData = new FormData(this);
+            const config = Object.fromEntries(formData.entries());
+            
+            // 转换为字节
+            config.max_content_length = parseInt(config.max_content_length) * 1024 * 1024;
+            config.single_file_max_size = parseInt(config.single_file_max_size) * 1024 * 1024;
+            
+            try {
+                const response = await fetch('/api/runtime-config', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify(config)
+                });
+                
+                const data = await response.json();
+                
+                if (response.ok) {
+                    showResult('文件上传设置保存成功！');
+                } else {
+                    showResult('保存失败: ' + (data.error || '未知错误'), false);
+                }
+            } catch (error) {
+                showResult('请求失败: ' + error.message, false);
+            } finally {
+                setButtonLoading(submitBtn, false);
             }
         });
         
         // 保存运行时配置
         document.getElementById('runtimeConfigForm').addEventListener('submit', async function(e) {
             e.preventDefault();
+            
+            const submitBtn = document.getElementById('runtimeConfigSubmitBtn');
+            setButtonLoading(submitBtn, true);
             
             const formData = new FormData(this);
             const config = Object.fromEntries(formData.entries());
@@ -241,37 +346,25 @@
                 });
                 
                 const data = await response.json();
-                const resultDiv = document.getElementById('result');
                 
                 if (response.ok) {
-                    resultDiv.className = 'result success';
-                    resultDiv.innerHTML = `<h3>保存成功!</h3><p>${data.message}</p>`;
+                    showResult('运行参数配置保存成功！');
                 } else {
-                    resultDiv.className = 'result error';
-                    resultDiv.innerHTML = `<h3>保存失败!</h3><p>${data.error}</p>`;
+                    showResult('保存失败: ' + (data.error || '未知错误'), false);
                 }
-                resultDiv.style.display = 'block';
-                
-                // 3秒后隐藏结果提示
-                setTimeout(() => {
-                    resultDiv.style.display = 'none';
-                }, 3000);
             } catch (error) {
-                const resultDiv = document.getElementById('result');
-                resultDiv.className = 'result error';
-                resultDiv.innerHTML = `<h3>请求失败!</h3><p>${error.message}</p>`;
-                resultDiv.style.display = 'block';
-                
-                // 3秒后隐藏结果提示
-                setTimeout(() => {
-                    resultDiv.style.display = 'none';
-                }, 3000);
+                showResult('请求失败: ' + error.message, false);
+            } finally {
+                setButtonLoading(submitBtn, false);
             }
         });
         
         // 保存OCR配置
         document.getElementById('ocrConfigForm').addEventListener('submit', async function(e) {
             e.preventDefault();
+            
+            const submitBtn = document.getElementById('ocrConfigSubmitBtn');
+            setButtonLoading(submitBtn, true);
             
             const formData = new FormData(this);
             const config = Object.fromEntries(formData.entries());
@@ -289,31 +382,16 @@
                 });
                 
                 const data = await response.json();
-                const resultDiv = document.getElementById('result');
                 
                 if (response.ok) {
-                    resultDiv.className = 'result success';
-                    resultDiv.innerHTML = `<h3>保存成功!</h3><p>${data.message}</p>`;
+                    showResult('OCR配置保存成功！');
                 } else {
-                    resultDiv.className = 'result error';
-                    resultDiv.innerHTML = `<h3>保存失败!</h3><p>${data.error}</p>`;
+                    showResult('保存失败: ' + (data.error || '未知错误'), false);
                 }
-                resultDiv.style.display = 'block';
-                
-                // 3秒后隐藏结果提示
-                setTimeout(() => {
-                    resultDiv.style.display = 'none';
-                }, 3000);
             } catch (error) {
-                const resultDiv = document.getElementById('result');
-                resultDiv.className = 'result error';
-                resultDiv.innerHTML = `<h3>请求失败!</h3><p>${error.message}</p>`;
-                resultDiv.style.display = 'block';
-                
-                // 3秒后隐藏结果提示
-                setTimeout(() => {
-                    resultDiv.style.display = 'none';
-                }, 3000);
+                showResult('请求失败: ' + error.message, false);
+            } finally {
+                setButtonLoading(submitBtn, false);
             }
         });
         
@@ -329,31 +407,14 @@
                 });
                 
                 const data = await response.json();
-                const resultDiv = document.getElementById('result');
                 
                 if (response.ok && data.success) {
-                    resultDiv.className = 'result success';
-                    resultDiv.innerHTML = `<h3>操作成功!</h3><p>${data.message}</p>`;
+                    showResult('数据库清空成功！');
                 } else {
-                    resultDiv.className = 'result error';
-                    resultDiv.innerHTML = `<h3>操作失败!</h3><p>${data.message || '未知错误'}</p>`;
+                    showResult('操作失败: ' + (data.message || '未知错误'), false);
                 }
-                resultDiv.style.display = 'block';
-                
-                // 3秒后隐藏结果提示
-                setTimeout(() => {
-                    resultDiv.style.display = 'none';
-                }, 3000);
             } catch (error) {
-                const resultDiv = document.getElementById('result');
-                resultDiv.className = 'result error';
-                resultDiv.innerHTML = `<h3>请求失败!</h3><p>${error.message}</p>`;
-                resultDiv.style.display = 'block';
-                
-                // 3秒后隐藏结果提示
-                setTimeout(() => {
-                    resultDiv.style.display = 'none';
-                }, 3000);
+                showResult('请求失败: ' + error.message, false);
             }
         });
         
@@ -369,31 +430,14 @@
                 });
                 
                 const data = await response.json();
-                const resultDiv = document.getElementById('result');
                 
                 if (response.ok && data.success) {
-                    resultDiv.className = 'result success';
-                    resultDiv.innerHTML = `<h3>操作成功!</h3><p>${data.message}</p>`;
+                    showResult('上传文件夹清理成功！');
                 } else {
-                    resultDiv.className = 'result error';
-                    resultDiv.innerHTML = `<h3>操作失败!</h3><p>${data.message || '未知错误'}</p>`;
+                    showResult('操作失败: ' + (data.message || '未知错误'), false);
                 }
-                resultDiv.style.display = 'block';
-                
-                // 3秒后隐藏结果提示
-                setTimeout(() => {
-                    resultDiv.style.display = 'none';
-                }, 3000);
             } catch (error) {
-                const resultDiv = document.getElementById('result');
-                resultDiv.className = 'result error';
-                resultDiv.innerHTML = `<h3>请求失败!</h3><p>${error.message}</p>`;
-                resultDiv.style.display = 'block';
-                
-                // 3秒后隐藏结果提示
-                setTimeout(() => {
-                    resultDiv.style.display = 'none';
-                }, 3000);
+                showResult('请求失败: ' + error.message, false);
             }
         });
         
@@ -409,31 +453,14 @@
                 });
                 
                 const data = await response.json();
-                const resultDiv = document.getElementById('result');
                 
                 if (response.ok && data.success) {
-                    resultDiv.className = 'result success';
-                    resultDiv.innerHTML = `<h3>操作成功!</h3><p>${data.message}</p>`;
+                    showResult('临时文件夹清理成功！');
                 } else {
-                    resultDiv.className = 'result error';
-                    resultDiv.innerHTML = `<h3>操作失败!</h3><p>${data.message || '未知错误'}</p>`;
+                    showResult('操作失败: ' + (data.message || '未知错误'), false);
                 }
-                resultDiv.style.display = 'block';
-                
-                // 3秒后隐藏结果提示
-                setTimeout(() => {
-                    resultDiv.style.display = 'none';
-                }, 3000);
             } catch (error) {
-                const resultDiv = document.getElementById('result');
-                resultDiv.className = 'result error';
-                resultDiv.innerHTML = `<h3>请求失败!</h3><p>${error.message}</p>`;
-                resultDiv.style.display = 'block';
-                
-                // 3秒后隐藏结果提示
-                setTimeout(() => {
-                    resultDiv.style.display = 'none';
-                }, 3000);
+                showResult('请求失败: ' + error.message, false);
             }
         });
     </script>

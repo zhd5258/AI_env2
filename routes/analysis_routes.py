@@ -207,326 +207,178 @@ def confirm_names_and_start_analysis(project_id):
             })
 
     except Exception as e:
-        if db:
-            try:
-                db.rollback()
-            except:
-                pass
-        logging.error(f'启动分析任务时出错: {e}')
+        logging.error(f'确认名称并启动分析时出错: {e}')
         return jsonify({'error': f'启动分析失败: {str(e)}'}), 500
 
-@router.route('/projects/<int:project_id>/analysis-status', methods=['GET'])
-def get_analysis_status(project_id):
-    """获取项目分析状态"""
-    import os  # 添加导入
+@router.route('/projects/<int:project_id>/progress', methods=['GET'])
+def get_project_progress(project_id):
+    """获取项目进度信息，包括用时信息"""
     try:
-        # 使用上下文管理器获取数据库会话
+        with get_db() as db:
+            # 查询项目信息
+            project = db.query(TenderProject).filter(TenderProject.id == project_id).first()
+            if not project:
+                return jsonify({'error': '项目不存在'}), 404
+
+            # 计算用时信息
+            elapsed_time = None
+            total_time = None
+            
+            if project.analysis_start_time:
+                if project.analysis_end_time:
+                    # 分析已完成，计算总用时
+                    total_time = (project.analysis_end_time - project.analysis_start_time).total_seconds()
+                else:
+                    # 分析进行中，计算已用时
+                    elapsed_time = (datetime.utcnow() - project.analysis_start_time).total_seconds()
+
+            # 构造响应数据
+            response_data = {
+                'project_id': project_id,
+                'status': project.status,
+                'elapsed_time': elapsed_time,  # 已用时（秒）
+                'total_time': total_time,      # 总用时（秒）
+                'analysis_start_time': project.analysis_start_time.isoformat() if project.analysis_start_time else None,
+                'analysis_end_time': project.analysis_end_time.isoformat() if project.analysis_end_time else None,
+            }
+
+            # 如果项目状态是处理中，添加详细进度信息
+            if project.status == 'processing' or project.status == 'analyzing':
+                # 查询投标文件进度
+                bid_documents = db.query(BidDocument).filter(BidDocument.project_id == project_id).all()
+                
+                overall_progress = 0
+                completed_count = 0
+                total_count = len(bid_documents)
+                
+                detailed_progress = {}
+                for doc in bid_documents:
+                    filename = get_filename_from_path(doc.file_path)
+                    if doc.processing_status == 'completed':
+                        progress = 100
+                        completed_count += 1
+                    elif doc.processing_status == 'error':
+                        progress = 0
+                    else:
+                        # 根据规则完成情况计算进度
+                        if doc.progress_total_rules > 0:
+                            progress = min(100, (doc.progress_completed_rules / doc.progress_total_rules) * 100)
+                        else:
+                            progress = 0
+                    
+                    detailed_progress[filename] = round(progress, 1)
+                
+                if total_count > 0:
+                    overall_progress = (completed_count / total_count) * 100
+                
+                response_data['overall_progress'] = round(overall_progress, 1)
+                response_data['detailed_progress'] = detailed_progress
+                response_data['completed_files'] = completed_count
+                response_data['total_files'] = total_count
+
+            return jsonify(response_data)
+
+    except Exception as e:
+        logging.error(f'获取项目进度时出错: {e}')
+        return jsonify({'error': f'获取进度失败: {str(e)}'}), 500
+
+@router.route('/projects/<int:project_id>/results', methods=['GET'])
+def get_project_results(project_id):
+    """获取项目分析结果"""
+    try:
         with get_db() as db:
             project = db.query(TenderProject).filter(TenderProject.id == project_id).first()
             if not project:
                 return jsonify({'error': '项目不存在'}), 404
 
-            # 统计分析进度
-            total_docs = (
-                db.query(BidDocument).filter(BidDocument.project_id == project_id).count()
-            )
+            # 查询分析结果
+            results = db.query(AnalysisResult).filter(AnalysisResult.project_id == project_id).all()
+            
+            # 格式化结果数据
+            formatted_results = []
+            for result in results:
+                formatted_results.append({
+                    'id': result.id,
+                    'bidder_name': result.bidder_name,
+                    'total_score': result.total_score,
+                    'price_score': result.price_score,
+                    'extracted_price': result.extracted_price,
+                    'analyzed_at': result.analyzed_at.isoformat() if result.analyzed_at else None,
+                })
 
-            # 修正：只统计处理状态为completed的文档
-            completed_docs = (
-                db.query(BidDocument)
-                .filter(BidDocument.project_id == project_id)
-                .filter(BidDocument.processing_status == 'completed')
-                .count()
-            )
-
-            # 获取详细状态
-            bid_docs = db.query(BidDocument).filter(BidDocument.project_id == project_id).all()
-            document_statuses = []
-
-            for doc in bid_docs:
-                analysis_result = (
-                    db.query(AnalysisResult)
-                    .filter(AnalysisResult.bid_document_id == doc.id)
-                    .first()
-                )
-
-                # 确保显示正确的投标人名称
-                display_bidder_name = doc.bidder_name
-                if not display_bidder_name or display_bidder_name in ['未知投标方', '待确认', 'pdf']:
-                    # 如果还没有有效的投标人名称，尝试重新提取
-                    try:
-                        from modules.bidder_name_extractor import extract_bidder_name_from_file
-                        from modules.pdf_processor import PDFProcessor
-                        # 优先从MD文件提取投标人名称
-                        pdf_processor = PDFProcessor(doc.file_path)
-                        md_file_path = pdf_processor.get_md_file_path()
-                        if os.path.exists(md_file_path):
-                            extracted_name = extract_bidder_name_from_file(md_file_path)
-                        else:
-                            extracted_name = extract_bidder_name_from_file(doc.file_path)
-                        if extracted_name and extracted_name != '未提取':
-                            display_bidder_name = extracted_name
-                            # 更新数据库中的投标人名称
-                            doc.bidder_name = extracted_name
-                            db.commit()
-                        else:
-                            # 如果提取失败，使用文件名作为备用方案
-                            if doc.file_path:
-                                filename = os.path.basename(doc.file_path)
-                                display_bidder_name = os.path.splitext(filename)[0]
-                            else:
-                                display_bidder_name = doc.bidder_name  # 保持原值
-                    except Exception as e:
-                        logging.warning(f'重新提取投标人名称时出错: {e}')
-                        # 如果提取失败，使用文件名作为备用方案
-                        if doc.file_path:
-                            filename = os.path.basename(doc.file_path)
-                            display_bidder_name = os.path.splitext(filename)[0]
-                        else:
-                            display_bidder_name = doc.bidder_name  # 保持原值
-
-                document_statuses.append(
-                    {
-                        'id': doc.id,
-                        'filename': get_filename_from_path(doc.file_path or ''),  # 使用原始文件名
-                        'bidder_name': display_bidder_name,
-                        'processing_status': doc.processing_status,
-                        'processing_phase': getattr(doc, 'processing_phase', None),
-                        'has_analysis_result': analysis_result is not None,
-                        'total_score': analysis_result.total_score if analysis_result else None,
-                        # 添加规则进度相关的字段，直接访问属性而不是使用getattr
-                        'progress_total_rules': doc.progress_total_rules if hasattr(doc, 'progress_total_rules') else 0,
-                        'progress_completed_rules': doc.progress_completed_rules if hasattr(doc, 'progress_completed_rules') else 0,
-                        'progress_current_rule': doc.progress_current_rule if hasattr(doc, 'progress_current_rule') else None,
-                    }
-                )
-
-            # 确保进度百分比不超过100%
-            progress_percentage = 0
-            if total_docs > 0:
-                progress_percentage = min(100.0, (completed_docs / total_docs * 100))
+            # 按总分降序排列
+            formatted_results.sort(key=lambda x: x['total_score'] or 0, reverse=True)
 
             return jsonify({
                 'project_id': project_id,
-                'processing_status': project.status,
-                'total_documents': total_docs,
-                'completed_documents': completed_docs,
-                'progress_percentage': progress_percentage,
-                'document_statuses': document_statuses,
+                'project_name': project.name,
+                'results': formatted_results,
+                'analysis_end_time': project.analysis_end_time.isoformat() if project.analysis_end_time else None,
             })
-    except Exception as e:
-        logging.error(f'获取项目分析状态时出错: {e}')
-        return jsonify({'error': f'获取分析状态失败: {str(e)}'}), 500
-
-@router.route('/projects/<int:project_id>/results', methods=['GET'])
-def get_analysis_results(project_id):
-    """获取项目分析结果"""
-    try:
-        # 使用上下文管理器获取数据库会话
-        with get_db() as db:
-            results = (
-                db.query(AnalysisResult)
-                .join(BidDocument, AnalysisResult.bid_document_id == BidDocument.id)
-                .filter(BidDocument.project_id == project_id)
-                .all()
-            )
-
-            if not results:
-                return jsonify({'results': []})
-
-            # 格式化结果
-            formatted_results = []
-            for result in results:
-                # 获取详细的评分信息
-                detailed_scores = []
-                if result.detailed_scores:
-                    try:
-                        if isinstance(result.detailed_scores, str):
-                            import json
-                            detailed_scores = json.loads(result.detailed_scores)
-                        else:
-                            detailed_scores = result.detailed_scores
-                    except Exception as e:
-                        logging.warning(f"解析详细评分时出错: {e}")
-                        detailed_scores = []
-
-                formatted_results.append({
-                    'id': result.id,
-                    'bid_document_id': result.bid_document_id,
-                    'bidder_name': result.bidder_name,
-                    'total_score': float(result.total_score) if result.total_score is not None else 0,
-                    'price_score': float(result.price_score) if result.price_score is not None else 0,
-                    'extracted_price': float(result.extracted_price) if result.extracted_price is not None else 0,
-                    'analysis_summary': result.analysis_summary,
-                    'analyzed_at': result.analyzed_at.isoformat() if result.analyzed_at else None,
-                    'detailed_scores': detailed_scores,
-                    'scoring_method': result.scoring_method,
-                    'ai_model': result.ai_model,
-                    'is_modified': result.is_modified,
-                    'modification_count': result.modification_count,
-                })
-
-            return jsonify({'results': formatted_results})
-    except Exception as e:
-        logging.error(f'获取项目分析结果时出错: {e}')
-        return jsonify({'error': f'获取分析结果失败: {str(e)}'}), 500
-
-@router.route('/projects/<int:project_id>/scoring-rules', methods=['GET'])
-def get_scoring_rules(project_id):
-    """获取项目评分规则"""
-    try:
-        # 获取数据库会话
-        with get_db() as db:
-            project = db.query(TenderProject).filter(TenderProject.id == project_id).first()
-            if not project:
-                return jsonify({'error': '项目不存在'}), 404
-
-            rules = db.query(ScoringRule).filter(ScoringRule.project_id == project_id).all()
-
-            formatted_rules = []
-            for rule in rules:
-                formatted_rules.append(
-                    {
-                        'id': rule.id,
-                        'Parent_Item_Name': rule.Parent_Item_Name,
-                        'Child_Item_Name': rule.Child_Item_Name,
-                        'Parent_max_score': rule.Parent_max_score,
-                        'Child_max_score': rule.Child_max_score,
-                        'description': rule.description,
-                        'project_id': rule.project_id,
-                    }
-                )
-
-            return jsonify({'scoring_rules': formatted_rules})
-    except Exception as e:
-        logging.error(f'获取项目评分规则时出错: {e}')
-        return jsonify({'error': f'获取评分规则失败: {str(e)}'}), 500
-
-@router.route('/projects/<int:project_id>/dynamic-summary', methods=['GET'])
-def get_dynamic_summary(project_id):
-    """获取项目动态汇总信息"""
-    try:
-        # 获取数据库会话
-        db = SessionLocal()
-        try:
-            summary_data = generate_summary_data(project_id, db)
-            
-            # 检查是否有错误信息
-            if isinstance(summary_data, dict) and 'error' in summary_data:
-                return jsonify(summary_data), 404
-            
-            return jsonify(summary_data)
-        finally:
-            db.close()
-    except Exception as e:
-        logging.error(f'生成项目 {project_id} 动态汇总时出错: {e}')
-        return jsonify({'error': f'生成汇总信息失败: {str(e)}'}), 500
-
-@router.route('/projects/<int:project_id>/recalculate-price-scores', methods=['POST'])
-def recalculate_price_scores(project_id):
-    """重新计算价格分"""
-    try:
-        # 获取数据库会话
-        db_gen = get_db()
-        db = next(db_gen)
-        
-        project = db.query(TenderProject).filter(TenderProject.id == project_id).first()
-        if not project:
-            return jsonify({'error': '项目不存在'}), 404
-
-        # 使用价格分计算器
-        calculator = PriceScoreCalculator()
-        success = calculator.calculate_project_price_scores(project_id)
-
-        if success:
-            return jsonify({
-                'message': '价格分重新计算完成',
-                'project_id': project_id
-            })
-        else:
-            return jsonify({'error': '价格分计算失败'}), 500
 
     except Exception as e:
-        logging.error(f'重新计算项目 {project_id} 价格分时出错: {e}')
-        return jsonify({'error': f'重新计算价格分失败: {str(e)}'}), 500
+        logging.error(f'获取项目结果时出错: {e}')
+        return jsonify({'error': f'获取结果失败: {str(e)}'}), 500
 
-@router.route('/projects/<int:project_id>/summary-table', methods=['GET'])
-def get_summary_table(project_id):
-    """获取项目汇总表格数据"""
+@router.route('/projects/<int:project_id>/summary', methods=['GET'])
+def get_project_summary(project_id):
+    """获取项目汇总数据"""
     try:
-        # 使用ResultDisplay生成汇总数据
-        display = ResultDisplay(project_id)
-        summary_data = display.generate_multi_level_table()
-        
+        summary_data = generate_summary_data(project_id)
         return jsonify(summary_data)
     except Exception as e:
-        logging.error(f"生成汇总表格时出错: {e}")
-        return jsonify({'error': f'生成汇总表格失败: {str(e)}'}), 500
+        logging.error(f'生成项目汇总时出错: {e}')
+        return jsonify({'error': f'生成汇总失败: {str(e)}'}), 500
 
-
-@router.route('/projects/<int:project_id>/detailed-scores', methods=['GET'])
-def get_detailed_scores(project_id):
-    """获取项目详细评分数据"""
+@router.route('/projects/<int:project_id>/export-summary', methods=['GET'])
+def export_project_summary(project_id):
+    """导出项目汇总表"""
     try:
-        detailed_score_data = get_detailed_score_data(project_id)
-        return jsonify(detailed_score_data)
-    except Exception as e:
-        logging.error(f"生成详细评分表时出错: {e}")
-        return jsonify({'error': f'生成详细评分表失败: {str(e)}'}), 500
-
-
-@router.route('/projects/<int:project_id>/price-display', methods=['GET'])
-def get_price_display(project_id):
-    """获取项目价格展示数据"""
-    try:
-        price_display_data = get_price_display_data(project_id)
-        return jsonify(price_display_data)
-    except Exception as e:
-        logging.error(f"生成价格展示表时出错: {e}")
-        return jsonify({'error': f'生成价格展示表失败: {str(e)}'}), 500
-
-
-@router.route('/analysis-results/bulk-update-scores', methods=['POST'])
-def bulk_update_scores():
-    """批量更新评分"""
-    db = None
-    try:
-        # 获取数据库会话
-        db_gen = get_db()
-        db = next(db_gen)
+        # 生成汇总数据
+        summary_data = generate_summary_data(project_id)
         
-        data = request.get_json()
-        score_updates = data.get('score_updates', [])
-        
-        updated_count = 0
-        for update in score_updates:
-            result = (
-                db.query(AnalysisResult)
-                .filter(AnalysisResult.id == update['result_id'])
-                .first()
-            )
-            if result:
-                # 更新评分
-                result.total_score = update['scores'].get(
-                    'total_score', result.total_score
-                )
-                updated_count += 1
+        if not summary_data or 'error' in summary_data:
+            return jsonify({'error': '无法生成汇总数据'}), 500
 
-        if updated_count > 0:
-            db.commit()
-            logging.info(f'成功更新了 {updated_count} 条分析结果的评分。')
-            return jsonify({
-                'message': f'成功更新了 {updated_count} 条分析结果的评分。'
-            })
-        else:
-            logging.warning('批量更新评分请求未找到任何有效的分析结果。')
-            return jsonify({'error': '未找到任何有效的分析结果进行更新。'}), 404
+        # 创建Word文档
+        doc = Document()
+        doc.add_heading(f'项目 {summary_data["project_name"]} 汇总表', 0)
+
+        # 添加项目信息
+        doc.add_paragraph(f'项目ID: {summary_data["project_id"]}')
+        doc.add_paragraph(f'生成时间: {datetime.now().strftime("%Y-%m-%d %H:%M:%S")}')
+
+        # 添加汇总表
+        if summary_data.get('results'):
+            table = doc.add_table(rows=1, cols=5)
+            table.style = 'Table Grid'
+            
+            # 表头
+            hdr_cells = table.rows[0].cells
+            hdr_cells[0].text = '投标人'
+            hdr_cells[1].text = '总分'
+            hdr_cells[2].text = '价格分'
+            hdr_cells[3].text = '投标报价'
+            hdr_cells[4].text = '分析时间'
+
+            # 数据行
+            for result in summary_data['results']:
+                row_cells = table.add_row().cells
+                row_cells[0].text = result.get('bidder_name', '')
+                row_cells[1].text = str(result.get('total_score', ''))
+                row_cells[2].text = str(result.get('price_score', ''))
+                row_cells[3].text = str(result.get('extracted_price', ''))
+                row_cells[4].text = result.get('analyzed_at', '')[:19] if result.get('analyzed_at') else ''
+
+        # 保存文档
+        filename = f'project_{project_id}_summary.docx'
+        filepath = Path('temp') / filename
+        filepath.parent.mkdir(exist_ok=True)
+        doc.save(str(filepath))
+
+        # 返回文件
+        return send_file(str(filepath), as_attachment=True, download_name=filename)
 
     except Exception as e:
-        if db:
-            try:
-                db.rollback()
-            except:
-                pass
-        logging.error(f'批量更新评分时出错: {e}')
-        return jsonify({'error': f'批量更新评分失败: {str(e)}'}), 500
+        logging.error(f'导出汇总表时出错: {e}')
+        return jsonify({'error': f'导出失败: {str(e)}'}), 500

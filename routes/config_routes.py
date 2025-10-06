@@ -20,8 +20,8 @@ from modules.runtime_config import (
 # 创建蓝图
 router = Blueprint('config', __name__, url_prefix='/api')
 
-# 全局变量 (将由main.py设置)
-RUNTIME_CONFIG = {}
+# 全局变量 (从配置文件加载初始值)
+RUNTIME_CONFIG = load_config()
 
 # OCR配置相关变量
 OCR_CONFIG_FILE = 'ocr_config.json'
@@ -80,6 +80,30 @@ def update_runtime_config():
             if not (30 <= updates['processing_timeout'] <= 1800):
                 return jsonify({'error': 'processing_timeout必须在30-1800秒之间'}), 400
 
+        # 验证文件上传大小限制（1MB到1000MB之间）
+        if 'max_content_length' in updates:
+            max_content_length = updates['max_content_length']
+            # 确保是整数且在合理范围内
+            try:
+                max_content_length = int(max_content_length)
+                if not (1 * 1024 * 1024 <= max_content_length <= 1000 * 1024 * 1024):
+                    return jsonify({'error': '文件上传大小限制必须在1MB到1000MB之间'}), 400
+                updates['max_content_length'] = max_content_length
+            except (ValueError, TypeError):
+                return jsonify({'error': '文件上传大小限制必须是整数'}), 400
+
+        # 验证单个文件大小限制（1MB到500MB之间）
+        if 'single_file_max_size' in updates:
+            single_file_max_size = updates['single_file_max_size']
+            # 确保是整数且在合理范围内
+            try:
+                single_file_max_size = int(single_file_max_size)
+                if not (1 * 1024 * 1024 <= single_file_max_size <= 500 * 1024 * 1024):
+                    return jsonify({'error': '单个文件大小限制必须在1MB到500MB之间'}), 400
+                updates['single_file_max_size'] = single_file_max_size
+            except (ValueError, TypeError):
+                return jsonify({'error': '单个文件大小限制必须是整数'}), 400
+
         # 更新配置
         RUNTIME_CONFIG.update(updates)
 
@@ -127,6 +151,30 @@ def update_project_runtime_config(project_id):
         if 'processing_timeout' in updates:
             if not (30 <= updates['processing_timeout'] <= 1800):
                 return jsonify({'error': 'processing_timeout必须在30-1800秒之间'}), 400
+
+        # 验证文件上传大小限制（1MB到1000MB之间）
+        if 'max_content_length' in updates:
+            max_content_length = updates['max_content_length']
+            # 确保是整数且在合理范围内
+            try:
+                max_content_length = int(max_content_length)
+                if not (1 * 1024 * 1024 <= max_content_length <= 1000 * 1024 * 1024):
+                    return jsonify({'error': '文件上传大小限制必须在1MB到1000MB之间'}), 400
+                updates['max_content_length'] = max_content_length
+            except (ValueError, TypeError):
+                return jsonify({'error': '文件上传大小限制必须是整数'}), 400
+
+        # 验证单个文件大小限制（1MB到500MB之间）
+        if 'single_file_max_size' in updates:
+            single_file_max_size = updates['single_file_max_size']
+            # 确保是整数且在合理范围内
+            try:
+                single_file_max_size = int(single_file_max_size)
+                if not (1 * 1024 * 1024 <= single_file_max_size <= 500 * 1024 * 1024):
+                    return jsonify({'error': '单个文件大小限制必须在1MB到500MB之间'}), 400
+                updates['single_file_max_size'] = single_file_max_size
+            except (ValueError, TypeError):
+                return jsonify({'error': '单个文件大小限制必须是整数'}), 400
 
         # 获取当前项目配置
         current_config = load_config_for_project(project_id) or RUNTIME_CONFIG.copy()

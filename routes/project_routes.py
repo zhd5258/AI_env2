@@ -76,6 +76,17 @@ def get_all_projects():
                     .count()
                 )
 
+                # 计算用时信息
+                elapsed_time = None
+                total_time = None
+                if project.analysis_start_time:
+                    if project.analysis_end_time:
+                        # 分析已完成，计算总用时
+                        total_time = (project.analysis_end_time - project.analysis_start_time).total_seconds()
+                    else:
+                        # 分析进行中，计算已用时
+                        elapsed_time = (datetime.utcnow() - project.analysis_start_time).total_seconds()
+
                 project_info = {
                     'id': project.id,
                     'project_code': project.project_code,
@@ -88,6 +99,10 @@ def get_all_projects():
                     'bid_count': len(bid_docs),
                     'result_count': completed_count,
                     'status': project.status,
+                    'analysis_start_time': project.analysis_start_time.isoformat() if project.analysis_start_time else None,
+                    'analysis_end_time': project.analysis_end_time.isoformat() if project.analysis_end_time else None,
+                    'elapsed_time': elapsed_time,  # 已用时（秒）
+                    'total_time': total_time,      # 总用时（秒）
                     'bid_documents': [
                         {
                             'id': doc.id,

@@ -4,7 +4,7 @@
 #作者           : KingFreeDom
 #创建时间         : 2025-10-03 14:14:03
 #最近一次编辑者      : KingFreeDom
-#最近一次编辑时间     : 2025-10-06 09:50:42
+#最近一次编辑时间     : 2025-10-06 13:46:12
 #文件相对于项目的路径   : \AI_env2\app.py
 #
 #Copyright (c) 2025 by 中车眉山车辆有限公司/KingFreeDom, All Rights Reserved. 
@@ -20,6 +20,7 @@ from flask import Flask, render_template, send_from_directory
 from config.app_config import Config
 # 修复导入路径 - 从 cors_middleware 导入而不是 cors
 from middleware.cors_middleware import setup_cors
+from modules.runtime_config import load_config
 
 # 配置日志
 logging.basicConfig(
@@ -32,6 +33,10 @@ app = Flask(__name__, template_folder='templates')
 
 # 从配置类加载配置
 app.config.from_object(Config)
+
+# 从运行时配置加载文件上传大小限制
+runtime_config = load_config()
+app.config['MAX_CONTENT_LENGTH'] = runtime_config.get('max_content_length', 500 * 1024 * 1024)
 
 # 启动资源监控器
 from modules.resource_monitor import start_resource_monitoring

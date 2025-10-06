@@ -12,11 +12,47 @@
             margin: 0 auto;
             padding: 20px;
         }
+        .navbar {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            padding: 15px 0;
+            margin-bottom: 30px;
+            border-radius: 10px;
+            box-shadow: 0 4px 12px rgba(0,0,0,0.1);
+        }
+        .navbar ul {
+            list-style-type: none;
+            margin: 0;
+            padding: 0;
+            display: flex;
+            justify-content: center;
+        }
+        .navbar li {
+            margin: 0 15px;
+        }
+        .navbar a {
+            color: white;
+            text-decoration: none;
+            padding: 12px 20px;
+            border-radius: 25px;
+            transition: all 0.3s ease;
+            font-weight: 500;
+            display: block;
+        }
+        .navbar a:hover {
+            background-color: rgba(255, 255, 255, 0.2);
+            transform: translateY(-2px);
+            box-shadow: 0 4px 8px rgba(0,0,0,0.1);
+        }
+        .navbar a.active {
+            background-color: rgba(255, 255, 255, 0.3);
+            font-weight: bold;
+        }
         .upload-section {
             border: 1px solid #ddd;
             padding: 20px;
             border-radius: 5px;
             margin-bottom: 20px;
+            background-color: #f9f9f9;
         }
         .form-group {
             margin-bottom: 15px;
@@ -59,293 +95,54 @@
             border: 1px solid #f5c6cb;
             color: #721c24;
         }
-        /* 分析进度样式 */
         .progress-section {
             display: none;
             margin-top: 20px;
-            padding: 20px;
-            border: 1px solid #ddd;
-            border-radius: 5px;
-        }
-        .progress-bar-container {
-            width: 100%;
-            background-color: #f0f0f0;
-            border-radius: 5px;
-            margin: 10px 0;
         }
         .progress-bar {
+            width: 100%;
             height: 20px;
-            background-color: #007bff;
-            border-radius: 5px;
-            text-align: center;
-            line-height: 20px;
-            color: white;
-            font-size: 12px;
+            background-color: #f0f0f0;
+            border-radius: 10px;
+            overflow: hidden;
         }
-        .document-progress {
-            margin: 15px 0;
-            padding: 10px;
-            border: 1px solid #eee;
-            border-radius: 3px;
-        }
-        .document-progress.completed {
-            background-color: #d4edda;
-        }
-        .document-progress.processing {
-            background-color: #cce7ff;
-        }
-        .document-progress.error {
-            background-color: #f8d7da;
-        }
-        /* 投标人信息行样式 - 统一垂直对齐 */
-        .bidder-info-row {
-            display: flex;
-            align-items: baseline; /* 统一底部对齐 */
-            gap: 10px;
-            margin: 5px 0;
-        }
-        .bidder-label {
-            font-weight: bold;
-            white-space: nowrap;
-        }
-        .bidder-name-full {
-            flex-grow: 1;
-            word-break: break-all; /* 允许在任意字符间断行 */
-        }
-        /* 规则进度条样式 */
-        .rule-progress-container {
-            margin: 10px 0;
-            padding: 10px;
-            background-color: #f8f9fa;
-            border-radius: 5px;
-            border: 1px solid #e9ecef;
-        }
-        .rule-progress-label {
-            font-size: 14px;
-            margin-bottom: 5px;
-            font-weight: bold;
-        }
-        .rule-progress-sublabel {
-            font-size: 12px;
-            color: #6c757d;
-            margin-bottom: 5px;
-        }
-        .rule-progress-bar-container {
-            height: 12px;
-            background-color: #e9ecef;
-            border-radius: 6px;
-            margin: 5px 0;
-        }
-        .rule-progress-bar {
+        .progress-fill {
             height: 100%;
-            background-color: #28a745;
-            border-radius: 6px;
-            transition: width 0.3s ease;
+            background-color: #007bff;
+            width: 0%;
+            transition: width 0.3s;
         }
-        /* 文件列表样式 */
         .file-list-section {
             margin-top: 20px;
-            padding: 15px;
-            border: 1px solid #ddd;
-            border-radius: 5px;
-            /* 移除默认隐藏，改为通过JavaScript控制显示 */
-        }
-        .file-item {
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-            padding: 8px;
-            border-bottom: 1px solid #eee;
-        }
-        .file-item:last-child {
-            border-bottom: none;
-        }
-        .file-info {
-            flex-grow: 1;
-        }
-        .file-actions {
-            margin-left: 10px;
-        }
-        .remove-btn {
-            background-color: #dc3545;
-            color: white;
-            border: none;
-            padding: 5px 10px;
-            border-radius: 3px;
-            cursor: pointer;
-        }
-        .remove-btn:hover {
-            background-color: #c82333;
-        }
-        /* 汇总表格样式 */
-        .summary-section {
             display: none;
-            margin-top: 20px;
-            padding: 20px;
-            border: 1px solid #ddd;
-            border-radius: 5px;
-            max-width: 100%; /* 增加最大宽度 */
         }
-        .table-container {
-            overflow: auto;
-            max-height: 70vh;
-            margin-top: 15px;
-            border: 1px solid #ddd;
-            max-width: 100%; /* 增加最大宽度 */
-        }
-        .summary-table {
-            width: 100%;
-            border-collapse: collapse;
-            min-width: 100%;
-        }
-        .summary-table th, .summary-table td {
-            border: 1px solid #ddd;
-            padding: 8px;
-            text-align: center;
-            /* 修改：允许自动换行 */
-            white-space: normal;
-            word-wrap: break-word;
-            /* 设置更合理的列宽 */
-            width: 80px; /* 默认列宽 */
-        }
-        /* 排名列样式 - 不超过2个汉字宽度 */
-        .summary-table th:nth-child(1), .summary-table td:nth-child(1) {
-            width: 40px; /* 约2个汉字宽度 */
-            max-width: 40px;
-        }
-        /* 投标人列样式 */
-        .summary-table th:nth-child(2), .summary-table td:nth-child(2) {
-            width: 120px; /* 投标人列宽度 */
-            max-width: 120px;
-        }
-        /* 子项名称列样式 - 不超过5个汉字宽度 */
-        .summary-table th:not(:nth-child(1)):not(:nth-child(2)), 
-        .summary-table td:not(:nth-child(1)):not(:nth-child(2)) {
-            width: 100px; /* 约5个汉字宽度 */
-            max-width: 100px;
-        }
-        .summary-table th {
-            background-color: #f2f2f2;
-            font-weight: bold;
-            position: sticky;
-            top: 0;
-            z-index: 10;
-            /* 修改：增加最小高度以适应换行 */
-            min-height: 40px;
-        }
-        .summary-table td:first-child, .summary-table th:first-child,
-        .summary-table td:nth-child(2), .summary-table th:nth-child(2) {
-            position: sticky;
-            left: 0;
-            background-color: #f2f2f2;
-            z-index: 5;
-            /* 修改：增加投标人列的宽度 */
-            min-width: 120px;
-        }
-        .summary-table td:nth-child(2), .summary-table th:nth-child(2) {
-            left: 50px; /* 排名列宽度，根据实际内容调整 */
-        }
-        .summary-table tr:nth-child(even) {
-            background-color: #f9f9f9;
-        }
-        .summary-table tr:hover {
-            background-color: #f5f5f5;
-        }
-        /* 子项名称悬停显示完整项 */
-        .item-name {
-            display: inline-block;
-            max-width: 100%;
-            overflow: hidden;
-            text-overflow: ellipsis;
-            white-space: nowrap;
-            position: relative;
-            cursor: help;
-            /* 确保不超过5个汉字宽度 */
-            max-width: 100px;
-        }
-        .item-name:hover::after {
-            content: attr(data-full-name);
-            position: absolute;
-            left: 0;
-            top: 100%;
-            background-color: #333;
-            color: white;
-            padding: 5px;
-            border-radius: 3px;
-            white-space: normal;
-            word-wrap: break-word;
-            max-width: 300px;
-            z-index: 100;
-            box-shadow: 0 2px 5px rgba(0,0,0,0.2);
-            font-size: 12px;
-            line-height: 1.4;
-        }
-        /* 投标人名称悬停显示 */
         .bidder-name {
-            display: inline-block;
-            max-width: 150px;
-            overflow: hidden;
-            text-overflow: ellipsis;
-            white-space: nowrap;
-            position: relative;
+            max-width: 100px;
         }
-        .bidder-name:hover::after {
-            content: attr(data-full-name);
-            position: absolute;
-            left: 0;
-            top: 100%;
-            background-color: #333;
-            color: white;
-            padding: 5px;
-            border-radius: 3px;
-            white-space: normal;
-            word-wrap: break-word;
-            max-width: 300px;
-            z-index: 100;
-            box-shadow: 0 2px 5px rgba(0,0,0,0.2);
+        /* 用时显示样式 */
+        .time-display {
+            margin-top: 15px;
+            padding: 10px;
+            background-color: #e9ecef;
+            border-radius: 5px;
+            text-align: center;
+            font-weight: bold;
         }
-        /* 导航栏样式 */
-        .navbar {
-            background-color: #007bff;
-            padding: 10px 0;
-            margin-bottom: 20px;
+        .time-display.processing {
+            background-color: #d1ecf1;
+            color: #0c5460;
         }
-        .navbar ul {
-            list-style-type: none;
-            margin: 0;
-            padding: 0;
-            display: flex;
-        }
-        .navbar li {
-            margin-right: 20px;
-        }
-        .navbar a {
-            color: white;
-            text-decoration: none;
-            padding: 10px 15px;
-            border-radius: 3px;
-        }
-        .navbar a:hover, .navbar a.active {
-            background-color: #0056b3;
+        .time-display.completed {
+            background-color: #d4edda;
+            color: #155724;
         }
         /* 响应式设计 */
         @media (max-width: 768px) {
-            .table-container {
-                max-height: 60vh;
-            }
-            .summary-table th, .summary-table td {
-                padding: 6px;
-                font-size: 14px;
-            }
-            .bidder-name {
-                max-width: 100px;
-            }
             .navbar ul {
                 flex-direction: column;
             }
             .navbar li {
-                margin-right: 0;
-                margin-bottom: 5px;
+                margin: 5px 0;
             }
         }
     </style>
@@ -381,141 +178,58 @@
     <!-- 文件列表显示区域 -->
     <div id="fileListSection" class="file-list-section">
         <h3>已选择的文件</h3>
-        <div id="tenderFileList">
-            <h4>招标文件:</h4>
-            <div id="tenderFilesContainer"></div>
-        </div>
-        <div id="bidFileList">
-            <h4>投标文件:</h4>
-            <div id="bidFilesContainer"></div>
-        </div>
+        <div id="fileList"></div>
     </div>
     
-    <div id="result" class="result"></div>
-    
-    <!-- 分析进度显示区域 -->
+    <!-- 进度显示区域 -->
     <div id="progressSection" class="progress-section">
-        <h2>分析进度</h2>
-        <div>
-            <p>项目ID: <span id="projectId"></span></p>
-            <p>总进度: <span id="totalProgress">0%</span></p>
-            <div class="progress-bar-container">
-                <div id="totalProgressBar" class="progress-bar" style="width: 0%;">0%</div>
-            </div>
+        <h3>处理进度</h3>
+        <p>项目ID: <span id="projectId">-</span></p>
+        <div class="progress-bar">
+            <div class="progress-fill" id="progressFill"></div>
         </div>
-        <div id="documentProgressList">
-            <!-- 各投标文件进度将在这里动态添加 -->
-        </div>
-        <!-- 汇总表格按钮 -->
-        <div style="margin-top: 20px;">
-            <button id="showSummaryBtn" style="display: none;" onclick="showSummaryTable()">显示汇总表格</button>
+        <p id="progressText">准备中...</p>
+        <div id="detailedProgress"></div>
+        <!-- 用时显示区域 -->
+        <div id="timeDisplay" class="time-display processing">
+            已用时: <span id="elapsedTime">0</span> 秒
         </div>
     </div>
     
-    <!-- 汇总表格显示区域 -->
-    <div id="summarySection" class="summary-section">
-        <h2>评分汇总表</h2>
-        <div class="table-container">
-            <div id="summaryTableContainer"></div>
-        </div>
-        <div style="margin-top: 20px;">
-            <button onclick="hideSummaryTable()">返回进度</button>
-        </div>
-    </div>
+    <!-- 结果显示区域 -->
+    <div id="result" class="result"></div>
 
-    <!-- 详细评分表显示区域 -->
-    <div id="detailedScoreSection" class="summary-section" style="display: none;">
-        <h2>详细评分表</h2>
-        <div class="table-container">
-            <div id="detailedScoreTableContainer"></div>
-        </div>
-        <div style="margin-top: 20px;">
-            <button onclick="hideDetailedScoreTable()">返回汇总</button>
-        </div>
-    </div>
-
-    <!-- 价格展示表显示区域 -->
-    <div id="priceDisplaySection" class="summary-section" style="display: none;">
-        <h2>价格展示表</h2>
-        <div class="table-container">
-            <div id="priceDisplayTableContainer"></div>
-        </div>
-        <div style="margin-top: 20px;">
-            <button onclick="hidePriceDisplayTable()">返回汇总</button>
-        </div>
-    </div>
-
-    <script src="/public/js/main.js"></script>
-    <script src="/public/js/test.js"></script>
     <script>
-        // 全局变量
-        let projectId = null;
-        let progressInterval = null;
         let selectedTenderFile = null;
         let selectedBidFiles = [];
-        
-        // 监听文件选择变化
-        document.getElementById('tender_file').addEventListener('change', function(e) {
-            selectedTenderFile = e.target.files[0];
-            updateFileList();
-        });
-        
-        document.getElementById('bid_files').addEventListener('change', function(e) {
-            selectedBidFiles = Array.from(e.target.files);
-            updateFileList();
-        });
-        
+        let projectId = null;
+        let progressInterval = null;
+        let startTime = null;
+
         // 更新文件列表显示
         function updateFileList() {
-            const fileListSection = document.getElementById('fileListSection');
-            const tenderFilesContainer = document.getElementById('tenderFilesContainer');
-            const bidFilesContainer = document.getElementById('bidFilesContainer');
+            const fileList = document.getElementById('fileList');
+            let html = '<ul>';
             
-            // 清空现有列表
-            tenderFilesContainer.innerHTML = '';
-            bidFilesContainer.innerHTML = '';
-            
-            // 显示招标文件
             if (selectedTenderFile) {
-                const fileItem = document.createElement('div');
-                fileItem.className = 'file-item';
-                fileItem.innerHTML = `
-                    <div class="file-info">${selectedTenderFile.name}</div>
-                    <div class="file-actions">
-                        <button class="remove-btn" onclick="removeTenderFile()">删除</button>
-                    </div>
-                `;
-                tenderFilesContainer.appendChild(fileItem);
+                html += `<li>招标文件: ${selectedTenderFile.name} (${(selectedTenderFile.size / 1024 / 1024).toFixed(2)} MB)</li>`;
             }
             
-            // 显示投标文件
-            selectedBidFiles.forEach((file, index) => {
-                const fileItem = document.createElement('div');
-                fileItem.className = 'file-item';
-                fileItem.innerHTML = `
-                    <div class="file-info">${file.name}</div>
-                    <div class="file-actions">
-                        <button class="remove-btn" onclick="removeBidFile(${index})">删除</button>
-                    </div>
-                `;
-                bidFilesContainer.appendChild(fileItem);
-            });
-            
-            // 如果有文件则显示列表区域
-            if (selectedTenderFile || selectedBidFiles.length > 0) {
-                fileListSection.style.display = 'block';
-            } else {
-                fileListSection.style.display = 'none';
+            if (selectedBidFiles.length > 0) {
+                html += '<li>投标文件:<ul>';
+                selectedBidFiles.forEach((file, index) => {
+                    html += `<li>${file.name} (${(file.size / 1024 / 1024).toFixed(2)} MB) <button type="button" onclick="removeBidFile(${index})" style="background-color: #dc3545; color: white; border: none; padding: 2px 5px; cursor: pointer;">删除</button></li>`;
+                });
+                html += '</ul></li>';
             }
+            
+            html += '</ul>';
+            fileList.innerHTML = html;
+            
+            // 显示文件列表区域
+            document.getElementById('fileListSection').style.display = selectedTenderFile || selectedBidFiles.length > 0 ? 'block' : 'none';
         }
-        
-        // 删除招标文件
-        function removeTenderFile() {
-            selectedTenderFile = null;
-            document.getElementById('tender_file').value = '';
-            updateFileList();
-        }
-        
+
         // 删除投标文件
         function removeBidFile(index) {
             selectedBidFiles.splice(index, 1);
@@ -527,7 +241,89 @@
             document.getElementById('bid_files').files = dataTransfer.files;
             updateFileList();
         }
-        
+
+        // 文件选择事件处理
+        document.getElementById('tender_file').addEventListener('change', function(e) {
+            if (e.target.files.length > 0) {
+                selectedTenderFile = e.target.files[0];
+            } else {
+                selectedTenderFile = null;
+            }
+            updateFileList();
+        });
+
+        document.getElementById('bid_files').addEventListener('change', function(e) {
+            if (e.target.files.length > 0) {
+                // 添加新选择的文件到数组中
+                for (let i = 0; i < e.target.files.length; i++) {
+                    selectedBidFiles.push(e.target.files[i]);
+                }
+            }
+            updateFileList();
+        });
+
+        // 轮询进度
+        async function pollProgress() {
+            if (!projectId || projectId === '初始化中...') return;
+            
+            try {
+                const response = await fetch(`/api/projects/${projectId}/progress`);
+                if (response.ok) {
+                    const data = await response.json();
+                    updateProgressDisplay(data);
+                }
+            } catch (error) {
+                console.error('获取进度失败:', error);
+            }
+        }
+
+        // 更新进度显示
+        function updateProgressDisplay(data) {
+            const progressFill = document.getElementById('progressFill');
+            const progressText = document.getElementById('progressText');
+            const detailedProgress = document.getElementById('detailedProgress');
+            const timeDisplay = document.getElementById('timeDisplay');
+            const elapsedTimeElement = document.getElementById('elapsedTime');
+            
+            if (data.overall_progress !== undefined) {
+                progressFill.style.width = `${data.overall_progress}%`;
+                progressText.textContent = `${data.overall_progress.toFixed(1)}%`;
+            }
+            
+            if (data.detailed_progress) {
+                let html = '<ul>';
+                for (const [filename, progress] of Object.entries(data.detailed_progress)) {
+                    html += `<li>${filename}: ${progress}%</li>`;
+                }
+                html += '</ul>';
+                detailedProgress.innerHTML = html;
+            }
+            
+            // 更新用时显示
+            if (data.total_time !== null) {
+                // 分析已完成，显示总用时
+                timeDisplay.className = 'time-display completed';
+                const minutes = Math.floor(data.total_time / 60);
+                const seconds = Math.floor(data.total_time % 60);
+                timeDisplay.innerHTML = `总用时: ${minutes}分${seconds}秒`;
+            } else if (data.elapsed_time !== null) {
+                // 分析进行中，显示已用时
+                timeDisplay.className = 'time-display processing';
+                const minutes = Math.floor(data.elapsed_time / 60);
+                const seconds = Math.floor(data.elapsed_time % 60);
+                elapsedTimeElement.textContent = `${minutes}分${seconds}秒`;
+            }
+        }
+
+        // 开始轮询进度
+        function startProgressPolling() {
+            if (progressInterval) {
+                clearInterval(progressInterval);
+            }
+            progressInterval = setInterval(pollProgress, 1000);
+        }
+
+        // 表单提交处理
         document.getElementById('uploadForm').addEventListener('submit', async function(e) {
             e.preventDefault();
             
@@ -557,14 +353,15 @@
             const fileListSection = document.getElementById('fileListSection');
             resultDiv.style.display = 'none';
             
-            // 立即显示进度界面，不需要等待上传完成
-            projectId = '初始化中...'; // 临时项目ID
-            document.getElementById('projectId').textContent = projectId;
-            
             // 隐藏上传表单和文件列表，显示进度界面
             document.querySelector('.upload-section').style.display = 'none';
             fileListSection.style.display = 'none';
             progressSection.style.display = 'block';
+            
+            // 重置用时显示
+            const timeDisplay = document.getElementById('timeDisplay');
+            timeDisplay.className = 'time-display processing';
+            document.getElementById('elapsedTime').textContent = '0';
             
             // 开始轮询进度（使用临时项目ID）
             startProgressPolling();
@@ -585,23 +382,25 @@
                     // 继续轮询进度
                     startProgressPolling();
                 } else {
-                    // 特别处理413错误
+                    // 特别处理413错误（文件大小超出限制）
                     if (response.status === 413) {
                         resultDiv.className = 'result error';
-                        resultDiv.innerHTML = `<h3>上传失败!</h3><p>文件大小超出限制，请确保单个文件不超过500MB。</p>`;
+                        if (data.error && data.error.includes('招标文件大小超出限制')) {
+                            resultDiv.innerHTML = `<h3>上传失败!</h3><p>招标文件大小超出限制，请检查系统设置中的单个文件大小限制。</p>`;
+                        } else if (data.error && data.error.includes('投标文件大小超出限制')) {
+                            resultDiv.innerHTML = `<h3>上传失败!</h3><p>投标文件大小超出限制，请检查系统设置中的单个文件大小限制。</p>`;
+                        } else if (data.error && data.error.includes('文件大小超出限制')) {
+                            resultDiv.innerHTML = `<h3>上传失败!</h3><p>文件大小超出限制，请检查系统设置中的单个文件大小限制。</p>`;
+                        } else {
+                            resultDiv.innerHTML = `<h3>上传失败!</h3><p>${data.error || '文件大小超出限制'}</p>`;
+                        }
                     } else {
                         resultDiv.className = 'result error';
                         resultDiv.innerHTML = `<h3>上传失败!</h3><p>${data.error}</p>`;
                     }
                     resultDiv.style.display = 'block';
                     
-                    // 停止进度轮询
-                    if (progressInterval) {
-                        clearInterval(progressInterval);
-                        progressInterval = null;
-                    }
-                    
-                    // 恢复上传界面
+                    // 恢复上传表单
                     document.querySelector('.upload-section').style.display = 'block';
                     progressSection.style.display = 'none';
                 }
@@ -610,555 +409,11 @@
                 resultDiv.innerHTML = `<h3>请求失败!</h3><p>${error.message}</p>`;
                 resultDiv.style.display = 'block';
                 
-                // 停止进度轮询
-                if (progressInterval) {
-                    clearInterval(progressInterval);
-                    progressInterval = null;
-                }
-                
-                // 恢复上传界面
+                // 恢复上传表单
                 document.querySelector('.upload-section').style.display = 'block';
                 progressSection.style.display = 'none';
             }
         });
-        
-        // 开始轮询进度
-        function startProgressPolling() {
-            // 清除之前的轮询（如果有的话）
-            if (progressInterval) {
-                clearInterval(progressInterval);
-                progressInterval = null;
-            }
-            
-            // 立即获取一次进度
-            updateProgress();
-            
-            // 每2秒轮询一次进度
-            progressInterval = setInterval(updateProgress, 2000);
-        }
-        
-        // 更新进度显示
-        async function updateProgress() {
-            if (!projectId) return;
-            
-            // 如果项目ID是临时值，显示初始化状态
-            if (projectId === '初始化中...') {
-                document.getElementById('totalProgress').textContent = '0%';
-                document.getElementById('totalProgressBar').style.width = '0%';
-                document.getElementById('totalProgressBar').textContent = '0%';
-                
-                const documentProgressList = document.getElementById('documentProgressList');
-                documentProgressList.innerHTML = '<div class="document-progress processing"><p>正在初始化项目...</p></div>';
-                return;
-            }
-            
-            try {
-                const response = await fetch(`/api/projects/${projectId}/analysis-status`);
-                const data = await response.json();
-                
-                if (response.ok) {
-                    // 更新总进度
-                    const progressPercentage = Math.min(100, Math.max(0, data.progress_percentage));
-                    document.getElementById('totalProgress').textContent = progressPercentage.toFixed(1) + '%';
-                    document.getElementById('totalProgressBar').style.width = progressPercentage + '%';
-                    document.getElementById('totalProgressBar').textContent = progressPercentage.toFixed(1) + '%';
-                    
-                    // 更新各投标文件进度
-                    const documentProgressList = document.getElementById('documentProgressList');
-                    documentProgressList.innerHTML = '';
-                    
-                    data.document_statuses.forEach(doc => {
-                        const docDiv = document.createElement('div');
-                        docDiv.className = `document-progress ${doc.processing_status}`;
-                        
-                        let statusText = '';
-                        switch (doc.processing_status) {
-                            case 'completed':
-                                statusText = '已完成';
-                                break;
-                            case 'processing':
-                                statusText = '处理中';
-                                break;
-                            case 'error':
-                                statusText = '错误';
-                                break;
-                            default:
-                                statusText = '待处理';
-                        }
-                        
-                        // 使用原始文件名显示投标文件，而不是使用"待确认"这样的默认名称
-                        const displayFilename = doc.filename || '未知文件';
-                        // 显示真实的投标人名称，如果还没有则使用文件名作为占位符
-                        let displayBidderName = doc.bidder_name || '未知投标方';
-                        // 如果投标人名称是默认值，则使用文件名作为占位符
-                        if (displayBidderName === '未知投标方' || displayBidderName === '待确认' || displayBidderName === 'pdf') {
-                            // 从文件名中提取投标人名称（去除扩展名）
-                            const filenameWithoutExt = displayFilename.replace(/\.[^/.]+$/, "");
-                            if (filenameWithoutExt) {
-                                displayBidderName = filenameWithoutExt;
-                            }
-                        }
-                        
-                        // 构建进度详情HTML
-                        let progressDetails = '';
-                        if (doc.processing_status === 'processing' && doc.processing_phase) {
-                            progressDetails += `<p>阶段: ${doc.processing_phase}</p>`;
-                            
-                            // 如果在AI分析阶段，显示更详细的规则进度
-                            if (doc.processing_phase === 'AI分析中' && doc.progress_total_rules > 0) {
-                                const completedRules = doc.progress_completed_rules || 0;
-                                const currentRule = doc.progress_current_rule || '未知';
-                                const ruleProgressPercentage = Math.round((completedRules / doc.progress_total_rules) * 100);
-                                
-                                // 创建更详细的规则进度显示
-                                progressDetails += `
-                                    <div class="rule-progress-container">
-                                        <div class="rule-progress-label">规则分析进度: ${completedRules}/${doc.progress_total_rules} (${ruleProgressPercentage}%)</div>
-                                        <div class="rule-progress-sublabel">当前正在分析: ${currentRule}</div>
-                                        <div class="rule-progress-bar-container">
-                                            <div class="rule-progress-bar" style="width: ${ruleProgressPercentage}%"></div>
-                                        </div>
-                                    </div>
-                                `;
-                            }
-                        }
-                        
-                        docDiv.innerHTML = `
-                            <p><strong>投标文件：${displayFilename}</strong></p>
-                            <div class="bidder-info-row">
-                                <span class="bidder-label">投标人:</span>
-                                <span class="bidder-name-full">${displayBidderName}</span>
-                            </div>
-                            <p>状态: ${statusText}</p>
-                            ${progressDetails}
-                            ${doc.total_score ? `<p>总分: ${doc.total_score.toFixed(2)}</p>` : ''}
-                        `;
-                        
-                        documentProgressList.appendChild(docDiv);
-                    });
-                    
-                    // 如果所有文件都已完成，显示汇总表格按钮
-                    if (data.progress_percentage >= 100) {
-                        clearInterval(progressInterval);
-                        progressInterval = null; // 清除引用
-                        // 显示汇总表格按钮
-                        document.getElementById('showSummaryBtn').style.display = 'block';
-                        console.log('分析已完成');
-                    }
-                } else {
-                    console.error('获取进度失败:', data.error);
-                }
-            } catch (error) {
-                console.error('轮询进度时出错:', error);
-            }
-        }
-        
-        // 显示汇总表格
-        async function showSummaryTable() {
-            if (!projectId) return;
-            
-            try {
-                const response = await fetch(`/api/projects/${projectId}/summary-table`);
-                const data = await response.json();
-                
-                if (response.ok) {
-                    // 隐藏进度区域，显示汇总表格区域
-                    document.getElementById('progressSection').style.display = 'none';
-                    const summarySection = document.getElementById('summarySection');
-                    summarySection.style.display = 'block';
-                    
-                    // 生成汇总表格
-                    const tableContainer = document.getElementById('summaryTableContainer');
-                    tableContainer.innerHTML = generateSummaryTableHTML(data);
-                    
-                    // 添加详细评分表和价格展示表的按钮
-                    addAdditionalTableButtons();
-                } else {
-                    console.error('获取汇总表格失败:', data.error);
-                }
-            } catch (error) {
-                console.error('获取汇总表格时出错:', error);
-            }
-        }
-        
-        // 添加详细评分表和价格展示表的按钮
-        function addAdditionalTableButtons() {
-            const summarySection = document.getElementById('summarySection');
-            const buttonsContainer = document.createElement('div');
-            buttonsContainer.style.marginTop = '20px';
-            buttonsContainer.style.display = 'flex';
-            buttonsContainer.style.gap = '10px';
-            buttonsContainer.style.justifyContent = 'center';
-            
-            const detailedScoreBtn = document.createElement('button');
-            detailedScoreBtn.textContent = '查看详细评分';
-            detailedScoreBtn.onclick = showDetailedScoreTable;
-            
-            const priceDisplayBtn = document.createElement('button');
-            priceDisplayBtn.textContent = '查看价格展示';
-            priceDisplayBtn.onclick = showPriceDisplayTable;
-            
-            const backBtn = document.createElement('button');
-            backBtn.textContent = '返回进度';
-            backBtn.onclick = hideSummaryTable;
-            
-            buttonsContainer.appendChild(detailedScoreBtn);
-            buttonsContainer.appendChild(priceDisplayBtn);
-            buttonsContainer.appendChild(backBtn);
-            
-            // 清除原有的按钮并添加新的按钮
-            const existingButtons = summarySection.querySelector('div[style*="margin-top: 20px"]');
-            if (existingButtons) {
-                existingButtons.remove();
-            }
-            summarySection.appendChild(buttonsContainer);
-        }
-        
-        // 显示详细评分表
-        async function showDetailedScoreTable() {
-            if (!projectId) return;
-            
-            try {
-                const response = await fetch(`/api/projects/${projectId}/detailed-scores`);
-                const data = await response.json();
-                
-                if (response.ok) {
-                    // 隐藏汇总表格区域，显示详细评分表区域
-                    document.getElementById('summarySection').style.display = 'none';
-                    const detailedScoreSection = document.getElementById('detailedScoreSection');
-                    detailedScoreSection.style.display = 'block';
-                    
-                    // 生成详细评分表格
-                    const tableContainer = document.getElementById('detailedScoreTableContainer');
-                    tableContainer.innerHTML = generateDetailedScoreTableHTML(data);
-                } else {
-                    console.error('获取详细评分表失败:', data.error);
-                }
-            } catch (error) {
-                console.error('获取详细评分表时出错:', error);
-            }
-        }
-        
-        // 显示价格展示表
-        async function showPriceDisplayTable() {
-            if (!projectId) return;
-            
-            try {
-                const response = await fetch(`/api/projects/${projectId}/price-display`);
-                const data = await response.json();
-                
-                if (response.ok) {
-                    // 隐藏汇总表格区域，显示价格展示表区域
-                    document.getElementById('summarySection').style.display = 'none';
-                    const priceDisplaySection = document.getElementById('priceDisplaySection');
-                    priceDisplaySection.style.display = 'block';
-                    
-                    // 生成价格展示表格
-                    const tableContainer = document.getElementById('priceDisplayTableContainer');
-                    tableContainer.innerHTML = generatePriceDisplayTableHTML(data);
-                } else {
-                    console.error('获取价格展示表失败:', data.error);
-                }
-            } catch (error) {
-                console.error('获取价格展示表时出错:', error);
-            }
-        }
-        
-        // 隐藏详细评分表，返回汇总表格
-        function hideDetailedScoreTable() {
-            document.getElementById('detailedScoreSection').style.display = 'none';
-            document.getElementById('summarySection').style.display = 'block';
-        }
-        
-        // 隐藏价格展示表，返回汇总表格
-        function hidePriceDisplayTable() {
-            document.getElementById('priceDisplaySection').style.display = 'none';
-            document.getElementById('summarySection').style.display = 'block';
-        }
-        
-        // 隐藏汇总表格，返回进度显示
-        function hideSummaryTable() {
-            document.getElementById('summarySection').style.display = 'none';
-            document.getElementById('progressSection').style.display = 'block';
-        }
-        
-        // 生成详细评分表格HTML
-        function generateDetailedScoreTableHTML(data) {
-            if (!data.headers || !data.data) {
-                return '<p>无法生成详细评分表格：数据格式不正确</p>';
-            }
-            
-            let html = '<table class="summary-table">';
-            
-            // 生成表头（支持双行表头）
-            if (data.headers.length >= 2) {
-                // 生成第一行表头
-                html += '<tr>';
-                data.headers[0].forEach(header => {
-                    if (typeof header === 'string') {
-                        html += `<th>${header}</th>`;
-                    } else if (header.rowspan) {
-                        html += `<th rowspan="${header.rowspan}">${header.name}</th>`;
-                    } else if (header.colspan) {
-                        html += `<th colspan="${header.colspan}">${header.name}</th>`;
-                    } else {
-                        html += `<th>${header.name}</th>`;
-                    }
-                });
-                html += '</tr>';
-                
-                // 生成第二行表头（如果存在且不为空）
-                if (data.headers.length > 1 && data.headers[1].length > 0) {
-                    html += '<tr>';
-                    data.headers[1].forEach(header => {
-                        if (typeof header === 'string' && header !== '') {
-                            // 添加悬停显示完整项名称的功能
-                            const escapedName = header.replace(/&/g, '&amp;')
-                                                     .replace(/</g, '&lt;')
-                                                     .replace(/>/g, '&gt;')
-                                                     .replace(/"/g, '&quot;')
-                                                     .replace(/'/g, '&#039;');
-                            html += `<th><span class="item-name" data-full-name="${escapedName}">${escapedName}</span></th>`;
-                        } else if (typeof header === 'object' && header.name) {
-                            // 添加悬停显示完整项名称的功能
-                            const escapedName = header.name.replace(/&/g, '&amp;')
-                                                          .replace(/</g, '&lt;')
-                                                          .replace(/>/g, '&gt;')
-                                                          .replace(/"/g, '&quot;')
-                                                          .replace(/'/g, '&#039;');
-                            html += `<th><span class="item-name" data-full-name="${escapedName}">${escapedName}</span></th>`;
-                        } else if (header !== '' && header !== undefined) {
-                            // 添加悬停显示完整项名称的功能
-                            const escapedName = header.toString().replace(/&/g, '&amp;')
-                                                               .replace(/</g, '&lt;')
-                                                               .replace(/>/g, '&gt;')
-                                                               .replace(/"/g, '&quot;')
-                                                               .replace(/'/g, '&#039;');
-                            html += `<th><span class="item-name" data-full-name="${escapedName}">${escapedName}</span></th>`;
-                        }
-                        // 空字符串或undefined则跳过，保持单元格合并效果
-                    });
-                    html += '</tr>';
-                }
-            }
-            
-            // 生成数据行
-            data.data.forEach(row => {
-                html += '<tr>';
-                row.forEach((cell, index) => {
-                    // 如果是投标人名称列（第二列），添加悬停显示功能
-                    if (index === 1 && typeof cell === 'string') {
-                        // 转义HTML特殊字符以防止XSS攻击
-                        const escapedName = cell.replace(/&/g, '&amp;')
-                                               .replace(/</g, '&lt;')
-                                               .replace(/>/g, '&gt;')
-                                               .replace(/"/g, '&quot;')
-                                               .replace(/'/g, '&#039;');
-                        html += `<td><span class="bidder-name" data-full-name="${escapedName}">${escapedName}</span></td>`;
-                    } else {
-                        html += `<td>${cell}</td>`;
-                    }
-                });
-                html += '</tr>';
-            });
-
-            html += '</table>';
-            return html;
-        }
-        
-        // 生成价格展示表格HTML
-        function generatePriceDisplayTableHTML(data) {
-            if (!data.headers || !data.data) {
-                return '<p>无法生成价格展示表格：数据格式不正确</p>';
-            }
-            
-            let html = '<table class="summary-table">';
-            
-            // 生成表头
-            data.headers.forEach(headerRow => {
-                html += '<tr>';
-                headerRow.forEach(header => {
-                    if (typeof header === 'string') {
-                        // 添加悬停显示完整项名称的功能
-                        const escapedName = header.replace(/&/g, '&amp;')
-                                                 .replace(/</g, '&lt;')
-                                                 .replace(/>/g, '&gt;')
-                                                 .replace(/"/g, '&quot;')
-                                                 .replace(/'/g, '&#039;');
-                        html += `<th><span class="item-name" data-full-name="${escapedName}">${escapedName}</span></th>`;
-                    } else if (header.name) {
-                        // 添加悬停显示完整项名称的功能
-                        const escapedName = header.name.replace(/&/g, '&amp;')
-                                                      .replace(/</g, '&lt;')
-                                                      .replace(/>/g, '&gt;')
-                                                      .replace(/"/g, '&quot;')
-                                                      .replace(/'/g, '&#039;');
-                        html += `<th><span class="item-name" data-full-name="${escapedName}">${escapedName}</span></th>`;
-                    } else {
-                        // 添加悬停显示完整项名称的功能
-                        const escapedName = header.toString().replace(/&/g, '&amp;')
-                                                           .replace(/</g, '&lt;')
-                                                           .replace(/>/g, '&gt;')
-                                                           .replace(/"/g, '&quot;')
-                                                           .replace(/'/g, '&#039;');
-                        html += `<th><span class="item-name" data-full-name="${escapedName}">${escapedName}</span></th>`;
-                    }
-                });
-                html += '</tr>';
-            });
-            
-            // 生成数据行
-            data.data.forEach(row => {
-                html += '<tr>';
-                row.forEach((cell, index) => {
-                    // 如果是投标人名称列（第二列），添加悬停显示功能
-                    if (index === 1 && typeof cell === 'string') {
-                        // 转义HTML特殊字符以防止XSS攻击
-                        const escapedName = cell.replace(/&/g, '&amp;')
-                                               .replace(/</g, '&lt;')
-                                               .replace(/>/g, '&gt;')
-                                               .replace(/"/g, '&quot;')
-                                               .replace(/'/g, '&#039;');
-                        html += `<td><span class="bidder-name" data-full-name="${escapedName}">${escapedName}</span></td>`;
-                    } else {
-                        html += `<td>${cell}</td>`;
-                    }
-                });
-                html += '</tr>';
-            });
-
-            html += '</table>';
-            return html;
-        }
-        
-        // 生成汇总表格HTML
-        function generateSummaryTableHTML(data) {
-            if (!data.headers || !data.data) {
-                return '<p>无法生成汇总表格：数据格式不正确</p>';
-            }
-            
-            let html = '<table class="summary-table">';
-            
-            // 生成表头（支持双行表头）
-            if (data.headers.length >= 2) {
-                // 生成第一行表头
-                html += '<tr>';
-                data.headers[0].forEach(header => {
-                    if (typeof header === 'string') {
-                        // 添加悬停显示完整项名称的功能
-                        const escapedName = header.replace(/&/g, '&amp;')
-                                                     .replace(/</g, '&lt;')
-                                                     .replace(/>/g, '&gt;')
-                                                     .replace(/"/g, '&quot;')
-                                                     .replace(/'/g, '&#039;');
-                        html += `<th><span class="item-name" data-full-name="${escapedName}">${escapedName}</span></th>`;
-                    } else if (header.rowspan) {
-                        html += `<th rowspan="${header.rowspan}">${header.name}</th>`;
-                    } else if (header.colspan) {
-                        html += `<th colspan="${header.colspan}">${header.name}</th>`;
-                    } else {
-                        html += `<th>${header.name}</th>`;
-                    }
-                });
-                html += '</tr>';
-                
-                // 生成第二行表头（如果存在且不为空）
-                if (data.headers.length > 1 && data.headers[1].length > 0) {
-                    html += '<tr>';
-                    data.headers[1].forEach(header => {
-                        if (typeof header === 'string' && header !== '') {
-                            // 添加悬停显示完整项名称的功能
-                            const escapedName = header.replace(/&/g, '&amp;')
-                                                     .replace(/</g, '&lt;')
-                                                     .replace(/>/g, '&gt;')
-                                                     .replace(/"/g, '&quot;')
-                                                     .replace(/'/g, '&#039;');
-                            html += `<th><span class="item-name" data-full-name="${escapedName}">${escapedName}</span></th>`;
-                        } else if (typeof header === 'object' && header.name) {
-                            // 添加悬停显示完整项名称的功能
-                            const escapedName = header.name.replace(/&/g, '&amp;')
-                                                          .replace(/</g, '&lt;')
-                                                          .replace(/>/g, '&gt;')
-                                                          .replace(/"/g, '&quot;')
-                                                          .replace(/'/g, '&#039;');
-                            html += `<th><span class="item-name" data-full-name="${escapedName}">${escapedName}</span></th>`;
-                        } else if (header !== '' && header !== undefined) {
-                            // 添加悬停显示完整项名称的功能
-                            const escapedName = header.toString().replace(/&/g, '&amp;')
-                                                               .replace(/</g, '&lt;')
-                                                               .replace(/>/g, '&gt;')
-                                                               .replace(/"/g, '&quot;')
-                                                               .replace(/'/g, '&#039;');
-                            html += `<th><span class="item-name" data-full-name="${escapedName}">${escapedName}</span></th>`;
-                        }
-                        // 空字符串或undefined则跳过，保持单元格合并效果
-                    });
-                    html += '</tr>';
-                }
-            } else {
-                // 兼容单行表头
-                data.headers.forEach(headerRow => {
-                    html += '<tr>';
-                    headerRow.forEach(header => {
-                        if (typeof header === 'string') {
-                            // 添加悬停显示完整项名称的功能
-                            const escapedName = header.replace(/&/g, '&amp;')
-                                                     .replace(/</g, '&lt;')
-                                                     .replace(/>/g, '&gt;')
-                                                     .replace(/"/g, '&quot;')
-                                                     .replace(/'/g, '&#039;');
-                            html += `<th><span class="item-name" data-full-name="${escapedName}">${escapedName}</span></th>`;
-                        } else if (header.name) {
-                            // 处理带有rowspan或colspan的表头
-                            const escapedName = header.name.replace(/&/g, '&amp;')
-                                                          .replace(/</g, '&lt;')
-                                                          .replace(/>/g, '&gt;')
-                                                          .replace(/"/g, '&quot;')
-                                                          .replace(/'/g, '&#039;');
-                            if (header.rowspan) {
-                                html += `<th rowspan="${header.rowspan}"><span class="item-name" data-full-name="${escapedName}">${escapedName}</span></th>`;
-                            } else if (header.colspan) {
-                                html += `<th colspan="${header.colspan}"><span class="item-name" data-full-name="${escapedName}">${escapedName}</span></th>`;
-                            } else {
-                                html += `<th><span class="item-name" data-full-name="${escapedName}">${escapedName}</span></th>`;
-                            }
-                        } else {
-                            // 添加悬停显示完整项名称的功能
-                            const escapedName = header.toString().replace(/&/g, '&amp;')
-                                                               .replace(/</g, '&lt;')
-                                                               .replace(/>/g, '&gt;')
-                                                               .replace(/"/g, '&quot;')
-                                                               .replace(/'/g, '&#039;');
-                            html += `<th><span class="item-name" data-full-name="${escapedName}">${escapedName}</span></th>`;
-                        }
-                    });
-                    html += '</tr>';
-                });
-            }
-            
-            // 生成数据行
-            data.data.forEach(row => {
-                html += '<tr>';
-                row.forEach((cell, index) => {
-                    // 如果是投标人名称列（第二列），添加悬停显示功能
-                    if (index === 1 && typeof cell === 'string') {
-                        // 转义HTML特殊字符以防止XSS攻击
-                        const escapedName = cell.replace(/&/g, '&amp;')
-                                               .replace(/</g, '&lt;')
-                                               .replace(/>/g, '&gt;')
-                                               .replace(/"/g, '&quot;')
-                                               .replace(/'/g, '&#039;');
-                        html += `<td><span class="bidder-name" data-full-name="${escapedName}">${escapedName}</span></td>`;
-                    } else {
-                        html += `<td>${cell}</td>`;
-                    }
-                });
-                html += '</tr>';
-            });
-
-            html += '</table>';
-            return html;
-        }
     </script>
 </body>
 </html>
