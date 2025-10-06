@@ -17,6 +17,7 @@ from contextlib import contextmanager
 from modules.price_score_calculator import PriceScoreCalculator
 from modules.summary_generator import generate_summary_data
 from modules.result_display import ResultDisplay  # 添加这行导入
+from modules.detailed_score_display import get_detailed_score_data, get_price_display_data  # 添加这行导入
 from pathlib import Path
 import logging
 import json
@@ -461,6 +462,29 @@ def get_summary_table(project_id):
     except Exception as e:
         logging.error(f"生成汇总表格时出错: {e}")
         return jsonify({'error': f'生成汇总表格失败: {str(e)}'}), 500
+
+
+@router.route('/projects/<int:project_id>/detailed-scores', methods=['GET'])
+def get_detailed_scores(project_id):
+    """获取项目详细评分数据"""
+    try:
+        detailed_score_data = get_detailed_score_data(project_id)
+        return jsonify(detailed_score_data)
+    except Exception as e:
+        logging.error(f"生成详细评分表时出错: {e}")
+        return jsonify({'error': f'生成详细评分表失败: {str(e)}'}), 500
+
+
+@router.route('/projects/<int:project_id>/price-display', methods=['GET'])
+def get_price_display(project_id):
+    """获取项目价格展示数据"""
+    try:
+        price_display_data = get_price_display_data(project_id)
+        return jsonify(price_display_data)
+    except Exception as e:
+        logging.error(f"生成价格展示表时出错: {e}")
+        return jsonify({'error': f'生成价格展示表失败: {str(e)}'}), 500
+
 
 @router.route('/analysis-results/bulk-update-scores', methods=['POST'])
 def bulk_update_scores():

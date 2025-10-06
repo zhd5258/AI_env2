@@ -97,6 +97,21 @@
         .document-progress.error {
             background-color: #f8d7da;
         }
+        /* 投标人信息行样式 - 统一垂直对齐 */
+        .bidder-info-row {
+            display: flex;
+            align-items: baseline; /* 统一底部对齐 */
+            gap: 10px;
+            margin: 5px 0;
+        }
+        .bidder-label {
+            font-weight: bold;
+            white-space: nowrap;
+        }
+        .bidder-name-full {
+            flex-grow: 1;
+            word-break: break-all; /* 允许在任意字符间断行 */
+        }
         /* 规则进度条样式 */
         .rule-progress-container {
             margin: 10px 0;
@@ -408,6 +423,28 @@
         </div>
     </div>
 
+    <!-- 详细评分表显示区域 -->
+    <div id="detailedScoreSection" class="summary-section" style="display: none;">
+        <h2>详细评分表</h2>
+        <div class="table-container">
+            <div id="detailedScoreTableContainer"></div>
+        </div>
+        <div style="margin-top: 20px;">
+            <button onclick="hideDetailedScoreTable()">返回汇总</button>
+        </div>
+    </div>
+
+    <!-- 价格展示表显示区域 -->
+    <div id="priceDisplaySection" class="summary-section" style="display: none;">
+        <h2>价格展示表</h2>
+        <div class="table-container">
+            <div id="priceDisplayTableContainer"></div>
+        </div>
+        <div style="margin-top: 20px;">
+            <button onclick="hidePriceDisplayTable()">返回汇总</button>
+        </div>
+    </div>
+
     <script src="/public/js/main.js"></script>
     <script src="/public/js/test.js"></script>
     <script>
@@ -688,7 +725,10 @@
                         
                         docDiv.innerHTML = `
                             <p><strong>投标文件：${displayFilename}</strong></p>
-                            <p>投标人: <span class="bidder-name" data-full-name="${displayBidderName}">${displayBidderName}</span></p>
+                            <div class="bidder-info-row">
+                                <span class="bidder-label">投标人:</span>
+                                <span class="bidder-name-full">${displayBidderName}</span>
+                            </div>
                             <p>状态: ${statusText}</p>
                             ${progressDetails}
                             ${doc.total_score ? `<p>总分: ${doc.total_score.toFixed(2)}</p>` : ''}
@@ -730,6 +770,9 @@
                     // 生成汇总表格
                     const tableContainer = document.getElementById('summaryTableContainer');
                     tableContainer.innerHTML = generateSummaryTableHTML(data);
+                    
+                    // 添加详细评分表和价格展示表的按钮
+                    addAdditionalTableButtons();
                 } else {
                     console.error('获取汇总表格失败:', data.error);
                 }
@@ -738,10 +781,254 @@
             }
         }
         
+        // 添加详细评分表和价格展示表的按钮
+        function addAdditionalTableButtons() {
+            const summarySection = document.getElementById('summarySection');
+            const buttonsContainer = document.createElement('div');
+            buttonsContainer.style.marginTop = '20px';
+            buttonsContainer.style.display = 'flex';
+            buttonsContainer.style.gap = '10px';
+            buttonsContainer.style.justifyContent = 'center';
+            
+            const detailedScoreBtn = document.createElement('button');
+            detailedScoreBtn.textContent = '查看详细评分';
+            detailedScoreBtn.onclick = showDetailedScoreTable;
+            
+            const priceDisplayBtn = document.createElement('button');
+            priceDisplayBtn.textContent = '查看价格展示';
+            priceDisplayBtn.onclick = showPriceDisplayTable;
+            
+            const backBtn = document.createElement('button');
+            backBtn.textContent = '返回进度';
+            backBtn.onclick = hideSummaryTable;
+            
+            buttonsContainer.appendChild(detailedScoreBtn);
+            buttonsContainer.appendChild(priceDisplayBtn);
+            buttonsContainer.appendChild(backBtn);
+            
+            // 清除原有的按钮并添加新的按钮
+            const existingButtons = summarySection.querySelector('div[style*="margin-top: 20px"]');
+            if (existingButtons) {
+                existingButtons.remove();
+            }
+            summarySection.appendChild(buttonsContainer);
+        }
+        
+        // 显示详细评分表
+        async function showDetailedScoreTable() {
+            if (!projectId) return;
+            
+            try {
+                const response = await fetch(`/api/projects/${projectId}/detailed-scores`);
+                const data = await response.json();
+                
+                if (response.ok) {
+                    // 隐藏汇总表格区域，显示详细评分表区域
+                    document.getElementById('summarySection').style.display = 'none';
+                    const detailedScoreSection = document.getElementById('detailedScoreSection');
+                    detailedScoreSection.style.display = 'block';
+                    
+                    // 生成详细评分表格
+                    const tableContainer = document.getElementById('detailedScoreTableContainer');
+                    tableContainer.innerHTML = generateDetailedScoreTableHTML(data);
+                } else {
+                    console.error('获取详细评分表失败:', data.error);
+                }
+            } catch (error) {
+                console.error('获取详细评分表时出错:', error);
+            }
+        }
+        
+        // 显示价格展示表
+        async function showPriceDisplayTable() {
+            if (!projectId) return;
+            
+            try {
+                const response = await fetch(`/api/projects/${projectId}/price-display`);
+                const data = await response.json();
+                
+                if (response.ok) {
+                    // 隐藏汇总表格区域，显示价格展示表区域
+                    document.getElementById('summarySection').style.display = 'none';
+                    const priceDisplaySection = document.getElementById('priceDisplaySection');
+                    priceDisplaySection.style.display = 'block';
+                    
+                    // 生成价格展示表格
+                    const tableContainer = document.getElementById('priceDisplayTableContainer');
+                    tableContainer.innerHTML = generatePriceDisplayTableHTML(data);
+                } else {
+                    console.error('获取价格展示表失败:', data.error);
+                }
+            } catch (error) {
+                console.error('获取价格展示表时出错:', error);
+            }
+        }
+        
+        // 隐藏详细评分表，返回汇总表格
+        function hideDetailedScoreTable() {
+            document.getElementById('detailedScoreSection').style.display = 'none';
+            document.getElementById('summarySection').style.display = 'block';
+        }
+        
+        // 隐藏价格展示表，返回汇总表格
+        function hidePriceDisplayTable() {
+            document.getElementById('priceDisplaySection').style.display = 'none';
+            document.getElementById('summarySection').style.display = 'block';
+        }
+        
         // 隐藏汇总表格，返回进度显示
         function hideSummaryTable() {
             document.getElementById('summarySection').style.display = 'none';
             document.getElementById('progressSection').style.display = 'block';
+        }
+        
+        // 生成详细评分表格HTML
+        function generateDetailedScoreTableHTML(data) {
+            if (!data.headers || !data.data) {
+                return '<p>无法生成详细评分表格：数据格式不正确</p>';
+            }
+            
+            let html = '<table class="summary-table">';
+            
+            // 生成表头（支持双行表头）
+            if (data.headers.length >= 2) {
+                // 生成第一行表头
+                html += '<tr>';
+                data.headers[0].forEach(header => {
+                    if (typeof header === 'string') {
+                        html += `<th>${header}</th>`;
+                    } else if (header.rowspan) {
+                        html += `<th rowspan="${header.rowspan}">${header.name}</th>`;
+                    } else if (header.colspan) {
+                        html += `<th colspan="${header.colspan}">${header.name}</th>`;
+                    } else {
+                        html += `<th>${header.name}</th>`;
+                    }
+                });
+                html += '</tr>';
+                
+                // 生成第二行表头（如果存在且不为空）
+                if (data.headers.length > 1 && data.headers[1].length > 0) {
+                    html += '<tr>';
+                    data.headers[1].forEach(header => {
+                        if (typeof header === 'string' && header !== '') {
+                            // 添加悬停显示完整项名称的功能
+                            const escapedName = header.replace(/&/g, '&amp;')
+                                                     .replace(/</g, '&lt;')
+                                                     .replace(/>/g, '&gt;')
+                                                     .replace(/"/g, '&quot;')
+                                                     .replace(/'/g, '&#039;');
+                            html += `<th><span class="item-name" data-full-name="${escapedName}">${escapedName}</span></th>`;
+                        } else if (typeof header === 'object' && header.name) {
+                            // 添加悬停显示完整项名称的功能
+                            const escapedName = header.name.replace(/&/g, '&amp;')
+                                                          .replace(/</g, '&lt;')
+                                                          .replace(/>/g, '&gt;')
+                                                          .replace(/"/g, '&quot;')
+                                                          .replace(/'/g, '&#039;');
+                            html += `<th><span class="item-name" data-full-name="${escapedName}">${escapedName}</span></th>`;
+                        } else if (header !== '' && header !== undefined) {
+                            // 添加悬停显示完整项名称的功能
+                            const escapedName = header.toString().replace(/&/g, '&amp;')
+                                                               .replace(/</g, '&lt;')
+                                                               .replace(/>/g, '&gt;')
+                                                               .replace(/"/g, '&quot;')
+                                                               .replace(/'/g, '&#039;');
+                            html += `<th><span class="item-name" data-full-name="${escapedName}">${escapedName}</span></th>`;
+                        }
+                        // 空字符串或undefined则跳过，保持单元格合并效果
+                    });
+                    html += '</tr>';
+                }
+            }
+            
+            // 生成数据行
+            data.data.forEach(row => {
+                html += '<tr>';
+                row.forEach((cell, index) => {
+                    // 如果是投标人名称列（第二列），添加悬停显示功能
+                    if (index === 1 && typeof cell === 'string') {
+                        // 转义HTML特殊字符以防止XSS攻击
+                        const escapedName = cell.replace(/&/g, '&amp;')
+                                               .replace(/</g, '&lt;')
+                                               .replace(/>/g, '&gt;')
+                                               .replace(/"/g, '&quot;')
+                                               .replace(/'/g, '&#039;');
+                        html += `<td><span class="bidder-name" data-full-name="${escapedName}">${escapedName}</span></td>`;
+                    } else {
+                        html += `<td>${cell}</td>`;
+                    }
+                });
+                html += '</tr>';
+            });
+
+            html += '</table>';
+            return html;
+        }
+        
+        // 生成价格展示表格HTML
+        function generatePriceDisplayTableHTML(data) {
+            if (!data.headers || !data.data) {
+                return '<p>无法生成价格展示表格：数据格式不正确</p>';
+            }
+            
+            let html = '<table class="summary-table">';
+            
+            // 生成表头
+            data.headers.forEach(headerRow => {
+                html += '<tr>';
+                headerRow.forEach(header => {
+                    if (typeof header === 'string') {
+                        // 添加悬停显示完整项名称的功能
+                        const escapedName = header.replace(/&/g, '&amp;')
+                                                 .replace(/</g, '&lt;')
+                                                 .replace(/>/g, '&gt;')
+                                                 .replace(/"/g, '&quot;')
+                                                 .replace(/'/g, '&#039;');
+                        html += `<th><span class="item-name" data-full-name="${escapedName}">${escapedName}</span></th>`;
+                    } else if (header.name) {
+                        // 添加悬停显示完整项名称的功能
+                        const escapedName = header.name.replace(/&/g, '&amp;')
+                                                      .replace(/</g, '&lt;')
+                                                      .replace(/>/g, '&gt;')
+                                                      .replace(/"/g, '&quot;')
+                                                      .replace(/'/g, '&#039;');
+                        html += `<th><span class="item-name" data-full-name="${escapedName}">${escapedName}</span></th>`;
+                    } else {
+                        // 添加悬停显示完整项名称的功能
+                        const escapedName = header.toString().replace(/&/g, '&amp;')
+                                                           .replace(/</g, '&lt;')
+                                                           .replace(/>/g, '&gt;')
+                                                           .replace(/"/g, '&quot;')
+                                                           .replace(/'/g, '&#039;');
+                        html += `<th><span class="item-name" data-full-name="${escapedName}">${escapedName}</span></th>`;
+                    }
+                });
+                html += '</tr>';
+            });
+            
+            // 生成数据行
+            data.data.forEach(row => {
+                html += '<tr>';
+                row.forEach((cell, index) => {
+                    // 如果是投标人名称列（第二列），添加悬停显示功能
+                    if (index === 1 && typeof cell === 'string') {
+                        // 转义HTML特殊字符以防止XSS攻击
+                        const escapedName = cell.replace(/&/g, '&amp;')
+                                               .replace(/</g, '&lt;')
+                                               .replace(/>/g, '&gt;')
+                                               .replace(/"/g, '&quot;')
+                                               .replace(/'/g, '&#039;');
+                        html += `<td><span class="bidder-name" data-full-name="${escapedName}">${escapedName}</span></td>`;
+                    } else {
+                        html += `<td>${cell}</td>`;
+                    }
+                });
+                html += '</tr>';
+            });
+
+            html += '</table>';
+            return html;
         }
         
         // 生成汇总表格HTML
@@ -758,7 +1045,13 @@
                 html += '<tr>';
                 data.headers[0].forEach(header => {
                     if (typeof header === 'string') {
-                        html += `<th>${header}</th>`;
+                        // 添加悬停显示完整项名称的功能
+                        const escapedName = header.replace(/&/g, '&amp;')
+                                                     .replace(/</g, '&lt;')
+                                                     .replace(/>/g, '&gt;')
+                                                     .replace(/"/g, '&quot;')
+                                                     .replace(/'/g, '&#039;');
+                        html += `<th><span class="item-name" data-full-name="${escapedName}">${escapedName}</span></th>`;
                     } else if (header.rowspan) {
                         html += `<th rowspan="${header.rowspan}">${header.name}</th>`;
                     } else if (header.colspan) {

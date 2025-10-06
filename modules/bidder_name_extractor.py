@@ -46,32 +46,6 @@ def setup_logger():
 logger = setup_logger()
 
 
-def _is_valid_company_name(bidder_name: str) -> bool:
-    """
-    Checks if a string is a valid company name.
-    """
-    if not bidder_name or len(bidder_name) <= 5:
-        return False
-    company_keywords = ['公司', '有限', '股份', '集团', '厂', '院', '所', '社', '中心']
-    if not any(keyword in bidder_name for keyword in company_keywords):
-        return False
-    # Further checks to exclude common false positives
-    invalid_keywords = [
-        '招标',
-        '投标',
-        '项目',
-        '文件',
-        '正本',
-        '副本',
-        '单位章',
-        '法定代表',
-        '中车眉山车辆有限公司',  # 明确排除招标方名称
-    ]
-    if any(keyword in bidder_name for keyword in invalid_keywords):
-        return False
-    return True
-
-
 def _filter_bidder_name(bidder_name: str) -> str:
     """
     Filters and cleans the extracted bidder name to remove unwanted parts.
@@ -81,6 +55,9 @@ def _filter_bidder_name(bidder_name: str) -> str:
 
     # Strip leading/trailing whitespace and colons
     bidder_name = bidder_name.strip().lstrip(':：').strip()
+
+    # Remove leading special characters like #, *, etc.
+    bidder_name = re.sub(r'^[#*●■◆▲▼※·]+', '', bidder_name).strip()
 
     # Define stop words/phrases that signal the end of the company name
     stop_phrases = [
@@ -158,6 +135,48 @@ def _looks_garbled_or_incomplete(name: str) -> bool:
     if noise > len(name) * 0.2:
         return True
     return noise > max(1, len(name) // 6)
+
+
+def _is_valid_company_name(bidder_name: str) -> bool:
+    """
+    Checks if a string is a valid company name.
+    """
+    if not bidder_name or len(bidder_name) <= 5:
+        return False
+    company_keywords = ['公司', '有限', '股份', '集团', '厂', '院', '所', '社', '中心']
+    if not any(keyword in bidder_name for keyword in company_keywords):
+        return False
+    # Further checks to exclude common false positives
+    invalid_keywords = [
+        '招标',
+        '投标',
+        '项目',
+        '文件',
+        '正本',
+        '副本',
+        '单位章',
+        '法定代表',
+        '中车眉山车辆有限公司',  # 明确排除招标方名称
+        '#',  # 排除以#开头的奇怪名称
+        '*',  # 排除以*开头的奇怪名称
+        '●',  # 排除以●开头的奇怪名称
+        '■',  # 排除以■开头的奇怪名称
+        '◆',  # 排除以◆开头的奇怪名称
+        '▲',  # 排除以▲开头的奇怪名称
+        '▼',  # 排除以▼开头的奇怪名称
+        '※',  # 排除以※开头的奇怪名称
+        '·',  # 排除以·开头的奇怪名称
+    ]
+    if any(keyword in bidder_name for keyword in invalid_keywords):
+        return False
+    # 检查是否以特殊字符开头
+    if bidder_name.startswith(('#', '*', '●', '■', '◆', '▲', '▼', '※', '·')):
+        return False
+    # 检查是否包含过多的特殊符号
+    special_chars = sum(1 for ch in bidder_name if ch in '#*●■◆▲▼※·')
+    if special_chars > 2:  # 如果特殊符号超过2个，认为是无效名称
+        return False
+    return True
 
 
 def _search_bidder_name_in_special_sections(pages: list[str]) -> str | None:
@@ -249,6 +268,11 @@ def _extract_bidder_name_by_regex(text_to_search: str) -> str | None:
         r'致\s*[:：\s]([^\n]+?)(?:\s*公司|\s*单位)',
         r'^\s*([^\n]+?公司)\s*$',  # A line that is just a company name
         r'投标人名称\s*[:：]\s*([\u4e00-\u9fa5a-zA-Z0-9（）()·．\.]+?公司)',  # 更精确的投标人名称匹配
+        # 新增更强大的模式来匹配公司名称
+        r'(?:投标单位|投标人|供应商|单位名称)\s*[:：]?\s*([^\n]*[有限公司|公司|集团|厂|院|所][^\n]*)',
+        r'([^\n]*[有限公司|公司|集团|厂|院|所][^\n]*)\s*(?:法定代表人|授权代表|地址|电话)',
+        # 特别处理以特殊字符开头的名称
+        r'^\s*[#*●■◆▲▼※·]?\s*([^\n]*[有限公司|公司|集团|厂|院|所][^\n]*)\s*$',
     ]
 
     for pattern in patterns:
@@ -352,7 +376,8 @@ def _extract_bidder_name_by_ai(text_to_search: str) -> str | None:
         3.  **错误示例**：不要返回 "三江市 0屯吐一八活单位章) 法定代表..." 这样的错误结果。
         4.  **唯一结果**：只返回最终的公司名称，不要任何解释或多余的文字。
         5.  **特别注意**：不要将招标方名称（如"中车眉山车辆有限公司"）误认为是投标方名称。
-        6.  如果找不到，返回 "未找到"。
+        6.  **格式要求**：不要返回以特殊符号（如 #, *, ●, ■, ◆, ▲, ▼, ※, ·）开头的名称。
+        7.  如果找不到，返回 "未找到"。
 
         待分析的文本内容：
         ---
@@ -368,6 +393,7 @@ def _extract_bidder_name_by_ai(text_to_search: str) -> str | None:
             potential_name = response.strip().split('\n')[0].strip()
             logger.info("AI extracted: '%s'", potential_name)
 
+            # 对AI提取的结果也进行过滤和验证
             filtered_name = _filter_bidder_name(potential_name)
 
             if _is_valid_company_name(
