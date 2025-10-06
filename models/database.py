@@ -57,6 +57,7 @@ class BidDocument(Base):
     project_id = Column(Integer, ForeignKey('tender_project.id'))
     bidder_name = Column(String)
     file_path = Column(String)
+    original_filename = Column(String)  # 添加原始文件名字段
     file_size = Column(Integer)
     upload_time = Column(DateTime, default=datetime.datetime.utcnow)
     processing_status = Column(String, default='pending')

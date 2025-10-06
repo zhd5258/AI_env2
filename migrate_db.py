@@ -7,7 +7,7 @@
 
 import os
 import sys
-from sqlalchemy import create_engine, MetaData, Table, Column, DateTime, text
+from sqlalchemy import create_engine, MetaData, Table, Column, DateTime, text, String
 from sqlalchemy.orm import sessionmaker
 
 # 添加项目根目录到Python路径
@@ -61,6 +61,24 @@ def migrate_database():
         print("analysis_end_time列添加完成")
     else:
         print("analysis_end_time列已存在")
+        
+    # 检查bid_document表是否存在
+    if 'bid_document' in metadata.tables:
+        # 获取现有的bid_document表
+        bid_document_table = metadata.tables['bid_document']
+        
+        # 检查是否需要添加original_filename列
+        if 'original_filename' not in bid_document_table.c:
+            print("添加original_filename列...")
+            with engine.connect() as conn:
+                # 使用ALTER TABLE语句添加列
+                conn.execute(
+                    text('ALTER TABLE bid_document ADD COLUMN original_filename VARCHAR')
+                )
+                conn.commit()
+            print("original_filename列添加完成")
+        else:
+            print("original_filename列已存在")
     
     print("数据库迁移完成")
 

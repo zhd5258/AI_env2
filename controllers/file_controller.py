@@ -277,8 +277,31 @@ def init_upload_logic(tender_file, bid_files):
                 # 更新项目状态为分析中
                 update_project_status(project_id, 'analyzing')
                 
-                # 执行分析任务
+                # 执行分析任务 - 提取评分规则
                 run_analysis_and_calculate_prices(project_id, bid_files_info)
+                
+                # 执行实际的投标文件分析任务
+                # 使用线程池并行处理所有投标文件
+                from concurrent.futures import ThreadPoolExecutor
+                from modules.shared_functions import analyze_single_bid_document
+                
+                # 创建线程池并提交所有分析任务
+                with ThreadPoolExecutor(max_workers=4) as executor:
+                    futures = []
+                    for file_info in bid_files_info:
+                        future = executor.submit(
+                            analyze_single_bid_document,
+                            project_id,
+                            file_info['bid_document_id']
+                        )
+                        futures.append(future)
+                    
+                    # 等待所有任务完成
+                    for future in futures:
+                        try:
+                            future.result(timeout=1800)  # 30分钟超时
+                        except Exception as e:
+                            logging.error(f'分析任务执行失败: {e}')
                 
                 # 更新项目状态为完成
                 update_project_status(project_id, 'completed')
