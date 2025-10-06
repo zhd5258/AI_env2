@@ -68,6 +68,8 @@ class IntelligentBidAnalyzer(BidAnalyzerHelpers):
                 bid_doc.detailed_progress_info = progress_info
                 if partial_results is not None:
                     bid_doc.partial_analysis_results = json.dumps(partial_results[:5], ensure_ascii=False)
+                # 更新处理阶段为"AI分析中"
+                bid_doc.processing_phase = 'AI分析中'
                 self.db.commit()
                 self.logger.info(f'进度更新: {completed}/{total} - {progress_info}')
         except Exception as e:

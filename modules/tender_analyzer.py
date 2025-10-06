@@ -27,7 +27,7 @@ class TenderAnalyzer:
         self.logger.info(f'开始提取招标文件文本: {self.tender_file_path}')
 
         try:
-            # 使用PDFProcessor提取文本
+            # 使用PDFProcessor提取文本，但不再保存到temp_word目录
             processor = PDFProcessor(self.tender_file_path, file_type='tender')
             pages_text = processor.extract_text_per_page()
 
@@ -36,10 +36,7 @@ class TenderAnalyzer:
 
             self.logger.info(f'成功提取招标文件文本，共 {len(pages_text)} 页')
 
-            # 确保文本也保存到temp_word目录
-            processor._save_to_temp_word(pages_text)
-            self.logger.info('招标文件文本已保存到temp_word目录')
-
+            # 不再保存到temp_word目录，直接返回提取的文本
             return pages_text
 
         except Exception as e:

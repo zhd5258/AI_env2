@@ -97,13 +97,43 @@
         .document-progress.error {
             background-color: #f8d7da;
         }
+        /* 规则进度条样式 */
+        .rule-progress-container {
+            margin: 10px 0;
+            padding: 10px;
+            background-color: #f8f9fa;
+            border-radius: 5px;
+            border: 1px solid #e9ecef;
+        }
+        .rule-progress-label {
+            font-size: 14px;
+            margin-bottom: 5px;
+            font-weight: bold;
+        }
+        .rule-progress-sublabel {
+            font-size: 12px;
+            color: #6c757d;
+            margin-bottom: 5px;
+        }
+        .rule-progress-bar-container {
+            height: 12px;
+            background-color: #e9ecef;
+            border-radius: 6px;
+            margin: 5px 0;
+        }
+        .rule-progress-bar {
+            height: 100%;
+            background-color: #28a745;
+            border-radius: 6px;
+            transition: width 0.3s ease;
+        }
         /* 文件列表样式 */
         .file-list-section {
             margin-top: 20px;
             padding: 15px;
             border: 1px solid #ddd;
             border-radius: 5px;
-            display: none;
+            /* 移除默认隐藏，改为通过JavaScript控制显示 */
         }
         .file-item {
             display: flex;
@@ -139,12 +169,14 @@
             padding: 20px;
             border: 1px solid #ddd;
             border-radius: 5px;
+            max-width: 100%; /* 增加最大宽度 */
         }
         .table-container {
             overflow: auto;
             max-height: 70vh;
             margin-top: 15px;
             border: 1px solid #ddd;
+            max-width: 100%; /* 增加最大宽度 */
         }
         .summary-table {
             width: 100%;
@@ -155,7 +187,27 @@
             border: 1px solid #ddd;
             padding: 8px;
             text-align: center;
-            white-space: nowrap;
+            /* 修改：允许自动换行 */
+            white-space: normal;
+            word-wrap: break-word;
+            /* 设置更合理的列宽 */
+            width: 80px; /* 默认列宽 */
+        }
+        /* 排名列样式 - 不超过2个汉字宽度 */
+        .summary-table th:nth-child(1), .summary-table td:nth-child(1) {
+            width: 40px; /* 约2个汉字宽度 */
+            max-width: 40px;
+        }
+        /* 投标人列样式 */
+        .summary-table th:nth-child(2), .summary-table td:nth-child(2) {
+            width: 120px; /* 投标人列宽度 */
+            max-width: 120px;
+        }
+        /* 子项名称列样式 - 不超过5个汉字宽度 */
+        .summary-table th:not(:nth-child(1)):not(:nth-child(2)), 
+        .summary-table td:not(:nth-child(1)):not(:nth-child(2)) {
+            width: 100px; /* 约5个汉字宽度 */
+            max-width: 100px;
         }
         .summary-table th {
             background-color: #f2f2f2;
@@ -163,6 +215,8 @@
             position: sticky;
             top: 0;
             z-index: 10;
+            /* 修改：增加最小高度以适应换行 */
+            min-height: 40px;
         }
         .summary-table td:first-child, .summary-table th:first-child,
         .summary-table td:nth-child(2), .summary-table th:nth-child(2) {
@@ -170,6 +224,8 @@
             left: 0;
             background-color: #f2f2f2;
             z-index: 5;
+            /* 修改：增加投标人列的宽度 */
+            min-width: 120px;
         }
         .summary-table td:nth-child(2), .summary-table th:nth-child(2) {
             left: 50px; /* 排名列宽度，根据实际内容调整 */
@@ -179,6 +235,35 @@
         }
         .summary-table tr:hover {
             background-color: #f5f5f5;
+        }
+        /* 子项名称悬停显示完整项 */
+        .item-name {
+            display: inline-block;
+            max-width: 100%;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+            position: relative;
+            cursor: help;
+            /* 确保不超过5个汉字宽度 */
+            max-width: 100px;
+        }
+        .item-name:hover::after {
+            content: attr(data-full-name);
+            position: absolute;
+            left: 0;
+            top: 100%;
+            background-color: #333;
+            color: white;
+            padding: 5px;
+            border-radius: 3px;
+            white-space: normal;
+            word-wrap: break-word;
+            max-width: 300px;
+            z-index: 100;
+            box-shadow: 0 2px 5px rgba(0,0,0,0.2);
+            font-size: 12px;
+            line-height: 1.4;
         }
         /* 投标人名称悬停显示 */
         .bidder-name {
@@ -324,6 +409,7 @@
     </div>
 
     <script src="/public/js/main.js"></script>
+    <script src="/public/js/test.js"></script>
     <script>
         // 全局变量
         let projectId = null;
@@ -433,7 +519,18 @@
             const progressSection = document.getElementById('progressSection');
             const fileListSection = document.getElementById('fileListSection');
             resultDiv.style.display = 'none';
-            progressSection.style.display = 'none';
+            
+            // 立即显示进度界面，不需要等待上传完成
+            projectId = '初始化中...'; // 临时项目ID
+            document.getElementById('projectId').textContent = projectId;
+            
+            // 隐藏上传表单和文件列表，显示进度界面
+            document.querySelector('.upload-section').style.display = 'none';
+            fileListSection.style.display = 'none';
+            progressSection.style.display = 'block';
+            
+            // 开始轮询进度（使用临时项目ID）
+            startProgressPolling();
             
             try {
                 const response = await fetch('/api/init-upload', {
@@ -444,16 +541,11 @@
                 const data = await response.json();
                 
                 if (response.ok) {
-                    // 上传成功，显示分析进度界面
+                    // 上传成功，更新项目ID
                     projectId = data.project_id;
                     document.getElementById('projectId').textContent = projectId;
                     
-                    // 隐藏上传表单和文件列表，显示进度界面
-                    document.querySelector('.upload-section').style.display = 'none';
-                    fileListSection.style.display = 'none';
-                    progressSection.style.display = 'block';
-                    
-                    // 开始轮询进度
+                    // 继续轮询进度
                     startProgressPolling();
                 } else {
                     // 特别处理413错误
@@ -465,11 +557,31 @@
                         resultDiv.innerHTML = `<h3>上传失败!</h3><p>${data.error}</p>`;
                     }
                     resultDiv.style.display = 'block';
+                    
+                    // 停止进度轮询
+                    if (progressInterval) {
+                        clearInterval(progressInterval);
+                        progressInterval = null;
+                    }
+                    
+                    // 恢复上传界面
+                    document.querySelector('.upload-section').style.display = 'block';
+                    progressSection.style.display = 'none';
                 }
             } catch (error) {
                 resultDiv.className = 'result error';
                 resultDiv.innerHTML = `<h3>请求失败!</h3><p>${error.message}</p>`;
                 resultDiv.style.display = 'block';
+                
+                // 停止进度轮询
+                if (progressInterval) {
+                    clearInterval(progressInterval);
+                    progressInterval = null;
+                }
+                
+                // 恢复上传界面
+                document.querySelector('.upload-section').style.display = 'block';
+                progressSection.style.display = 'none';
             }
         });
         
@@ -491,6 +603,17 @@
         // 更新进度显示
         async function updateProgress() {
             if (!projectId) return;
+            
+            // 如果项目ID是临时值，显示初始化状态
+            if (projectId === '初始化中...') {
+                document.getElementById('totalProgress').textContent = '0%';
+                document.getElementById('totalProgressBar').style.width = '0%';
+                document.getElementById('totalProgressBar').textContent = '0%';
+                
+                const documentProgressList = document.getElementById('documentProgressList');
+                documentProgressList.innerHTML = '<div class="document-progress processing"><p>正在初始化项目...</p></div>';
+                return;
+            }
             
             try {
                 const response = await fetch(`/api/projects/${projectId}/analysis-status`);
@@ -539,11 +662,35 @@
                             }
                         }
                         
+                        // 构建进度详情HTML
+                        let progressDetails = '';
+                        if (doc.processing_status === 'processing' && doc.processing_phase) {
+                            progressDetails += `<p>阶段: ${doc.processing_phase}</p>`;
+                            
+                            // 如果在AI分析阶段，显示更详细的规则进度
+                            if (doc.processing_phase === 'AI分析中' && doc.progress_total_rules > 0) {
+                                const completedRules = doc.progress_completed_rules || 0;
+                                const currentRule = doc.progress_current_rule || '未知';
+                                const ruleProgressPercentage = Math.round((completedRules / doc.progress_total_rules) * 100);
+                                
+                                // 创建更详细的规则进度显示
+                                progressDetails += `
+                                    <div class="rule-progress-container">
+                                        <div class="rule-progress-label">规则分析进度: ${completedRules}/${doc.progress_total_rules} (${ruleProgressPercentage}%)</div>
+                                        <div class="rule-progress-sublabel">当前正在分析: ${currentRule}</div>
+                                        <div class="rule-progress-bar-container">
+                                            <div class="rule-progress-bar" style="width: ${ruleProgressPercentage}%"></div>
+                                        </div>
+                                    </div>
+                                `;
+                            }
+                        }
+                        
                         docDiv.innerHTML = `
                             <p><strong>投标文件：${displayFilename}</strong></p>
                             <p>投标人: <span class="bidder-name" data-full-name="${displayBidderName}">${displayBidderName}</span></p>
                             <p>状态: ${statusText}</p>
-                            ${doc.processing_phase ? `<p>阶段: ${doc.processing_phase}</p>` : ''}
+                            ${progressDetails}
                             ${doc.total_score ? `<p>总分: ${doc.total_score.toFixed(2)}</p>` : ''}
                         `;
                         
@@ -627,11 +774,29 @@
                     html += '<tr>';
                     data.headers[1].forEach(header => {
                         if (typeof header === 'string' && header !== '') {
-                            html += `<th>${header}</th>`;
+                            // 添加悬停显示完整项名称的功能
+                            const escapedName = header.replace(/&/g, '&amp;')
+                                                     .replace(/</g, '&lt;')
+                                                     .replace(/>/g, '&gt;')
+                                                     .replace(/"/g, '&quot;')
+                                                     .replace(/'/g, '&#039;');
+                            html += `<th><span class="item-name" data-full-name="${escapedName}">${escapedName}</span></th>`;
                         } else if (typeof header === 'object' && header.name) {
-                            html += `<th>${header.name}</th>`;
+                            // 添加悬停显示完整项名称的功能
+                            const escapedName = header.name.replace(/&/g, '&amp;')
+                                                          .replace(/</g, '&lt;')
+                                                          .replace(/>/g, '&gt;')
+                                                          .replace(/"/g, '&quot;')
+                                                          .replace(/'/g, '&#039;');
+                            html += `<th><span class="item-name" data-full-name="${escapedName}">${escapedName}</span></th>`;
                         } else if (header !== '' && header !== undefined) {
-                            html += `<th>${header}</th>`;
+                            // 添加悬停显示完整项名称的功能
+                            const escapedName = header.toString().replace(/&/g, '&amp;')
+                                                               .replace(/</g, '&lt;')
+                                                               .replace(/>/g, '&gt;')
+                                                               .replace(/"/g, '&quot;')
+                                                               .replace(/'/g, '&#039;');
+                            html += `<th><span class="item-name" data-full-name="${escapedName}">${escapedName}</span></th>`;
                         }
                         // 空字符串或undefined则跳过，保持单元格合并效果
                     });
@@ -643,18 +808,35 @@
                     html += '<tr>';
                     headerRow.forEach(header => {
                         if (typeof header === 'string') {
-                            html += `<th>${header}</th>`;
+                            // 添加悬停显示完整项名称的功能
+                            const escapedName = header.replace(/&/g, '&amp;')
+                                                     .replace(/</g, '&lt;')
+                                                     .replace(/>/g, '&gt;')
+                                                     .replace(/"/g, '&quot;')
+                                                     .replace(/'/g, '&#039;');
+                            html += `<th><span class="item-name" data-full-name="${escapedName}">${escapedName}</span></th>`;
                         } else if (header.name) {
                             // 处理带有rowspan或colspan的表头
+                            const escapedName = header.name.replace(/&/g, '&amp;')
+                                                          .replace(/</g, '&lt;')
+                                                          .replace(/>/g, '&gt;')
+                                                          .replace(/"/g, '&quot;')
+                                                          .replace(/'/g, '&#039;');
                             if (header.rowspan) {
-                                html += `<th rowspan="${header.rowspan}">${header.name}</th>`;
+                                html += `<th rowspan="${header.rowspan}"><span class="item-name" data-full-name="${escapedName}">${escapedName}</span></th>`;
                             } else if (header.colspan) {
-                                html += `<th colspan="${header.colspan}">${header.name}</th>`;
+                                html += `<th colspan="${header.colspan}"><span class="item-name" data-full-name="${escapedName}">${escapedName}</span></th>`;
                             } else {
-                                html += `<th>${header.name}</th>`;
+                                html += `<th><span class="item-name" data-full-name="${escapedName}">${escapedName}</span></th>`;
                             }
                         } else {
-                            html += `<th>${header}</th>`;
+                            // 添加悬停显示完整项名称的功能
+                            const escapedName = header.toString().replace(/&/g, '&amp;')
+                                                               .replace(/</g, '&lt;')
+                                                               .replace(/>/g, '&gt;')
+                                                               .replace(/"/g, '&quot;')
+                                                               .replace(/'/g, '&#039;');
+                            html += `<th><span class="item-name" data-full-name="${escapedName}">${escapedName}</span></th>`;
                         }
                     });
                     html += '</tr>';

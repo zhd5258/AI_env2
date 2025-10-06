@@ -4,7 +4,7 @@
 #作者           : KingFreeDom
 #创建时间         : 2025-10-03 14:14:03
 #最近一次编辑者      : KingFreeDom
-#最近一次编辑时间     : 2025-10-05 17:59:02
+#最近一次编辑时间     : 2025-10-06 09:50:42
 #文件相对于项目的路径   : \AI_env2\app.py
 #
 #Copyright (c) 2025 by 中车眉山车辆有限公司/KingFreeDom, All Rights Reserved. 
@@ -48,8 +48,8 @@ def register_routes():
     from routes.analysis_routes import router as analysis_router
     from routes.config_routes import router as config_router
     from routes.export_routes import router as export_router
-    from routes.rules_routes import router as rules_router
     from routes.page_routes import router as page_router
+    from routes.settings_routes import router as settings_router
     
     # 注册路由
     app.register_blueprint(file_router)
@@ -57,8 +57,8 @@ def register_routes():
     app.register_blueprint(analysis_router)
     app.register_blueprint(config_router)
     app.register_blueprint(export_router)
-    app.register_blueprint(rules_router)
     app.register_blueprint(page_router)
+    app.register_blueprint(settings_router)
 
 # 注册路由
 register_routes()

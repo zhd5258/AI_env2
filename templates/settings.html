@@ -175,6 +175,17 @@
         </form>
     </div>
     
+    <div class="settings-section">
+        <h2>系统维护</h2>
+        <p>警告：以下操作不可逆，请谨慎使用。</p>
+        
+        <div class="form-group">
+            <button id="clearDatabaseBtn" type="button" style="background-color: #dc3545; margin-right: 10px;">清空数据库</button>
+            <button id="cleanupUploadsBtn" type="button" style="background-color: #ffc107; margin-right: 10px;">清理上传文件夹</button>
+            <button id="cleanupTempBtn" type="button" style="background-color: #17a2b8;">清理临时文件夹</button>
+        </div>
+    </div>
+    
     <div id="result" class="result"></div>
 
     <script>
@@ -286,6 +297,126 @@
                 } else {
                     resultDiv.className = 'result error';
                     resultDiv.innerHTML = `<h3>保存失败!</h3><p>${data.error}</p>`;
+                }
+                resultDiv.style.display = 'block';
+                
+                // 3秒后隐藏结果提示
+                setTimeout(() => {
+                    resultDiv.style.display = 'none';
+                }, 3000);
+            } catch (error) {
+                const resultDiv = document.getElementById('result');
+                resultDiv.className = 'result error';
+                resultDiv.innerHTML = `<h3>请求失败!</h3><p>${error.message}</p>`;
+                resultDiv.style.display = 'block';
+                
+                // 3秒后隐藏结果提示
+                setTimeout(() => {
+                    resultDiv.style.display = 'none';
+                }, 3000);
+            }
+        });
+        
+        // 清空数据库
+        document.getElementById('clearDatabaseBtn').addEventListener('click', async function() {
+            if (!confirm('确定要清空数据库吗？此操作不可逆！')) {
+                return;
+            }
+            
+            try {
+                const response = await fetch('/api/settings/maintenance/clear-database', {
+                    method: 'POST'
+                });
+                
+                const data = await response.json();
+                const resultDiv = document.getElementById('result');
+                
+                if (response.ok && data.success) {
+                    resultDiv.className = 'result success';
+                    resultDiv.innerHTML = `<h3>操作成功!</h3><p>${data.message}</p>`;
+                } else {
+                    resultDiv.className = 'result error';
+                    resultDiv.innerHTML = `<h3>操作失败!</h3><p>${data.message || '未知错误'}</p>`;
+                }
+                resultDiv.style.display = 'block';
+                
+                // 3秒后隐藏结果提示
+                setTimeout(() => {
+                    resultDiv.style.display = 'none';
+                }, 3000);
+            } catch (error) {
+                const resultDiv = document.getElementById('result');
+                resultDiv.className = 'result error';
+                resultDiv.innerHTML = `<h3>请求失败!</h3><p>${error.message}</p>`;
+                resultDiv.style.display = 'block';
+                
+                // 3秒后隐藏结果提示
+                setTimeout(() => {
+                    resultDiv.style.display = 'none';
+                }, 3000);
+            }
+        });
+        
+        // 清理上传文件夹
+        document.getElementById('cleanupUploadsBtn').addEventListener('click', async function() {
+            if (!confirm('确定要清理上传文件夹吗？此操作将删除所有上传的文件！')) {
+                return;
+            }
+            
+            try {
+                const response = await fetch('/api/settings/maintenance/cleanup-uploads', {
+                    method: 'POST'
+                });
+                
+                const data = await response.json();
+                const resultDiv = document.getElementById('result');
+                
+                if (response.ok && data.success) {
+                    resultDiv.className = 'result success';
+                    resultDiv.innerHTML = `<h3>操作成功!</h3><p>${data.message}</p>`;
+                } else {
+                    resultDiv.className = 'result error';
+                    resultDiv.innerHTML = `<h3>操作失败!</h3><p>${data.message || '未知错误'}</p>`;
+                }
+                resultDiv.style.display = 'block';
+                
+                // 3秒后隐藏结果提示
+                setTimeout(() => {
+                    resultDiv.style.display = 'none';
+                }, 3000);
+            } catch (error) {
+                const resultDiv = document.getElementById('result');
+                resultDiv.className = 'result error';
+                resultDiv.innerHTML = `<h3>请求失败!</h3><p>${error.message}</p>`;
+                resultDiv.style.display = 'block';
+                
+                // 3秒后隐藏结果提示
+                setTimeout(() => {
+                    resultDiv.style.display = 'none';
+                }, 3000);
+            }
+        });
+        
+        // 清理临时文件夹
+        document.getElementById('cleanupTempBtn').addEventListener('click', async function() {
+            if (!confirm('确定要清理临时文件夹吗？此操作将删除所有临时文件！')) {
+                return;
+            }
+            
+            try {
+                const response = await fetch('/api/settings/maintenance/cleanup-temp', {
+                    method: 'POST'
+                });
+                
+                const data = await response.json();
+                const resultDiv = document.getElementById('result');
+                
+                if (response.ok && data.success) {
+                    resultDiv.className = 'result success';
+                    resultDiv.innerHTML = `<h3>操作成功!</h3><p>${data.message}</p>`;
+                } else {
+                    resultDiv.className = 'result error';
+                    resultDiv.innerHTML = `<h3>操作失败!</h3><p>${data.message || '未知错误'}</p>`;
                 }
                 resultDiv.style.display = 'block';
                 

@@ -293,6 +293,10 @@ def get_analysis_status(project_id):
                         'processing_phase': getattr(doc, 'processing_phase', None),
                         'has_analysis_result': analysis_result is not None,
                         'total_score': analysis_result.total_score if analysis_result else None,
+                        # 添加规则进度相关的字段，直接访问属性而不是使用getattr
+                        'progress_total_rules': doc.progress_total_rules if hasattr(doc, 'progress_total_rules') else 0,
+                        'progress_completed_rules': doc.progress_completed_rules if hasattr(doc, 'progress_completed_rules') else 0,
+                        'progress_current_rule': doc.progress_current_rule if hasattr(doc, 'progress_current_rule') else None,
                     }
                 )
 

@@ -7,7 +7,7 @@ import json
 import logging
 from typing import Dict, Any, Optional
 from sqlalchemy.orm import Session
-from modules.database import AnalysisResult, ScoringRule, TenderProject
+from models.database import AnalysisResult, ScoringRule, TenderProject
 from modules.local_ai_analyzer import LocalAIAnalyzer
 from modules.price_calculator_helpers import PriceScoreCalculatorHelpers
 
@@ -303,7 +303,7 @@ class PriceScoreCalculator(PriceScoreCalculatorHelpers):
                 json_match = re.search(r'\{[\s\S]*?\}', clean_response)
                 if json_match:
                     json_str = json_match.group()
-                    # 进一步清理，移除可能的<|endoftext|>等标记
+                    # 进一步清理，移除可能的"分"字并转换为数值
                     json_str = re.sub(
                         r'<\|endoftext\|>.*$', '', json_str, flags=re.DOTALL
                     )

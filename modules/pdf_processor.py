@@ -458,9 +458,8 @@ class PDFProcessor:
             tuple: (txt_file_path, md_file_path) 对于招标文件返回txt路径，对于投标文件返回md路径
         """
         file_name = Path(self.file_path).stem
-        txt_file_path = os.path.join(self.output_dir, f"{file_name}.txt")
         md_file_path = os.path.join(self.output_dir, f"{file_name}.md")
-        return txt_file_path, md_file_path
+        return None, md_file_path
 
     def _check_output_exists(self):
         """
@@ -471,13 +470,13 @@ class PDFProcessor:
         """
         txt_file_path, md_file_path = self._get_expected_output_paths()
         
-        # 对于招标文件，检查txt文件是否存在
-        if self.file_type == "tender":
-            if os.path.exists(txt_file_path):
-                self.logger.info(f"招标文件的txt文档已存在，跳过处理: {txt_file_path}")
-                return txt_file_path
+        # 对于招标文件，不再检查txt文件是否存在
+        # if self.file_type == "tender":
+        #     if os.path.exists(txt_file_path):
+        #         self.logger.info(f"招标文件的txt文档已存在，跳过处理: {txt_file_path}")
+        #         return txt_file_path
         # 对于投标文件，检查md文件是否存在
-        else:
+        if self.file_type != "tender":  # 修改条件判断
             if os.path.exists(md_file_path):
                 self.logger.info(f"投标文件的md文档已存在，跳过处理: {md_file_path}")
                 return md_file_path
@@ -499,24 +498,11 @@ class PDFProcessor:
             return existing_file_path
 
         try:
-            if self.file_type == "tender":
-                # 招标文件处理：生成文本文件
-                self.logger.info(f"PDF文件 {self.file_path} 是招标文件，生成文本文件")
-                txt_file_path = self._process_tender_to_text()
-                self.logger.info(f"招标文件处理完成，生成的文本文件路径: {txt_file_path}")
-                return txt_file_path
-            else:
-                # 投标文件处理：全部采用OCR技术转换为MD文档
-                self.logger.info(f"PDF文件 {self.file_path} 是投标文件，强制使用OCR技术处理")
-                md_file_path = self.mineru_processor.process_with_mineru(
-                    pdf_path=self.file_path,
-                    output_format='markdown',
-                    enable_formula=True,
-                    enable_table=True,
-                    language='ch'
-                )
-                self.logger.info(f"投标文件处理完成，生成的MD文件路径: {md_file_path}")
-                return md_file_path
+            # 对于招标文件和投标文件，都使用PyMuPDF处理生成MD文件
+            self.logger.info(f"PDF文件 {self.file_path} 使用PyMuPDF处理生成MD文件")
+            md_file_path = self._process_with_pymupdf()
+            self.logger.info(f"PDF文件处理完成，生成的MD文件路径: {md_file_path}")
+            return md_file_path
             
         except Exception as e:
             self.logger.error(f"处理PDF文件时出错: {e}")
@@ -524,31 +510,14 @@ class PDFProcessor:
 
     def _process_tender_to_text(self) -> str:
         """
-        处理招标文件生成文本文件
+        处理招标文件生成文本文件（已废弃，改为生成MD文件）
 
         Returns:
             str: 生成的文本文件路径
         """
-        try:
-            # 使用PyMuPDF提取文本
-            doc = fitz.open(self.file_path)
-            file_name = Path(self.file_path).stem
-            txt_file_path = os.path.join(self.output_dir, f"{file_name}.txt")
-            
-            with open(txt_file_path, 'w', encoding='utf-8') as f:
-                for page_num in range(len(doc)):
-                    page = doc[page_num]
-                    text = page.get_text()
-                    f.write(f"--- Page {page_num + 1} ---\n")
-                    f.write(text)
-                    f.write("\n\n")
-            
-            doc.close()
-            return txt_file_path
-        except Exception as e:
-            self.logger.error(f"处理招标文件生成文本时出错: {e}")
-            raise
-
+        # 直接调用PyMuPDF处理方法生成MD文件
+        return self._process_with_pymupdf()
+        
     def _process_with_pymupdf(self) -> str:
         """
         使用PyMuPDF处理PDF并生成MD文件，增强表格处理能力

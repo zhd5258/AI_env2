@@ -36,7 +36,7 @@ from modules.database import (
 )
 from modules.intelligent_bid_analyzer import IntelligentBidAnalyzer
 from modules.price_score_calculator import PriceScoreCalculator
-from modules.intelligent_scoring_extractor import IntelligentScoringExtractor
+from modules.correct_scoring_extractor import CorrectScoringExtractor
 from modules.bidder_name_extractor import extract_bidder_name_from_file_after_analysis
 
 # 创建一个进程池
@@ -342,8 +342,11 @@ def run_analysis_and_calculate_prices(project_id: int, bid_files_info: list):
             if existing_rules == 0:
                 logging.info(f'项目 {project_id} 没有评分规则，开始提取...')
                 # 使用统一的评分规则提取方法
-                extractor = IntelligentScoringExtractor()
-                scoring_rules = extractor.extract(project.tender_file_path)
+                # extractor = IntelligentScoringExtractor()
+                # 使用 CorrectScoringExtractor 直接从PDF中提取评分规则
+                extractor = CorrectScoringExtractor(project.tender_file_path)
+                # scoring_rules = extractor.extract(project.tender_file_path)
+                scoring_rules = extractor.extract_scoring_rules()
 
                 if scoring_rules:
                     # Manually save rules to the database

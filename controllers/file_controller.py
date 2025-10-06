@@ -18,6 +18,7 @@ from models.database import (
     SessionLocal,
     TenderProject,
     BidDocument,
+    AnalysisResult,  # 添加AnalysisResult导入
 )
 from modules.bidder_name_extractor import extract_bidder_name_from_file
 from modules.shared_functions import extract_bidder_name_from_file_after_analysis, run_analysis_and_calculate_prices
@@ -113,6 +114,45 @@ def save_upload_file(upload_file, destination: str, original_filename: str = Non
         upload_file.close()
     return safe_destination
 
+def cleanup_upload_directory(project_id: int):
+    """
+    清理上传文件目录
+    在项目完成后（不管成功还是失败）清空上传文件保存目录
+    """
+    try:
+        db = SessionLocal()
+        project = db.query(TenderProject).filter(TenderProject.id == project_id).first()
+        
+        if project:
+            # 获取上传目录路径
+            UPLOADS_DIR = get_platform_safe_path('uploads')
+            
+            # 检查目录是否存在
+            if os.path.exists(UPLOADS_DIR):
+                # 删除目录中的所有文件和子目录
+                for filename in os.listdir(UPLOADS_DIR):
+                    file_path = os.path.join(UPLOADS_DIR, filename)
+                    try:
+                        if os.path.isfile(file_path) or os.path.islink(file_path):
+                            os.unlink(file_path)
+                        elif os.path.isdir(file_path):
+                            shutil.rmtree(file_path)
+                    except Exception as e:
+                        logging.error(f'删除文件 {file_path} 时出错: {e}')
+                
+                logging.info(f'项目 {project_id} 完成，已清空上传目录: {UPLOADS_DIR}')
+            else:
+                logging.info(f'上传目录不存在: {UPLOADS_DIR}')
+        else:
+            logging.warning(f'项目 {project_id} 不存在，无法清理上传目录')
+            
+    except Exception as e:
+        logging.error(f'清理上传目录时出错: {e}')
+        raise  # 重新抛出异常以便上层捕获
+    finally:
+        if 'db' in locals():
+            db.close()
+
 # 创建上传目录
 UPLOADS_DIR = get_platform_safe_path('uploads')
 safe_makedirs(UPLOADS_DIR)
@@ -142,6 +182,10 @@ def update_project_status(project_id: int, status: str):
             project.status = status
             db.commit()
             logging.info(f"更新项目 {project_id} 的状态为: {status}")
+            
+            # 如果项目状态是完成或错误，则清理上传目录
+            if status in ['completed', 'completed_with_errors', 'error']:
+                cleanup_upload_directory(project_id)
     except Exception as e:
         logging.error(f"更新项目状态时出错: {e}")
     finally:
@@ -151,6 +195,10 @@ def init_upload_logic(tender_file, bid_files):
     """初始化上传业务逻辑"""
     db = None
     try:
+        # 在上传文件前自动清空上传文件夹
+        from modules.system_maintenance import cleanup_before_upload
+        cleanup_before_upload()
+        
         # 获取数据库会话
         db = SessionLocal()
         
@@ -261,6 +309,10 @@ def init_upload_logic(tender_file, bid_files):
         # 启动后台分析任务（修改为并行处理）
         def start_analysis_in_background():
             try:
+                # 首先提取评分规则并保存到数据库
+                from modules.shared_functions import run_analysis_and_calculate_prices
+                run_analysis_and_calculate_prices(project_id, bid_files_info)
+                
                 # 使用生产者-消费者模式实现并行处理
                 # 一边处理PDF转换为MD，一边对已转换完成的MD文件进行AI分析
                 
@@ -442,6 +494,9 @@ def init_upload_logic(tender_file, bid_files):
                 logging.error(f'后台分析任务启动失败: {e}')
                 # 更新项目状态为错误
                 update_project_status(project_id, 'error')
+            finally:
+                # 无论项目成功还是失败，都清理上传文件目录
+                cleanup_upload_directory(project_id)
 
         # 在后台线程中启动分析
         analysis_thread = threading.Thread(target=start_analysis_in_background)
