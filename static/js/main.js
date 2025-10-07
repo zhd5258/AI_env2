@@ -29,10 +29,11 @@ async function pollAnalysisStatus (projectId) {
         // 检查项目状态
         if (data.project_status === 'completed' || data.project_status === 'completed_with_errors' ||
             data.processing_status === 'completed' || data.processing_status === 'completed_with_errors') {
-            // 分析完成，获取结果
-            const progressText = document.getElementById('progressText');
-            if (progressText) {
-                progressText.innerHTML = '处理完成，正在获取结果...';
+            // 分析完成，直接获取结果，不再显示价格分计算提示
+            // 获取结果
+            const progressTextAfter = document.getElementById('progressText');
+            if (progressTextAfter) {
+                progressTextAfter.innerHTML = '处理完成，正在获取结果...';
             }
             await new Promise(resolve => setTimeout(resolve, 300));
 

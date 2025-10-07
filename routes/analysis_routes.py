@@ -106,7 +106,7 @@ def start_analysis(project_id):
                     db.query(BidDocument).filter(BidDocument.id == bid_doc_id).first()
                 )
                 if bid_doc and bid_doc.project_id == project_id:
-                    bid_doc.bidder_name = new_bidder_name
+                    setattr(bid_doc, 'bidder_name', new_bidder_name)
                     updated_documents.append(bid_doc)
 
             db.commit()
@@ -139,7 +139,9 @@ def start_analysis(project_id):
             analysis_thread.start()
 
             # 更新项目状态
-            project.status = 'processing'
+            setattr(project, 'status', 'processing')
+            # 设置分析开始时间
+            setattr(project, 'analysis_start_time', datetime.utcnow())
             db.commit()
 
             logging.info(
@@ -193,7 +195,7 @@ def confirm_names_and_start_analysis(project_id):
                     db.query(BidDocument).filter(BidDocument.id == bid_doc_id).first()
                 )
                 if bid_doc and bid_doc.project_id == project_id:
-                    bid_doc.bidder_name = new_bidder_name
+                    setattr(bid_doc, 'bidder_name', new_bidder_name)
                     updated_documents.append(bid_doc)
 
             db.commit()
@@ -226,7 +228,8 @@ def confirm_names_and_start_analysis(project_id):
             analysis_thread.start()
 
             # 更新项目状态
-            project.status = 'processing'
+            setattr(project, 'status', 'processing')
+            setattr(project, 'analysis_start_time', datetime.utcnow())
             db.commit()
 
             logging.info(
@@ -261,34 +264,40 @@ def get_project_progress(project_id):
             elapsed_time = None
             total_time = None
 
-            if project.analysis_start_time:
-                if project.analysis_end_time:
+            analysis_start_time = getattr(project, 'analysis_start_time', None)
+            analysis_end_time = getattr(project, 'analysis_end_time', None)
+
+            if analysis_start_time:
+                if analysis_end_time:
                     # 分析已完成，计算总用时
                     total_time = (
-                        project.analysis_end_time - project.analysis_start_time
+                        analysis_end_time - analysis_start_time
                     ).total_seconds()
                 else:
                     # 分析进行中，计算已用时
                     elapsed_time = (
-                        datetime.utcnow() - project.analysis_start_time
+                        datetime.utcnow() - analysis_start_time
                     ).total_seconds()
 
             # 构造响应数据
             response_data = {
                 'project_id': project_id,
-                'project_status': project.status,  # 修改字段名以匹配前端期望
+                'project_status': getattr(
+                    project, 'status', ''
+                ),  # 修改字段名以匹配前端期望
                 'elapsed_time': elapsed_time,  # 已用时（秒）
                 'total_time': total_time,  # 总用时（秒）
-                'analysis_start_time': project.analysis_start_time.isoformat()
-                if project.analysis_start_time
+                'analysis_start_time': analysis_start_time.isoformat()
+                if analysis_start_time
                 else None,
-                'analysis_end_time': project.analysis_end_time.isoformat()
-                if project.analysis_end_time
+                'analysis_end_time': analysis_end_time.isoformat()
+                if analysis_end_time
                 else None,
             }
 
             # 如果项目状态是处理中，添加详细进度信息
-            if project.status == 'processing' or project.status == 'analyzing':
+            project_status = getattr(project, 'status', '')
+            if project_status == 'processing' or project_status == 'analyzing':
                 # 查询投标文件进度
                 bid_documents = (
                     db.query(BidDocument)
@@ -308,63 +317,65 @@ def get_project_progress(project_id):
                     filename = get_filename_from_path(doc.file_path)
 
                     # 计算进度
-                    if doc.processing_status == 'completed':
+                    processing_status = getattr(doc, 'processing_status', '')
+                    progress_total_rules = getattr(doc, 'progress_total_rules', 0)
+                    progress_completed_rules = getattr(
+                        doc, 'progress_completed_rules', 0
+                    )
+
+                    if processing_status == 'completed':
                         progress = 100
                         completed_count += 1
-                    elif doc.processing_status == 'error':
+                    elif processing_status == 'error':
                         progress = 0
                     else:
                         # 根据规则完成情况计算进度
-                        if doc.progress_total_rules > 0:
+                        if progress_total_rules > 0:
                             progress = min(
                                 100,
-                                (
-                                    doc.progress_completed_rules
-                                    / doc.progress_total_rules
-                                )
-                                * 100,
+                                (progress_completed_rules / progress_total_rules) * 100,
                             )
                         else:
                             progress = 0
 
                     # 准备文档状态信息
                     # 确保投标人名称不为空
-                    bidder_name = (
-                        doc.bidder_name
-                        if doc.bidder_name and doc.bidder_name.strip()
-                        else '未知投标方'
-                    )
+                    bidder_name = getattr(doc, 'bidder_name', '')
+                    if not bidder_name or not bidder_name.strip():
+                        bidder_name = '未知投标方'
                     doc_status = {
                         'id': doc.id,
                         'bidder_name': bidder_name,
                         'file_path': doc.file_path,
-                        'processing_status': doc.processing_status,
-                        'processing_phase': doc.processing_phase,  # 添加处理阶段信息
-                        'progress_total': doc.progress_total_rules,
-                        'progress_completed': doc.progress_completed_rules,
-                        'current_rule': doc.progress_current_rule,  # 添加当前规则信息
-                        'error_message': doc.error_message,
+                        'processing_status': processing_status,
+                        'processing_phase': getattr(
+                            doc, 'processing_phase', ''
+                        ),  # 添加处理阶段信息
+                        'progress_total': progress_total_rules,
+                        'progress_completed': progress_completed_rules,
+                        'current_rule': getattr(
+                            doc, 'progress_current_rule', ''
+                        ),  # 添加当前规则信息
+                        'error_message': getattr(doc, 'error_message', ''),
                         'progress': round(progress, 1),
                     }
                     document_statuses.append(doc_status)
 
                     # 兼容main.js的数据格式
                     # 确保投标人名称不为空
-                    bidder_name = (
-                        doc.bidder_name
-                        if doc.bidder_name and doc.bidder_name.strip()
-                        else '未知投标方'
-                    )
+                    bidder_name = getattr(doc, 'bidder_name', '')
+                    if not bidder_name or not bidder_name.strip():
+                        bidder_name = '未知投标方'
                     bid_info = {
                         'id': doc.id,
                         'bidder_name': bidder_name,
                         'file_path': doc.file_path,
-                        'status': doc.processing_status,
-                        'processing_phase': doc.processing_phase,
-                        'progress_total': doc.progress_total_rules,
-                        'progress_completed': doc.progress_completed_rules,
-                        'current_rule': doc.progress_current_rule,
-                        'error_message': doc.error_message,
+                        'status': processing_status,
+                        'processing_phase': getattr(doc, 'processing_phase', ''),
+                        'progress_total': progress_total_rules,
+                        'progress_completed': progress_completed_rules,
+                        'current_rule': getattr(doc, 'progress_current_rule', ''),
+                        'error_message': getattr(doc, 'error_message', ''),
                         'progress': round(progress, 1),
                     }
                     bids.append(bid_info)
@@ -377,20 +388,20 @@ def get_project_progress(project_id):
                 response_data['bids'] = bids  # 兼容main.js中的数据格式
                 response_data['completed_files'] = completed_count
                 response_data['total_files'] = total_count
-                response_data['processing_status'] = project.status  # 添加处理状态
+                response_data['processing_status'] = project_status  # 添加处理状态
 
             # 如果项目已完成，确保触发汇总显示
             elif (
-                project.status == 'completed'
-                or project.status == 'completed_with_errors'
+                project_status == 'completed'
+                or project_status == 'completed_with_errors'
             ):
                 # 确保分析结束时间已设置
-                if not project.analysis_end_time:
-                    project.analysis_end_time = datetime.datetime.utcnow()
+                if not analysis_end_time:
+                    setattr(project, 'analysis_end_time', datetime.utcnow())
                     db.commit()
 
                 # 添加完成状态信息
-                response_data['processing_status'] = project.status
+                response_data['processing_status'] = project_status
                 response_data['completed_files'] = len(
                     db.query(BidDocument)
                     .filter(
@@ -432,6 +443,7 @@ def get_project_results(project_id):
             # 格式化结果数据
             formatted_results = []
             for result in results:
+                analyzed_at = getattr(result, 'analyzed_at', None)
                 formatted_results.append(
                     {
                         'id': result.id,
@@ -439,22 +451,21 @@ def get_project_results(project_id):
                         'total_score': result.total_score,
                         'price_score': result.price_score,
                         'extracted_price': result.extracted_price,
-                        'analyzed_at': result.analyzed_at.isoformat()
-                        if result.analyzed_at
-                        else None,
+                        'analyzed_at': analyzed_at.isoformat() if analyzed_at else None,
                     }
                 )
 
             # 按总分降序排列
             formatted_results.sort(key=lambda x: x['total_score'] or 0, reverse=True)
 
+            analysis_end_time = getattr(project, 'analysis_end_time', None)
             return jsonify(
                 {
                     'project_id': project_id,
-                    'project_name': project.name,
+                    'project_name': getattr(project, 'name', ''),
                     'results': formatted_results,
-                    'analysis_end_time': project.analysis_end_time.isoformat()
-                    if project.analysis_end_time
+                    'analysis_end_time': analysis_end_time.isoformat()
+                    if analysis_end_time
                     else None,
                 }
             )
@@ -478,7 +489,7 @@ def get_project_summary(project_id):
             )
             if project:
                 summary_data['project_id'] = project_id
-                summary_data['project_name'] = project.name
+                summary_data['project_name'] = getattr(project, 'name', '')
 
             return jsonify(summary_data)
     except Exception as e:

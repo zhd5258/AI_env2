@@ -4,8 +4,8 @@
 # 作者           : KingFreeDom
 # 创建时间         : 2025-09-26 18:46:24
 # 最近一次编辑者      : KingFreeDom
-# 最近一次编辑时间     : 2025-09-26 18:48:27
-# 文件相对于项目的路径   : \AI_env2\modules\analysis_manager.py
+# 最近一次编辑时间     : 2025-10-07 18:24:55
+# 文件相对于项目的路径   : \AI_ENV2\modules\analysis_manager.py
 #
 # Copyright (c) 2025 by 中车眉山车辆有限公司/KingFreeDom, All Rights Reserved.
 #
@@ -301,18 +301,36 @@ class AnalysisManager:
                 tender_file_path, bid_file_path, db, bid_document_id, project_id
             )
             # 确保分析器中的投标人名称与数据库中的保持一致
-            # 修复：如果数据库中的投标人名称为空，则使用分析器初始化时设置的文件名默认值
-            if str(bid_document.bidder_name) and str(bid_document.bidder_name).strip():
-                # 数据库中有有效的投标人名称，使用数据库中的值
-                analyzer.bidder_name = bid_document.bidder_name
+            # 修复：只有在分析器中的投标人名称为空时，才使用数据库中的值
+            # 不应该用分析器的默认值覆盖数据库中已有的有效名称
+            if (
+                not hasattr(analyzer, 'bidder_name')
+                or not analyzer.bidder_name
+                or not str(analyzer.bidder_name).strip()
+            ):
+                # 分析器中没有有效的投标人名称，使用数据库中的值
+                if (
+                    str(bid_document.bidder_name)
+                    and str(bid_document.bidder_name).strip()
+                ):
+                    analyzer.bidder_name = bid_document.bidder_name
+                else:
+                    # 数据库中也没有有效的投标人名称，使用分析器中的默认值（文件名）
+                    setattr(bid_document, 'bidder_name', str(analyzer.bidder_name))
+                    # 同时更新数据库中的记录
+                    try:
+                        db.commit()
+                    except Exception as e:
+                        self.logger.warning(f'更新数据库中的投标人名称时出错: {e}')
             else:
-                # 数据库中没有有效的投标人名称，使用分析器中的默认值（文件名）
-                setattr(bid_document, 'bidder_name', str(analyzer.bidder_name))
-                # 同时更新数据库中的记录
-                try:
-                    db.commit()
-                except Exception as e:
-                    self.logger.warning(f'更新数据库中的投标人名称时出错: {e}')
+                # 分析器中已有有效的投标人名称，确保数据库中的值与之一致
+                if str(bid_document.bidder_name) != str(analyzer.bidder_name):
+                    setattr(bid_document, 'bidder_name', str(analyzer.bidder_name))
+                    # 同时更新数据库中的记录
+                    try:
+                        db.commit()
+                    except Exception as e:
+                        self.logger.warning(f'更新数据库中的投标人名称时出错: {e}')
 
             # 分析投标文件
             analysis_result = analyzer.analyze_bidding_document()
@@ -333,31 +351,40 @@ class AnalysisManager:
                     # 更新投标人名称（如果AI提取到了）
                     details = analysis_result.get('details', {})
                     bidder_name_extracted = False
+
+                    # 修复：确保正确提取投标人名称
                     if (
                         '投标人名称' in details
                         and isinstance(details, dict)
                         and details.get('投标人名称') != '未提取'
                         and str(details.get('投标人名称')).strip()
+                        and details.get('投标人名称') is not None
                     ):
                         # 只有当AI提取到有效名称时才更新
                         valid_extracted_name = str(
                             details.get('投标人名称', '')
                         ).strip()
-                        setattr(bid_document, 'bidder_name', valid_extracted_name)
-                        setattr(result_record, 'bidder_name', valid_extracted_name)
-                        bidder_name_extracted = True
-                        self.logger.info(
-                            f'通过AI分析更新投标人名称: {valid_extracted_name}'
-                        )
-                        # 确保提交数据库更改
-                        try:
-                            db.commit()
+                        # 确保名称不为空且有效
+                        if (
+                            valid_extracted_name
+                            and len(valid_extracted_name) > 1
+                            and valid_extracted_name != '未提取'
+                        ):
+                            setattr(bid_document, 'bidder_name', valid_extracted_name)
+                            setattr(result_record, 'bidder_name', valid_extracted_name)
+                            bidder_name_extracted = True
                             self.logger.info(
-                                f'成功提交AI提取的投标人名称: {valid_extracted_name}'
+                                f'通过AI分析更新投标人名称: {valid_extracted_name}'
                             )
-                        except Exception as commit_e:
-                            self.logger.error(f'提交数据库更改时出错: {commit_e}')
-                            db.rollback()
+                            # 确保提交数据库更改
+                            try:
+                                db.commit()
+                                self.logger.info(
+                                    f'成功提交AI提取的投标人名称: {valid_extracted_name}'
+                                )
+                            except Exception as commit_e:
+                                self.logger.error(f'提交数据库更改时出错: {commit_e}')
+                                db.rollback()
 
                     # 如果AI没有提取到投标人名称，则尝试从文件中提取（但仅在数据库中当前名称为空或无效时）
                     if not bidder_name_extracted:
@@ -368,6 +395,7 @@ class AnalysisManager:
                             and current_db_name.strip()
                             and current_db_name != '未知投标方'
                             and current_db_name != '未提取'
+                            and current_db_name != 'None'
                             and len(current_db_name.strip()) > 1
                         )
 
@@ -398,6 +426,7 @@ class AnalysisManager:
                                     extracted_name
                                     and extracted_name.strip()
                                     and extracted_name != '未提取'
+                                    and extracted_name != 'None'
                                     and len(extracted_name.strip()) > 1
                                 ):
                                     valid_name = extracted_name.strip()
@@ -441,6 +470,7 @@ class AnalysisManager:
                             not str(bid_document.bidder_name)
                             or not str(bid_document.bidder_name).strip()
                             or str(bid_document.bidder_name) == '未知投标方'
+                            or str(bid_document.bidder_name) == 'None'
                         ):
                             try:
                                 filename = os.path.basename(str(bid_document.file_path))
@@ -558,6 +588,9 @@ class AnalysisManager:
                         if (
                             not current_bidder_name
                             or not str(current_bidder_name).strip()
+                            or str(current_bidder_name) == 'None'
+                            or str(current_bidder_name) == '未知投标方'
+                            or str(current_bidder_name) == '未提取'
                         ):
                             setattr(
                                 result_record,
@@ -754,9 +787,11 @@ class AnalysisManager:
 
         time.sleep(1)
 
-        # 计算价格分
+        # 强制检查并计算价格分，不管价格是否全部提取成功
+        # 根据用户要求，必须在所有投标文件分析成功后强制执行价格分计算
+        price_scores_result = False
         try:
-            self.logger.info(f'开始为项目 {project_id} 计算价格分。')
+            self.logger.info(f'开始为项目 {project_id} 强制计算价格分。')
             calculator = PriceScoreCalculator(db_session=self.db)
             price_scores_result = calculator.calculate_project_price_scores(project_id)
 
@@ -779,48 +814,75 @@ class AnalysisManager:
                 # 记录详细信息以便调试
                 self._log_price_calculation_failure_details(project_id)
 
-            project = None
-            if self.db is not None:
-                project = (
-                    self.db.query(TenderProject)
-                    .filter(TenderProject.id == project_id)
-                    .first()
-                )
-            if project is not None:
-                has_errors = False
+            # 只有在价格分计算完成并存储后才更新项目状态
+            try:
+                project = None
                 if self.db is not None:
-                    has_errors = (
-                        self.db.query(BidDocument)
-                        .filter(
-                            BidDocument.project_id == project_id,
-                            BidDocument.processing_status == 'error',
-                        )
-                        .count()
-                        > 0
+                    project = (
+                        self.db.query(TenderProject)
+                        .filter(TenderProject.id == project_id)
+                        .first()
                     )
-
                 if project is not None:
-                    setattr(
-                        project,
-                        'status',
-                        'completed_with_errors' if has_errors else 'completed',
+                    has_errors = False
+                    if self.db is not None:
+                        has_errors = (
+                            self.db.query(BidDocument)
+                            .filter(
+                                BidDocument.project_id == project_id,
+                                BidDocument.processing_status == 'error',
+                            )
+                            .count()
+                            > 0
+                        )
+
+                    # 设置项目状态
+                    if project is not None:
+                        # 如果价格分计算成功，则标记为completed，否则标记为completed_with_errors
+                        if price_scores_result:
+                            setattr(project, 'status', 'completed')
+                        else:
+                            setattr(project, 'status', 'completed_with_errors')
+                    # 设置分析结束时间
+                    from datetime import datetime
+
+                    project.analysis_end_time = datetime.utcnow()
+                    if self.db is not None:
+                        self.db.commit()
+                    self.logger.info(
+                        '项目 %s 的状态已更新为 %s。', project_id, project.status
                     )
-                # 设置分析结束时间
-                from datetime import datetime
 
-                project.analysis_end_time = datetime.utcnow()
+                    # 检查是否需要清理MD文件
+                    self._cleanup_md_files(project_id)
+
+            except Exception as e:
+                self.logger.error(f'为项目 {project_id} 更新状态时出错: {e}')
+                self.logger.error(traceback.format_exc())
+                # 即使更新状态出错，也要确保项目状态最终被设置
+                project = None
                 if self.db is not None:
-                    self.db.commit()
-                self.logger.info(
-                    '项目 %s 的状态已更新为 %s。', project_id, project.status
-                )
+                    project = (
+                        self.db.query(TenderProject)
+                        .filter(TenderProject.id == project_id)
+                        .first()
+                    )
+                if project is not None:
+                    if project is not None:
+                        setattr(project, 'status', 'completed_with_errors')
+                    from datetime import datetime
 
-                # 检查是否需要清理MD文件
-                self._cleanup_md_files(project_id)
+                    project.analysis_end_time = datetime.utcnow()
+                    if self.db is not None:
+                        self.db.commit()
+
+                    # 检查是否需要清理MD文件
+                    self._cleanup_md_files(project_id)
 
         except Exception as e:
             self.logger.error(f'为项目 {project_id} 计算价格分时出错: {e}')
             self.logger.error(traceback.format_exc())
+
             # 即使价格分计算出错，也要更新项目状态
             project = None
             if self.db is not None:
@@ -905,3 +967,65 @@ class AnalysisManager:
             self.logger.info('=== 价格分计算失败详细信息结束 ===')
         except Exception as e:
             self.logger.error(f'记录价格分计算失败详细信息时出错: {e}')
+
+    def _check_all_prices_extracted(self, project_id: int) -> bool:
+        """
+        检查项目中所有投标人的价格是否都已成功提取且不为空
+
+        Args:
+            project_id: 项目ID
+
+        Returns:
+            bool: 是否所有价格都已成功提取
+        """
+        try:
+            self.logger.info(f'检查项目 {project_id} 的投标人价格提取状态')
+
+            # 获取项目下的所有分析结果
+            analysis_results = []
+            if self.db is not None:
+                analysis_results = (
+                    self.db.query(AnalysisResult)
+                    .filter(AnalysisResult.project_id == project_id)
+                    .all()
+                )
+
+            if not analysis_results:
+                self.logger.warning(f'项目 {project_id} 没有找到分析结果')
+                return False
+
+            # 检查每个分析结果的价格提取状态
+            all_prices_extracted = True
+            valid_results_count = 0
+
+            for result in analysis_results:
+                bidder_name = result.bidder_name or f'未知投标人_{result.id}'
+                extracted_price = result.extracted_price
+
+                self.logger.info(f'投标人 [{bidder_name}] 提取价格: {extracted_price}')
+
+                # 检查价格是否成功提取且不为空
+                # 处理SQLAlchemy列对象的情况
+                price_value = extracted_price
+                if hasattr(extracted_price, 'value'):
+                    price_value = extracted_price.value
+
+                if price_value is None or (
+                    isinstance(price_value, (int, float)) and price_value == 0
+                ):
+                    self.logger.warning(
+                        f'投标人 [{bidder_name}] 的价格未成功提取或为空'
+                    )
+                    all_prices_extracted = False
+                else:
+                    valid_results_count += 1
+
+            self.logger.info(
+                f'项目 {project_id} 价格提取检查完成: {valid_results_count}/{len(analysis_results)} 个投标人价格提取成功'
+            )
+
+            return all_prices_extracted and valid_results_count == len(analysis_results)
+
+        except Exception as e:
+            self.logger.error(f'检查价格提取状态时出错: {e}')
+            return False

@@ -101,7 +101,7 @@ class PriceScoreCalculator(PriceScoreCalculatorHelpers):
             valid_bidder_prices = {
                 name: price
                 for name, price in bidder_prices.items()
-                if name and str(name).strip() and name != 'None'
+                if name and str(name).strip() and name != 'None' and price is not None
             }
 
             if not valid_bidder_prices:
@@ -182,12 +182,23 @@ class PriceScoreCalculator(PriceScoreCalculatorHelpers):
 
             except Exception as e:
                 self.logger.error(f'调用AI大模型计算价格分时出错: {e}')
-                return False
+                # 修复：即使AI计算失败，也要尝试使用默认计算方法
+                self.logger.info('AI价格分计算失败，尝试使用默认计算方法')
+                price_scores = self._calculate_price_scores_default(
+                    valid_bidder_prices, price_rule
+                )
+                if not price_scores:
+                    return False
 
-            # 7. 如果AI计算失败，不使用默认计算方法，直接返回False
+            # 7. 如果AI计算失败，使用默认计算方法
             if not price_scores:
-                self.logger.error('AI价格分计算失败，按照规范不使用默认计算方法')
-                return False
+                self.logger.warning('AI价格分计算失败，使用默认计算方法')
+                price_scores = self._calculate_price_scores_default(
+                    valid_bidder_prices, price_rule
+                )
+                if not price_scores:
+                    self.logger.error('默认价格分计算也失败')
+                    return False
 
             # 8. 更新每个投标人的价格分和总分
             updated_count = 0
@@ -329,10 +340,10 @@ class PriceScoreCalculator(PriceScoreCalculatorHelpers):
         Returns:
             Dict[str, float]: 投标人名称到价格分的映射
         """
-        try:
-            # 清理响应文本
-            clean_response = ai_response.strip()
+        price_scores = {}
+        clean_response = ai_response.strip()
 
+        try:
             # 如果响应包含JSON代码块标记，移除它们
             if clean_response.startswith('```json'):
                 clean_response = clean_response[7:]
@@ -342,44 +353,47 @@ class PriceScoreCalculator(PriceScoreCalculatorHelpers):
                 clean_response = clean_response[:-3]
             clean_response = clean_response.strip()
 
-            # 尝试多种解析方式
-            price_scores = {}
-
-            # 方式1：尝试从响应中提取JSON部分
+            # 只在必要时进行转义修复
+            json_data = None
             try:
-                # 使用正则表达式提取JSON部分，忽略垃圾数据
+                # 首先尝试直接解析
+                json_data = json.loads(clean_response)
+            except json.JSONDecodeError:
+                # 如果直接解析失败，再尝试修复转义字符
                 import re
 
-                # 更强大的JSON提取正则，支持嵌套和中文字符
-                json_match = re.search(r'\{[\s\S]*?\}', clean_response)
-                if json_match:
-                    json_str = json_match.group()
-                    # 进一步清理，移除可能的"分"字并转换为数值
-                    json_str = re.sub(
-                        r'<\|endoftext\|>.*$', '', json_str, flags=re.DOTALL
-                    )
-                    json_str = json_str.strip()
-                    self.logger.info(f'提取到JSON字符串: {json_str}')
-                    json_data = json.loads(json_str)
-                    if isinstance(json_data, dict):
-                        for name, score in json_data.items():
-                            if isinstance(score, (int, float)):
-                                price_scores[str(name)] = float(score)
-                        self.logger.info(f'JSON解析成功: {price_scores}')
-                        return price_scores
-                else:
-                    # 如果没有找到JSON格式，尝试直接解析整个响应
+                # 修复JSON中的无效转义字符
+                clean_response = re.sub(
+                    r'\\([^"\\/bfnrtu])', r'\1', clean_response
+                )  # 移除无效的转义
+                clean_response = clean_response.replace(
+                    '\\', '\\\\'
+                )  # 将单独的反斜杠转义
+                # 修复可能存在的其他转义问题
+                clean_response = (
+                    clean_response.replace('\n', '\\n')
+                    .replace('\r', '\\r')
+                    .replace('\t', '\\t')
+                )
+                try:
                     json_data = json.loads(clean_response)
-                    if isinstance(json_data, dict):
-                        for name, score in json_data.items():
-                            if isinstance(score, (int, float)):
-                                price_scores[str(name)] = float(score)
-                        self.logger.info(f'直接JSON解析成功: {price_scores}')
-                        return price_scores
-            except json.JSONDecodeError:
-                self.logger.warning('JSON解析失败，尝试文本解析')
+                except json.JSONDecodeError:
+                    self.logger.warning('JSON解析失败，尝试文本解析')
 
-            # 方式2：文本解析
+            # 如果成功解析了JSON数据
+            if json_data is not None:
+                if isinstance(json_data, dict):
+                    for name, score in json_data.items():
+                        if isinstance(score, (int, float)):
+                            price_scores[str(name)] = float(score)
+                    self.logger.info(f'JSON解析成功: {price_scores}')
+                    return price_scores
+
+        except Exception as e:
+            self.logger.error(f'解析AI响应时出错: {e}')
+
+        # 文本解析作为备用方案
+        try:
             # 响应格式应该是："投标人1：价格分1,投标人2：价格分2,投标人3：价格分3,......."
             bidder_results = clean_response.split(',')
             for result in bidder_results:
@@ -418,9 +432,95 @@ class PriceScoreCalculator(PriceScoreCalculatorHelpers):
                             continue
 
             self.logger.info(f'文本解析成功: {price_scores}')
-            return price_scores
         except Exception as e:
-            self.logger.error(f'解析AI响应时出错: {e}')
+            self.logger.error(f'文本解析时出错: {e}')
+
+        # 返回结果（可能为空字典）
+        return price_scores
+
+    def _calculate_price_scores_default(
+        self, bidder_prices: Dict[str, float], price_rule
+    ) -> Dict[str, float]:
+        """
+        使用默认方法计算价格分（当AI计算失败时使用）
+
+        Args:
+            bidder_prices: 投标人报价字典
+            price_rule: 价格评分规则
+
+        Returns:
+            Dict[str, float]: 投标人名称到价格分的映射
+        """
+        try:
+            self.logger.info('使用默认方法计算价格分')
+
+            if not bidder_prices:
+                self.logger.error('没有投标人报价用于默认价格分计算')
+                return {}
+
+            # 获取有效的投标人报价
+            valid_prices = {
+                name: price
+                for name, price in bidder_prices.items()
+                if price is not None and isinstance(price, (int, float)) and price > 0
+            }
+
+            if not valid_prices:
+                self.logger.error('没有有效的投标人报价用于默认价格分计算')
+                return {}
+
+            # 获取价格分满分
+            max_score = price_rule.Child_max_score or 40
+
+            # 根据公式计算价格分
+            # 假设公式是: 投标报价得分＝(评标基准价/投标报价)×价格权重×100
+            if '评标基准价' in (price_rule.description or ''):
+                # 如果描述中提到了评标基准价，需要先计算评标基准价
+                # 简化处理：使用最低价作为评标基准价
+                benchmark_price = min(valid_prices.values())
+                price_scores = {}
+
+                for bidder_name, price in valid_prices.items():
+                    try:
+                        # 投标报价得分＝(评标基准价/投标报价)×价格权重×100
+                        # 简化处理：假设价格权重为1
+                        score = (benchmark_price / price) * max_score
+                        price_scores[bidder_name] = round(score, 2)
+                    except Exception as e:
+                        self.logger.error(
+                            f'计算投标人 {bidder_name} 的价格分时出错: {e}'
+                        )
+                        price_scores[bidder_name] = 0
+
+                self.logger.info(f'默认方法计算的价格分: {price_scores}')
+                return price_scores
+            else:
+                # 如果没有明确的公式，使用简单的低价高分规则
+                min_price = min(valid_prices.values())
+                max_price = max(valid_prices.values())
+                price_range = max_price - min_price
+
+                price_scores = {}
+                for bidder_name, price in valid_prices.items():
+                    try:
+                        if price_range > 0:
+                            # 线性计算：最低价得满分，最高价得0分
+                            score = ((max_price - price) / price_range) * max_score
+                        else:
+                            # 所有价格相同，都得满分
+                            score = max_score
+                        price_scores[bidder_name] = round(score, 2)
+                    except Exception as e:
+                        self.logger.error(
+                            f'计算投标人 {bidder_name} 的价格分时出错: {e}'
+                        )
+                        price_scores[bidder_name] = 0
+
+                self.logger.info(f'默认方法计算的价格分: {price_scores}')
+                return price_scores
+
+        except Exception as e:
+            self.logger.error(f'默认价格分计算出错: {e}')
             return {}
 
     def _calculate_other_scores_total(self, detailed_scores: list) -> float:

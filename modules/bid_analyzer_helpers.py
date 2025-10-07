@@ -322,8 +322,27 @@ class BidAnalyzerHelpers:
                 clean_response.replace('```json', '').replace('```', '').strip()
             )
 
-            # 尝试解析JSON
-            result = json.loads(clean_response)
+            # 只在必要时进行转义修复
+            try:
+                # 首先尝试直接解析
+                result = json.loads(clean_response)
+            except json.JSONDecodeError:
+                # 如果直接解析失败，再尝试修复转义字符
+                # 修复JSON中的无效转义字符
+                clean_response = re.sub(
+                    r'\\([^"\\/bfnrtu])', r'\1', clean_response
+                )  # 移除无效的转义
+                clean_response = clean_response.replace(
+                    '\\', '\\\\'
+                )  # 将单独的反斜杠转义
+                # 修复可能存在的其他转义问题
+                clean_response = (
+                    clean_response.replace('\n', '\\n')
+                    .replace('\r', '\\r')
+                    .replace('\t', '\\t')
+                )
+                result = json.loads(clean_response)
+
             score = result.get('score', 0)
             reason = result.get('reason', 'No reason provided.')
 

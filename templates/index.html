@@ -323,10 +323,11 @@
                     updateProgressDisplay(data);
 
                     if (data.project_status === 'completed' || data.project_status === 'completed_with_errors') {
-                        // 分析完成，获取结果
-                        const progressText = document.getElementById('progressText');
-                        if (progressText) {
-                            progressText.innerHTML = '处理完成，正在获取结果...';
+                        // 分析完成，直接获取结果，不再显示价格分计算提示
+                        // 获取结果
+                        const progressTextAfter = document.getElementById('progressText');
+                        if (progressTextAfter) {
+                            progressTextAfter.innerHTML = '处理完成，正在获取结果...';
                         }
                         
                         // 停止轮询
@@ -335,71 +336,75 @@
                             progressInterval = null;
                         }
                         
-                        // 尝试获取动态汇总数据
-                        try {
-                            // 首先尝试获取动态汇总数据
-                            const dynamicSummaryResponse = await fetch(`/api/projects/${currentProjectId}/dynamic-summary`);
-                            if (dynamicSummaryResponse.ok) {
-                                const summaryData = await dynamicSummaryResponse.json();
-                                displaySummaryResults(summaryData);
-                            } else {
-                                // 如果动态汇总失败，尝试获取普通汇总数据
-                                console.warn('动态汇总数据获取失败，尝试获取普通汇总数据');
-                                const summaryResponse = await fetch(`/api/projects/${currentProjectId}/summary`);
-                                if (summaryResponse.ok) {
-                                    const summaryData = await summaryResponse.json();
+                        // 等待一段时间后再获取结果
+                        setTimeout(async function() {
+                            // 尝试获取动态汇总数据
+                            try {
+                                // 首先尝试获取动态汇总数据
+                                const dynamicSummaryResponse = await fetch(`/api/projects/${currentProjectId}/dynamic-summary`);
+                                if (dynamicSummaryResponse.ok) {
+                                    const summaryData = await dynamicSummaryResponse.json();
                                     displaySummaryResults(summaryData);
                                 } else {
-                                    // 如果都失败了，尝试获取结果数据
-                                    console.warn('普通汇总数据获取失败，尝试获取结果数据');
-                                    const resultsResponse = await fetch(`/api/projects/${currentProjectId}/results`);
-                                    if (resultsResponse.ok) {
-                                        // 构造兼容的汇总数据格式
-                                        const resultsData = await resultsResponse.json();
-                                        const summaryData = {
-                                            project_name: resultsData.project_name || '未知项目',
-                                            summary: resultsData.results || []
-                                        };
+                                    // 如果动态汇总失败，尝试获取普通汇总数据
+                                    console.warn('动态汇总数据获取失败，尝试获取普通汇总数据');
+                                    const summaryResponse = await fetch(`/api/projects/${currentProjectId}/summary`);
+                                    if (summaryResponse.ok) {
+                                        const summaryData = await summaryResponse.json();
                                         displaySummaryResults(summaryData);
                                     } else {
-                                        // 如果都失败了，显示错误信息
-                                        throw new Error('无法获取任何汇总数据');
+                                        // 如果都失败了，尝试获取结果数据
+                                        console.warn('普通汇总数据获取失败，尝试获取结果数据');
+                                        const resultsResponse = await fetch(`/api/projects/${currentProjectId}/results`);
+                                        if (resultsResponse.ok) {
+                                            // 构造兼容的汇总数据格式
+                                            const resultsData = await resultsResponse.json();
+                                            const summaryData = {
+                                                project_name: resultsData.project_name || '未知项目',
+                                                summary: resultsData.results || []
+                                            };
+                                            displaySummaryResults(summaryData);
+                                        } else {
+                                            // 如果都失败了，显示错误信息
+                                            throw new Error('无法获取任何汇总数据');
+                                        }
                                     }
                                 }
+                            } catch (summaryError) {
+                                console.error('获取汇总数据失败:', summaryError);
+                                // 显示错误信息
+                                const resultDiv = document.getElementById('result');
+                                resultDiv.className = 'result error';
+                                resultDiv.innerHTML = `
+                                    <div class="card">
+                                        <div class="card-header">
+                                            <h3 class="card-title">汇总失败!</h3>
+                                        </div>
+                                        <div class="card-body">
+                                            <p>获取汇总数据时发生错误: ${summaryError.message}</p>
+                                            <p>请尝试以下解决方案：</p>
+                                            <ul>
+                                                <li>刷新页面重试</li>
+                                                <li>查看<a href="/history" class="alert-link">历史记录</a>获取结果</li>
+                                                <li>联系系统管理员</li>
+                                            </ul>
+                                            <button class="btn btn-primary" onclick="location.reload()">
+                                                <i class="fas fa-sync-alt me-1"></i>重新加载
+                                            </button>
+                                            <a href="/history" class="btn btn-secondary ms-2">
+                                                <i class="fas fa-history me-1"></i>查看历史记录
+                                            </a>
+                                        </div>
+                                    </div>
+                                `;
+                                resultDiv.style.display = 'block';
+                                
+                                // 隐藏进度界面
+                                const progressSection = document.getElementById('progressSection');
+                                progressSection.style.display = 'none';
                             }
-                        } catch (summaryError) {
-                            console.error('获取汇总数据失败:', summaryError);
-                            // 显示错误信息
-                            const resultDiv = document.getElementById('result');
-                            resultDiv.className = 'result error';
-                            resultDiv.innerHTML = `
-                                <div class="card">
-                                    <div class="card-header">
-                                        <h3 class="card-title">汇总失败!</h3>
-                                    </div>
-                                    <div class="card-body">
-                                        <p>获取汇总数据时发生错误: ${summaryError.message}</p>
-                                        <p>请尝试以下解决方案：</p>
-                                        <ul>
-                                            <li>刷新页面重试</li>
-                                            <li>查看<a href="/history" class="alert-link">历史记录</a>获取结果</li>
-                                            <li>联系系统管理员</li>
-                                        </ul>
-                                        <button class="btn btn-primary" onclick="location.reload()">
-                                            <i class="fas fa-sync-alt me-1"></i>重新加载
-                                        </button>
-                                        <a href="/history" class="btn btn-secondary ms-2">
-                                            <i class="fas fa-history me-1"></i>查看历史记录
-                                        </a>
-                                    </div>
-                                </div>
-                            `;
-                            resultDiv.style.display = 'block';
-                            
-                            // 隐藏进度界面
-                            const progressSection = document.getElementById('progressSection');
-                            progressSection.style.display = 'none';
-                        }
+                        }, 2000); // 等待2秒后再获取结果
+                        return; // 结束轮询
                     }
                 } catch (error) {
                     console.error("轮询进度时出错:", error);

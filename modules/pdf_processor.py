@@ -596,13 +596,15 @@ class PDFProcessor:
 
             # 如果某个字符占比超过80%，认为质量不达标
             if char_count:
-                most_common_char = max(char_count, key=char_count.get)
-                most_common_ratio = char_count[most_common_char] / len(text_content)
-                if most_common_ratio > 0.8:
-                    self.logger.warning(
-                        f"转换质量差，内容主要由重复字符 '{most_common_char}' 构成，占比 {most_common_ratio:.2%}: {md_file_path}"
-                    )
-                    return False
+                # 修复类型错误：确保字典不为空再调用max
+                if char_count:
+                    most_common_char = max(char_count, key=lambda x: char_count[x])
+                    most_common_ratio = char_count[most_common_char] / len(text_content)
+                    if most_common_ratio > 0.8:
+                        self.logger.warning(
+                            f"转换质量差，内容主要由重复字符 '{most_common_char}' 构成，占比 {most_common_ratio:.2%}: {md_file_path}"
+                        )
+                        return False
 
             # 检查是否有足够的文本内容（至少100个字符）
             if len(text_content) < 100:
