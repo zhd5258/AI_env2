@@ -164,6 +164,14 @@
                 <small>启用后，分析完成后将自动删除生成的MD文件以节省磁盘空间</small>
             </div>
             
+            <div class="form-group">
+                <label for="enable_retry_on_quality_issue">
+                    <input type="checkbox" id="enable_retry_on_quality_issue" name="enable_retry_on_quality_issue">
+                    质量不达标时重新分析
+                </label>
+                <small>当生成的MD文件质量不达标时，是否启用重新转换和分析功能</small>
+            </div>
+            
             <button type="submit" id="runtimeConfigSubmitBtn">保存设置</button>
         </form>
     </div>
@@ -244,6 +252,11 @@
 
         // 页面加载时获取当前配置
         document.addEventListener('DOMContentLoaded', async function() {
+            // 确保不在设置页面进行轮询
+            if (typeof stopProgressPolling === 'function' && window.stopProgressPolling !== stopProgressPolling) {
+                stopProgressPolling();
+            }
+            
             // 获取文件上传配置
             try {
                 const uploadResponse = await fetch('/api/runtime-config');
@@ -272,6 +285,8 @@
                     document.getElementById('pdf_overall_min_timeout_sec').value = runtimeConfig.pdf_overall_min_timeout_sec || 60;
                     // 设置自动删除MD文件的复选框状态
                     document.getElementById('auto_delete_md_files').checked = runtimeConfig.auto_delete_md_files || false;
+                    // 设置质量不达标时重新分析的复选框状态
+                    document.getElementById('enable_retry_on_quality_issue').checked = runtimeConfig.enable_retry_on_quality_issue !== false; // 默认为true
                 }
             } catch (error) {
                 console.error('获取运行时配置失败:', error);
@@ -347,6 +362,7 @@
             config.pdf_overall_min_timeout_sec = parseInt(config.pdf_overall_min_timeout_sec);
             // 获取复选框的值
             config.auto_delete_md_files = document.getElementById('auto_delete_md_files').checked;
+            config.enable_retry_on_quality_issue = document.getElementById('enable_retry_on_quality_issue').checked;
             
             try {
                 const response = await fetch('/api/runtime-config', {

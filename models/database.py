@@ -1,13 +1,13 @@
 #!/usr/bin/env python
 # -*- coding:utf-8 -*-
 #
-#作者           : KingFreeDom
-#创建时间         : 2025-10-03 14:24:39
-#最近一次编辑者      : KingFreeDom
-#最近一次编辑时间     : 2025-10-03 14:24:42
-#文件相对于项目的路径   : \AI_env2\models\database.py
+# 作者           : KingFreeDom
+# 创建时间         : 2025-10-03 14:24:39
+# 最近一次编辑者      : KingFreeDom
+# 最近一次编辑时间     : 2025-10-03 14:24:42
+# 文件相对于项目的路径   : \AI_env2\models\database.py
 #
-#Copyright (c) 2025 by 中车眉山车辆有限公司/KingFreeDom, All Rights Reserved. 
+# Copyright (c) 2025 by 中车眉山车辆有限公司/KingFreeDom, All Rights Reserved.
 #
 from sqlalchemy import (
     create_engine,
@@ -21,11 +21,14 @@ from sqlalchemy import (
     ForeignKey,
 )
 from sqlalchemy.ext.declarative import declarative_base
-from sqlalchemy.orm import sessionmaker, relationship
+from sqlalchemy.orm import sessionmaker, relationship, Mapped, mapped_column
 import datetime
 
 import os
-DATABASE_URL = 'sqlite:///' + os.path.abspath(os.path.join(os.path.dirname(__file__), '..', 'db', 'tender_evaluation.db'))
+
+DATABASE_URL = 'sqlite:///' + os.path.abspath(
+    os.path.join(os.path.dirname(__file__), '..', 'db', 'tender_evaluation.db')
+)
 
 engine = create_engine(DATABASE_URL, connect_args={'check_same_thread': False})
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
@@ -34,17 +37,23 @@ Base = declarative_base()
 
 class TenderProject(Base):
     __tablename__ = 'tender_project'
-    id = Column(Integer, primary_key=True, index=True)
-    project_code = Column(String, unique=True, index=True)
-    name = Column(String, index=True)
-    description = Column(String)
-    tender_file_path = Column(String)
-    scoring_rules_summary = Column(JSON)
-    created_at = Column(DateTime, default=datetime.datetime.utcnow)
-    status = Column(String, default='new')
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    project_code: Mapped[str] = mapped_column(String, unique=True, index=True)
+    name: Mapped[str] = mapped_column(String, index=True)
+    description: Mapped[str] = mapped_column(String)
+    tender_file_path: Mapped[str] = mapped_column(String)
+    scoring_rules_summary: Mapped[dict] = mapped_column(JSON)
+    created_at: Mapped[datetime.datetime] = mapped_column(
+        DateTime, default=datetime.datetime.utcnow
+    )
+    status: Mapped[str] = mapped_column(String, default='new')
     # 添加评标开始和结束时间字段
-    analysis_start_time = Column(DateTime, nullable=True)
-    analysis_end_time = Column(DateTime, nullable=True)
+    analysis_start_time: Mapped[datetime.datetime] = mapped_column(
+        DateTime, nullable=True
+    )
+    analysis_end_time: Mapped[datetime.datetime] = mapped_column(
+        DateTime, nullable=True
+    )
     bid_documents = relationship('BidDocument', back_populates='project')
     analysis_results = relationship('AnalysisResult', back_populates='project')
     scoring_rules = relationship('ScoringRule', back_populates='project')
@@ -53,34 +62,36 @@ class TenderProject(Base):
 
 class BidDocument(Base):
     __tablename__ = 'bid_document'
-    id = Column(Integer, primary_key=True, index=True)
-    project_id = Column(Integer, ForeignKey('tender_project.id'))
-    bidder_name = Column(String)
-    file_path = Column(String)
-    original_filename = Column(String)  # 添加原始文件名字段
-    file_size = Column(Integer)
-    upload_time = Column(DateTime, default=datetime.datetime.utcnow)
-    processing_status = Column(String, default='pending')
-    error_message = Column(String, nullable=True)
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    project_id: Mapped[int] = mapped_column(Integer, ForeignKey('tender_project.id'))
+    bidder_name: Mapped[str] = mapped_column(String)
+    file_path: Mapped[str] = mapped_column(String)
+    original_filename: Mapped[str] = mapped_column(String)  # 添加原始文件名字段
+    file_size: Mapped[int] = mapped_column(Integer)
+    upload_time: Mapped[datetime.datetime] = mapped_column(
+        DateTime, default=datetime.datetime.utcnow
+    )
+    processing_status: Mapped[str] = mapped_column(String, default='pending')
+    error_message: Mapped[str] = mapped_column(String, nullable=True)
 
     # Fields for progress tracking
-    progress_total_rules = Column(Integer, default=0)
-    progress_completed_rules = Column(Integer, default=0)
-    progress_current_rule = Column(String, nullable=True)
+    progress_total_rules: Mapped[int] = mapped_column(Integer, default=0)
+    progress_completed_rules: Mapped[int] = mapped_column(Integer, default=0)
+    progress_current_rule: Mapped[str] = mapped_column(String, nullable=True)
     # Adding partial analysis results field
-    partial_analysis_results = Column(String, nullable=True)
+    partial_analysis_results: Mapped[str] = mapped_column(String, nullable=True)
     # Adding detailed progress information field
-    detailed_progress_info = Column(String, nullable=True)
+    detailed_progress_info: Mapped[str] = mapped_column(String, nullable=True)
     # Adding processing phase field
-    processing_phase = Column(String, nullable=True)
+    processing_phase: Mapped[str] = mapped_column(String, nullable=True)
     # Adding PDF processing failed page record field
-    failed_pages_info = Column(String, nullable=True)
+    failed_pages_info: Mapped[str] = mapped_column(String, nullable=True)
     # Adding price extraction tracking fields
-    price_extraction_attempts = Column(Integer, default=0)
-    price_extraction_error = Column(String, nullable=True)
-    price_extracted = Column(Boolean, default=False)
+    price_extraction_attempts: Mapped[int] = mapped_column(Integer, default=0)
+    price_extraction_error: Mapped[str] = mapped_column(String, nullable=True)
+    price_extracted: Mapped[bool] = mapped_column(Boolean, default=False)
     # Adding OCR retry count field
-    ocr_retry_count = Column(Integer, default=0)
+    ocr_retry_count: Mapped[int] = mapped_column(Integer, default=0)
 
     project = relationship('TenderProject', back_populates='bid_documents')
     analysis_result = relationship(
@@ -90,25 +101,31 @@ class BidDocument(Base):
 
 class AnalysisResult(Base):
     __tablename__ = 'analysis_result'
-    id = Column(Integer, primary_key=True, index=True)
-    project_id = Column(Integer, ForeignKey('tender_project.id'))
-    bid_document_id = Column(Integer, ForeignKey('bid_document.id'))
-    bidder_name = Column(String)
-    total_score = Column(Float)
-    price_score = Column(Float)  # Adding price score field
-    extracted_price = Column(Float) # Extracted bid price
-    detailed_scores = Column(JSON)
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    project_id: Mapped[int] = mapped_column(Integer, ForeignKey('tender_project.id'))
+    bid_document_id: Mapped[int] = mapped_column(Integer, ForeignKey('bid_document.id'))
+    bidder_name: Mapped[str] = mapped_column(String)
+    total_score: Mapped[float] = mapped_column(Float)
+    price_score: Mapped[float] = mapped_column(Float)  # Adding price score field
+    extracted_price: Mapped[float] = mapped_column(Float)  # Extracted bid price
+    detailed_scores: Mapped[dict] = mapped_column(JSON)
     # 添加动态评分项字段，用于存储各评分项的得分
-    dynamic_scores = Column(JSON, default=dict)  # 存储动态评分项得分，key为评分项简称，value为得分
-    analysis_summary = Column(String)
-    analyzed_at = Column(DateTime, default=datetime.datetime.utcnow)
-    scoring_method = Column(String, default='AI')
-    ai_model = Column(String, nullable=True)  # To store the AI model name
-    is_modified = Column(Boolean, default=False)
-    original_scores = Column(JSON)
-    modification_count = Column(Integer, default=0)
-    last_modified_at = Column(DateTime)
-    last_modified_by = Column(String)
+    dynamic_scores: Mapped[dict] = mapped_column(
+        JSON, default=dict
+    )  # 存储动态评分项得分，key为评分项简称，value为得分
+    analysis_summary: Mapped[str] = mapped_column(String)
+    analyzed_at: Mapped[datetime.datetime] = mapped_column(
+        DateTime, default=datetime.datetime.utcnow
+    )
+    scoring_method: Mapped[str] = mapped_column(String, default='AI')
+    ai_model: Mapped[str] = mapped_column(
+        String, nullable=True
+    )  # To store the AI model name
+    is_modified: Mapped[bool] = mapped_column(Boolean, default=False)
+    original_scores: Mapped[dict] = mapped_column(JSON)
+    modification_count: Mapped[int] = mapped_column(Integer, default=0)
+    last_modified_at: Mapped[datetime.datetime] = mapped_column(DateTime)
+    last_modified_by: Mapped[str] = mapped_column(String)
     project = relationship('TenderProject', back_populates='analysis_results')
     bid_document = relationship('BidDocument', back_populates='analysis_result')
     modification_history = relationship(
@@ -118,36 +135,46 @@ class AnalysisResult(Base):
 
 class ScoringRule(Base):
     __tablename__ = 'scoring_rule'
-    id = Column(Integer, primary_key=True, index=True, autoincrement=True)
-    project_id = Column(Integer, ForeignKey('tender_project.id'))
-    Parent_Item_Name = Column(String(100))  # 增加长度以容纳清理后的名称
-    Parent_max_score = Column(Integer)
-    Child_Item_Name = Column(String(100))   # 增加长度以容纳清理后的名称
-    Child_max_score = Column(Integer)
-    description = Column(String(500))       # 增加描述字段长度
-    is_veto = Column(Boolean)
-    is_price_criteria = Column(Boolean)
-    price_formula = Column(String(500))     # 增加价格公式字段长度
-    
+    id: Mapped[int] = mapped_column(
+        Integer, primary_key=True, index=True, autoincrement=True
+    )
+    project_id: Mapped[int] = mapped_column(Integer, ForeignKey('tender_project.id'))
+    Parent_Item_Name: Mapped[str] = mapped_column(
+        String(100)
+    )  # 增加长度以容纳清理后的名称
+    Parent_max_score: Mapped[int] = mapped_column(Integer)
+    Child_Item_Name: Mapped[str] = mapped_column(
+        String(100)
+    )  # 增加长度以容纳清理后的名称
+    Child_max_score: Mapped[int] = mapped_column(Integer)
+    description: Mapped[str] = mapped_column(String(500))  # 增加描述字段长度
+    is_veto: Mapped[bool] = mapped_column(Boolean)
+    is_price_criteria: Mapped[bool] = mapped_column(Boolean)
+    price_formula: Mapped[str] = mapped_column(String(500))  # 增加价格公式字段长度
+
     project = relationship('TenderProject', back_populates='scoring_rules')
 
 
 class ScoreModificationHistory(Base):
     __tablename__ = 'score_modification_history'
-    id = Column(Integer, primary_key=True, index=True)
-    analysis_result_id = Column(Integer, ForeignKey('analysis_result.id'))
-    criteria_name = Column(String)
-    original_score = Column(Float)
-    new_score = Column(Float)
-    original_reason = Column(String)
-    new_reason = Column(String)
-    modification_type = Column(String)
-    modified_by = Column(String)
-    modified_at = Column(DateTime, default=datetime.datetime.utcnow)
-    modification_reason = Column(String)
-    approval_status = Column(String, default='approved')
-    approved_by = Column(String)
-    approved_at = Column(DateTime)
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    analysis_result_id: Mapped[int] = mapped_column(
+        Integer, ForeignKey('analysis_result.id')
+    )
+    criteria_name: Mapped[str] = mapped_column(String)
+    original_score: Mapped[float] = mapped_column(Float)
+    new_score: Mapped[float] = mapped_column(Float)
+    original_reason: Mapped[str] = mapped_column(String)
+    new_reason: Mapped[str] = mapped_column(String)
+    modification_type: Mapped[str] = mapped_column(String)
+    modified_by: Mapped[str] = mapped_column(String)
+    modified_at: Mapped[datetime.datetime] = mapped_column(
+        DateTime, default=datetime.datetime.utcnow
+    )
+    modification_reason: Mapped[str] = mapped_column(String)
+    approval_status: Mapped[str] = mapped_column(String, default='approved')
+    approved_by: Mapped[str] = mapped_column(String)
+    approved_at: Mapped[datetime.datetime] = mapped_column(DateTime)
     analysis_result = relationship(
         'AnalysisResult', back_populates='modification_history'
     )
@@ -155,14 +182,16 @@ class ScoreModificationHistory(Base):
 
 class ProjectAuditLog(Base):
     __tablename__ = 'project_audit_log'
-    id = Column(Integer, primary_key=True, index=True)
-    project_id = Column(Integer, ForeignKey('tender_project.id'))
-    operation_type = Column(String)
-    operation_details = Column(JSON)
-    operator = Column(String)
-    operation_time = Column(DateTime, default=datetime.datetime.utcnow)
-    ip_address = Column(String)
-    user_agent = Column(String)
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    project_id: Mapped[int] = mapped_column(Integer, ForeignKey('tender_project.id'))
+    operation_type: Mapped[str] = mapped_column(String)
+    operation_details: Mapped[dict] = mapped_column(JSON)
+    operator: Mapped[str] = mapped_column(String)
+    operation_time: Mapped[datetime.datetime] = mapped_column(
+        DateTime, default=datetime.datetime.utcnow
+    )
+    ip_address: Mapped[str] = mapped_column(String)
+    user_agent: Mapped[str] = mapped_column(String)
     project = relationship('TenderProject', back_populates='audit_logs')
 
 

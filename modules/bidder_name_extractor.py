@@ -679,7 +679,11 @@ def extract_bidder_name_from_file(file_path: str) -> str:
             cached_result = _bidder_name_cache[cache_key]
             logger.info(f'从缓存获取投标人名称: {cached_result}')
             # 确保返回的不是None或空字符串
-            if cached_result is not None and cached_result.strip():
+            if (
+                cached_result is not None
+                and cached_result.strip()
+                and cached_result != '未提取'
+            ):
                 return cached_result
             else:
                 # 如果缓存中的结果是None或空字符串，继续执行正常流程
@@ -743,6 +747,9 @@ def extract_bidder_name_from_file(file_path: str) -> str:
         # 如果所有方法都失败，返回文件名作为备用方案
         filename = os.path.basename(file_path)
         bidder_name = os.path.splitext(filename)[0].replace('.', '')
+        # 确保投标人名称不为空
+        if not bidder_name or not bidder_name.strip():
+            bidder_name = '未知投标方'
         logger.warning(
             f'无法从文件内容提取投标人名称，使用文件名作为备用: {bidder_name}'
         )
@@ -755,6 +762,9 @@ def extract_bidder_name_from_file(file_path: str) -> str:
         try:
             filename = os.path.basename(file_path)
             bidder_name = os.path.splitext(filename)[0].replace('.', '')
+            # 确保投标人名称不为空
+            if not bidder_name or not bidder_name.strip():
+                bidder_name = '未知投标方'
             logger.warning(f'提取出错，使用文件名作为备用: {bidder_name}')
             return bidder_name
         except:

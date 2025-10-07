@@ -1,5 +1,19 @@
+// 全局变量
+let currentProjectId = null;
+let pollingActive = false;
+let progressInterval = null;
+
 // 轮询分析进度
 async function pollAnalysisStatus (projectId) {
+    // 设置当前项目ID
+    currentProjectId = projectId;
+
+    // 检查是否应该继续轮询
+    if (!shouldContinuePolling()) {
+        pollingActive = false;
+        return;
+    }
+
     try {
         const response = await fetch(`/api/projects/${projectId}/progress`);
         if (!response.ok) {
@@ -16,7 +30,10 @@ async function pollAnalysisStatus (projectId) {
         if (data.project_status === 'completed' || data.project_status === 'completed_with_errors' ||
             data.processing_status === 'completed' || data.processing_status === 'completed_with_errors') {
             // 分析完成，获取结果
-            progressText.innerHTML = '处理完成，正在获取结果...';
+            const progressText = document.getElementById('progressText');
+            if (progressText) {
+                progressText.innerHTML = '处理完成，正在获取结果...';
+            }
             await new Promise(resolve => setTimeout(resolve, 300));
 
             // 首先尝试获取动态汇总数据
@@ -25,6 +42,7 @@ async function pollAnalysisStatus (projectId) {
                 if (summaryResponse.ok) {
                     const summaryData = await summaryResponse.json();
                     displaySummary(summaryData);
+                    pollingActive = false;
                     return; // 结束轮询
                 }
             } catch (summaryError) {
@@ -35,28 +53,84 @@ async function pollAnalysisStatus (projectId) {
             const resultResponse = await fetch(`/api/projects/${projectId}/results`);
             const resultData = await resultResponse.json();
             displayResults(resultData);
+            pollingActive = false;
             return; // 结束轮询
         }
 
-        // 1秒后再次检查
-        await new Promise(resolve => setTimeout(resolve, 1000));
-        await pollAnalysisStatus(projectId); // 继续轮询
+        // 2秒后再次检查
+        await new Promise(resolve => setTimeout(resolve, 2000));
+
+        // 检查是否应该继续轮询
+        if (shouldContinuePolling()) {
+            await pollAnalysisStatus(projectId); // 继续轮询
+        } else {
+            pollingActive = false;
+        }
     } catch (error) {
         console.error('Error:', error);
         alert('分析过程中发生错误: ' + error.message);
+        pollingActive = false;
+    }
+}
+
+// 检查是否应该继续轮询
+function shouldContinuePolling () {
+    // 检查是否在正确的页面（动态进度界面）
+    const progressSection = document.getElementById('progressSection');
+
+    // 只有在进度界面显示时才继续轮询
+    return progressSection &&
+        progressSection.style.display !== 'none' &&
+        document.visibilityState !== 'hidden';
+}
+
+// 停止轮询进度
+function stopProgressPolling () {
+    if (progressInterval) {
+        clearInterval(progressInterval);
+        progressInterval = null;
+    }
+    pollingActive = false;
+}
+
+// 开始轮询进度
+function startProgressPolling () {
+    // 先停止现有的轮询
+    if (typeof stopProgressPolling === 'function' && window.stopProgressPolling !== stopProgressPolling) {
+        stopProgressPolling();
+    } else if (progressInterval) {
+        clearInterval(progressInterval);
+        progressInterval = null;
+        pollingActive = false;
+    }
+
+    // 检查是否应该启动轮询
+    const progressSection = document.getElementById('progressSection');
+    if (progressSection && progressSection.style.display !== 'none' && currentProjectId) {
+        pollingActive = true;
+        // 调用index.html中的函数，但要确保不是递归调用
+        if (typeof window.startProgressPolling === 'function' && window.startProgressPolling !== startProgressPolling) {
+            window.startProgressPolling();
+        }
     }
 }
 
 // 更新进度显示 - 实现每个投标文件的动态进展
 function updateProgress (data) {
     // 确保详细进度容器存在
+    let detailedProgressContainer = document.getElementById('detailedProgressContainer');
+    const progressBar = document.getElementById('progressFill'); // 在index.html中是progressFill
+    const progressText = document.getElementById('progressText');
+
     if (!detailedProgressContainer) {
         // 创建详细进度显示区域
-        const progressContainer = progressBar.parentElement;
-        detailedProgressContainer = document.createElement('div');
-        detailedProgressContainer.id = 'detailedProgressContainer';
-        detailedProgressContainer.className = 'mt-3';
-        progressContainer.parentNode.insertBefore(detailedProgressContainer, progressContainer.nextSibling);
+        const progressContainer = document.getElementById('progressSection');
+        if (progressContainer) {
+            detailedProgressContainer = document.createElement('div');
+            detailedProgressContainer.id = 'detailedProgressContainer';
+            detailedProgressContainer.className = 'mt-3';
+            progressContainer.appendChild(detailedProgressContainer);
+        }
     }
 
     // 更新总体进度
@@ -77,8 +151,11 @@ function updateProgress (data) {
     }
 
     // 更新总体进度条
-    progressBar.style.width = `${overallProgress}%`;
-    progressBar.setAttribute('aria-valuenow', overallProgress);
+    if (progressBar) {
+        // 确保进度条宽度正确设置
+        progressBar.style.width = `${overallProgress}%`;
+        progressBar.setAttribute('aria-valuenow', overallProgress);
+    }
 
     // 显示总体进度文本
     let phaseInfo = '';
@@ -97,13 +174,21 @@ function updateProgress (data) {
         }
     }
 
-    progressText.textContent = `总体进度: ${data.processing_status} (${completedBids}/${totalBids} 个文件完成)${phaseInfo}`;
+    if (progressText) {
+        progressText.textContent = `总体进度: ${data.processing_status} (${completedBids}/${totalBids} 个文件完成)${phaseInfo}`;
+    }
 
     // 显示每个投标文件的详细进度
-    if (data.document_statuses) {
+    // 过滤掉招标文件，只显示投标文件的进度
+    if (data.document_statuses && detailedProgressContainer) {
+        // 过滤掉招标文件，只保留投标文件
+        const bidDocuments = data.document_statuses.filter(doc =>
+            doc.file_path && !doc.file_path.includes('tender') && !doc.file_path.includes('招标')
+        );
+
         let detailedHtml = '<div class="row">';
 
-        data.document_statuses.forEach((bid, index) => {
+        bidDocuments.forEach((bid, index) => {
             // 计算单个文件的进度
             let bidProgress = 0;
             if (bid.progress_total > 0) {
@@ -157,30 +242,30 @@ function updateProgress (data) {
 
             // 构建单个文件的进度框架
             detailedHtml += `
-                    <div class="col-md-6 col-lg-4 mb-4">
-                        <div class="card h-100">
-                            <div class="card-header bg-primary text-white">
-                                <h6 class="mb-0">${displayTitle}</h6>
+                    <div class="col-xl-3 col-lg-4 col-md-6 col-sm-12 mb-4">
+                        <div class="card h-100 progress-card">
+                            <div class="card-header text-white py-2" style="display: flex; align-items: center;">
+                                <h6 class="mb-0 text-truncate" style="font-size: 0.9rem;" title="${displayTitle}">${displayTitle}</h6>
                             </div>
-                            <div class="card-body">
+                            <div class="card-body py-2">
                                 <div class="d-flex justify-content-between align-items-center mb-2">
-                                    <span class="fw-bold ${statusClass}">${statusText}</span>
-                                    <span class="fw-bold">${bidProgress.toFixed(1)}%</span>
+                                    <span class="fw-bold ${statusClass}" style="font-size: 0.8rem;">${statusText}</span>
+                                    <span class="fw-bold" style="font-size: 0.8rem;">${bidProgress.toFixed(1)}%</span>
                                 </div>
-                                <div class="progress mb-3" style="height: 20px;">
+                                <div class="progress progress-sm mb-2" style="width: 100%;">
                                     <div class="progress-bar ${statusBgClass}" 
                                          role="progressbar" 
-                                         style="width: ${bidProgress}%;" 
+                                         style="width: ${bidProgress}%; transition: width 0.3s ease;" 
                                          aria-valuenow="${bidProgress}" 
                                          aria-valuemin="0" 
                                          aria-valuemax="100">
                                     </div>
                                 </div>
-                                <div class="small text-muted mb-2">
+                                <div class="small text-muted mb-1" style="font-size: 0.75rem;">
                                     规则进度: ${bid.progress_completed || 0}/${bid.progress_total || 0}
                                 </div>
-                                ${bid.current_rule ? `<div class="small mb-2"><strong>当前规则:</strong> ${bid.current_rule}</div>` : ''}
-                                ${bid.error_message ? `<div class="small text-danger"><strong>错误:</strong> ${bid.error_message}</div>` : ''}
+                                ${bid.current_rule ? `<div class="small mb-1" style="font-size: 0.75rem;"><strong>当前规则:</strong> <span class="text-primary">${bid.current_rule}</span></div>` : ''}
+                                ${bid.error_message ? `<div class="small text-danger" style="font-size: 0.75rem;"><strong>错误:</strong> ${bid.error_message}</div>` : ''}
                             </div>
                         </div>
                     </div>
@@ -194,8 +279,17 @@ function updateProgress (data) {
 
 // 汇总结果显示
 function displaySummary (summaryData) {
-    progressBar.parentElement.style.display = 'none';
-    progressText.textContent = '';
+    const progressSection = document.getElementById('progressSection');
+    const progressText = document.getElementById('progressText');
+    const detailedProgressContainer = document.getElementById('detailedProgressContainer');
+    const resultArea = document.getElementById('result');
+
+    if (progressSection) {
+        progressSection.style.display = 'none';
+    }
+    if (progressText) {
+        progressText.textContent = '';
+    }
 
     // 隐藏详细进度显示
     if (detailedProgressContainer) {
@@ -204,11 +298,14 @@ function displaySummary (summaryData) {
 
     // 错误检查
     if (summaryData.error) {
-        resultArea.innerHTML = `
+        if (resultArea) {
+            resultArea.innerHTML = `
                 <div class="alert alert-danger">
                     汇总失败: ${summaryData.error}
                 </div>
             `;
+            resultArea.style.display = 'block';
+        }
         return;
     }
 
@@ -236,8 +333,30 @@ function displaySummary (summaryData) {
         `;
 
     // 处理汇总数据
-    if (summaryData.summary && summaryData.summary.length > 0) {
-        summaryData.summary.forEach((item, index) => {
+    let summaryItems = [];
+
+    // 检查是否是动态汇总数据格式
+    if (summaryData.rows) {
+        // 动态汇总数据格式
+        summaryItems = summaryData.rows.map(row => ({
+            bidder_name: row.bidder_name,
+            bid_price: null, // 动态汇总数据中没有这个字段
+            benchmark_price: null, // 动态汇总数据中没有这个字段
+            price_score: row.price_score,
+            technical_score: null, // 动态汇总数据中没有这个字段
+            total_score: row.total_score,
+            rank: row.rank
+        }));
+    } else if (summaryData.summary) {
+        // 普通汇总数据格式
+        summaryItems = summaryData.summary;
+    }
+
+    if (summaryItems && summaryItems.length > 0) {
+        summaryItems.forEach((item, index) => {
+            // 如果没有排名，根据排序位置生成排名
+            const rank = item.rank || (index + 1);
+
             html += `
                     <tr>
                         <td>${item.bidder_name || 'N/A'}</td>
@@ -246,7 +365,7 @@ function displaySummary (summaryData) {
                         <td>${item.price_score ? item.price_score.toFixed(2) : 'N/A'}</td>
                         <td>${item.technical_score ? item.technical_score.toFixed(2) : 'N/A'}</td>
                         <td>${item.total_score ? item.total_score.toFixed(2) : 'N/A'}</td>
-                        <td>${item.rank || 'N/A'}</td>
+                        <td>${rank}</td>
                     </tr>
                 `;
         });
@@ -262,13 +381,25 @@ function displaySummary (summaryData) {
             </div>
         `;
 
-    resultArea.innerHTML = html;
+    if (resultArea) {
+        resultArea.innerHTML = html;
+        resultArea.style.display = 'block';
+    }
 }
 
 // 分析结果显示
 function displayResults (results) {
-    progressBar.parentElement.style.display = 'none';
-    progressText.textContent = '';
+    const progressSection = document.getElementById('progressSection');
+    const progressText = document.getElementById('progressText');
+    const detailedProgressContainer = document.getElementById('detailedProgressContainer');
+    const resultArea = document.getElementById('result');
+
+    if (progressSection) {
+        progressSection.style.display = 'none';
+    }
+    if (progressText) {
+        progressText.textContent = '';
+    }
 
     // 隐藏详细进度显示
     if (detailedProgressContainer) {
@@ -277,11 +408,14 @@ function displayResults (results) {
 
     // 错误检查
     if (results.error) {
-        resultArea.innerHTML = `
+        if (resultArea) {
+            resultArea.innerHTML = `
                 <div class="alert alert-danger">
                     分析失败: ${results.error}
                 </div>
             `;
+            resultArea.style.display = 'block';
+        }
         return;
     }
 
@@ -342,5 +476,9 @@ function displayResults (results) {
     });
 
     html += '</div></div>';
-    resultArea.innerHTML = html;
+
+    if (resultArea) {
+        resultArea.innerHTML = html;
+        resultArea.style.display = 'block';
+    }
 }

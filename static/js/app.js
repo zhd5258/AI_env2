@@ -358,13 +358,20 @@ document.addEventListener('DOMContentLoaded', function () {
 
     function updateProgressDisplay (data) {
         let overallProgress = 0;
-        let totalBids = data.document_statuses ? data.document_statuses.length : 0;
+        // 过滤掉招标文件，只计算投标文件的进度
+        let bidDocuments = [];
+        if (data.document_statuses) {
+            bidDocuments = data.document_statuses.filter(doc =>
+                doc.file_path && !doc.file_path.includes('tender') && !doc.file_path.includes('招标')
+            );
+        }
+        let totalBids = bidDocuments.length;
         let completedBids = 0;
 
         detailedProgress.innerHTML = ''; // Clear previous entries
 
-        if (data.document_statuses) {
-            data.document_statuses.forEach(bid => {
+        if (bidDocuments) {
+            bidDocuments.forEach(bid => {
                 let bidProgress = bid.progress_total > 0 ? (bid.progress_completed / bid.progress_total * 100) : 0;
                 if (bid.processing_status === 'completed') {
                     completedBids++;
@@ -382,8 +389,8 @@ document.addEventListener('DOMContentLoaded', function () {
 
         // 显示更详细的处理阶段信息
         let phaseInfo = '';
-        if (data.document_statuses && data.document_statuses.length > 0) {
-            const phases = data.document_statuses.map(doc => doc.processing_phase).filter(phase => phase);
+        if (bidDocuments && bidDocuments.length > 0) {
+            const phases = bidDocuments.map(doc => doc.processing_phase).filter(phase => phase);
             if (phases.length > 0) {
                 // 统计各阶段的文件数量
                 const phaseCounts = {};
@@ -449,8 +456,8 @@ document.addEventListener('DOMContentLoaded', function () {
                     <span>${statusIcon}${bid.bidder_name}</span>
                     <span>${progress.toFixed(1)}%</span>
                 </div>
-                <div class="progress" style="height: 20px;">
-                    <div class="progress-bar ${statusClass}" role="progressbar" style="width: ${progress}%" aria-valuenow="${progress}" aria-valuemin="0" aria-valuemax="100">
+                <div class="progress" style="height: 20px; width: 100%;">
+                    <div class="progress-bar ${statusClass}" role="progressbar" style="width: ${progress}%; transition: width 0.3s ease;" aria-valuenow="${progress}" aria-valuemin="0" aria-valuemax="100">
                         ${statusText}
                     </div>
                 </div>
@@ -511,7 +518,36 @@ document.addEventListener('DOMContentLoaded', function () {
 
         // 获取动态汇总表数据
         fetch(`/api/projects/${projectId}/dynamic-summary`)
-            .then(response => response.json())
+            .then(response => {
+                if (!response.ok) {
+                    throw new Error(`HTTP error! status: ${response.status}`);
+                }
+                return response.json();
+            })
+            .then(summaryData => {
+                // 如果获取动态汇总数据失败，尝试获取普通汇总数据
+                if (summaryData.error) {
+                    console.warn('动态汇总数据获取失败，尝试获取普通汇总数据');
+                    return fetch(`/api/projects/${projectId}/summary`)
+                        .then(response => response.json())
+                        .then(fallbackData => {
+                            // 如果普通汇总数据也失败，构造兼容的数据格式
+                            if (fallbackData.error) {
+                                console.warn('普通汇总数据获取失败，尝试构造兼容格式');
+                                return fetch(`/api/projects/${projectId}/results`)
+                                    .then(response => response.json())
+                                    .then(resultsData => {
+                                        return {
+                                            summary: resultsData.results || [],
+                                            project_name: resultsData.project_name || '未知项目'
+                                        };
+                                    });
+                            }
+                            return fallbackData;
+                        });
+                }
+                return summaryData;
+            })
             .then(summaryData => {
                 // 2. Build Header HTML (双层表头)
                 let headerTop = '<tr>';
@@ -522,7 +558,27 @@ document.addEventListener('DOMContentLoaded', function () {
                 // 用于跟踪所有子项标题，以便在数据行中按顺序查找
                 const allChildHeaders = [];
 
-                if (summaryData && summaryData.scoring_items) {
+                // 使用动态生成的表头数据
+                if (summaryData && summaryData.header_rows) {
+                    // 第一行表头（父项）
+                    const headerTopRow = summaryData.header_rows[0] || [];
+                    // 第二行表头（子项）
+                    const headerBottomRow = summaryData.header_rows[1] || [];
+
+                    // 处理第一行表头
+                    headerTopRow.forEach(headerCell => {
+                        const colspan = headerCell.colspan ? `colspan="${headerCell.colspan}"` : '';
+                        const rowspan = headerCell.rowspan ? `rowspan="${headerCell.rowspan}"` : '';
+                        headerTop += `<th ${colspan} ${rowspan} class="text-center">${headerCell.name}</th>`;
+                    });
+
+                    // 处理第二行表头
+                    headerBottomRow.forEach(headerCell => {
+                        headerBottom += `<th>${headerCell.name}</th>`;
+                        allChildHeaders.push(headerCell.name);
+                    });
+                } else if (summaryData && summaryData.scoring_items) {
+                    // 降级到旧的处理方式
                     for (const [parentName, children] of Object.entries(summaryData.scoring_items)) {
                         if (children && children.length > 0) {
                             // 顶层父项列合并（只显示父项名称，不显示分值）
@@ -596,51 +652,60 @@ document.addEventListener('DOMContentLoaded', function () {
                         }
                     }
 
+                    // 如果没有找到评分数据，尝试从其他字段获取
+                    if (scoresMap.size === 0 && result.scores) {
+                        // 处理后端返回的scores数组
+                        if (Array.isArray(result.scores)) {
+                            result.scores.forEach((score, index) => {
+                                const childHeader = allChildHeaders[index];
+                                if (childHeader && score !== undefined && score !== null) {
+                                    scoresMap.set(childHeader, typeof score === 'number' ? score : parseFloat(score) || 0);
+                                }
+                            });
+                        }
+                    }
+
                     // 按顺序添加子项得分
                     allChildHeaders.forEach(childName => {
                         const score = scoresMap.get(childName);
-                        row += `<td>${score !== undefined && score !== null ? parseFloat(score).toFixed(2) : '—'}</td>`;
+                        const displayScore = score !== undefined ? score.toFixed(2) : 'N/A';
+                        row += `<td>${displayScore}</td>`;
                     });
 
-                    // 添加价格分
-                    const priceScore = result.price_score !== undefined && result.price_score !== null ?
-                        parseFloat(result.price_score).toFixed(2) : '—';
-                    row += `<td>${priceScore}</td>`;
-
-                    // 添加总分
-                    const totalScore = result.total_score !== undefined && result.total_score !== null ?
-                        parseFloat(result.total_score).toFixed(2) : '—';
-                    row += `<td><strong>${totalScore}</strong></td>`;
+                    // 添加价格分和总分
+                    row += `<td>${result.price_score !== undefined ? result.price_score.toFixed(2) : 'N/A'}</td>`;
+                    row += `<td>${result.total_score !== undefined ? result.total_score.toFixed(2) : 'N/A'}</td>`;
 
                     row += '</tr>';
                     return row;
                 });
 
-                resultArea.innerHTML = `
+                // 4. Build Complete HTML
+                let html = `
                     <div class="card">
                         <div class="card-header">
-                            <div class="d-flex justify-content-between align-items-center">
-                                <h3><i class="fas fa-poll me-2"></i>分析结果</h3>
-                                <div class="d-flex gap-2">
-                                    <button class="btn btn-primary" onclick="exportToExcel(${projectId})">
-                                        <i class="fas fa-file-excel me-1"></i>导出Excel
-                                    </button>
-                                    <button class="btn btn-success" onclick="exportToWord(${projectId})">
-                                        <i class="fas fa-file-word me-1"></i>导出Word
-                                    </button>
-                                </div>
+                            <h3 class="card-title">
+                                <i class="fas fa-chart-bar me-2"></i>评标结果汇总表
+                                <small class="text-muted ms-2">(AI模型: ${modelInfo})</small>
+                            </h3>
+                            <div class="card-tools">
+                                <button class="btn btn-sm btn-outline-primary me-2" id="exportExcelBtn">
+                                    <i class="fas fa-file-excel me-1"></i>导出Excel
+                                </button>
+                                <button class="btn btn-sm btn-outline-info" id="viewDetailsBtn">
+                                    <i class="fas fa-info-circle me-1"></i>查看详情
+                                </button>
                             </div>
-                            <small class="text-muted">AI模型: ${modelInfo}</small>
                         </div>
                         <div class="card-body">
                             <div class="table-responsive">
-                                <table class="table table-bordered table-hover">
-                                    <thead class="table-dark align-middle text-center">
+                                <table class="table table-bordered table-hover summary-table">
+                                    <thead class="table-dark">
                                         ${headerTop}
                                         ${headerBottom}
                                     </thead>
-                                    <tbody class="text-center">
-                                        ${tableRows}
+                                    <tbody>
+                                        ${tableRows.join('')}
                                     </tbody>
                                 </table>
                             </div>
@@ -648,7 +713,13 @@ document.addEventListener('DOMContentLoaded', function () {
                     </div>
                 `;
 
-                // 添加事件监听器用于编辑投标方名称
+                resultArea.innerHTML = html;
+
+                // 添加事件监听器
+                document.getElementById('exportExcelBtn').addEventListener('click', () => exportToExcel(results, summaryData));
+                document.getElementById('viewDetailsBtn').addEventListener('click', () => showResultDetails(results, rules));
+
+                // 添加编辑投标方名称按钮的事件监听器
                 document.querySelectorAll('.edit-bidder-name').forEach(button => {
                     button.addEventListener('click', function () {
                         const bidId = this.getAttribute('data-bid');
@@ -658,46 +729,166 @@ document.addEventListener('DOMContentLoaded', function () {
                 });
             })
             .catch(error => {
-                console.error("获取动态汇总表数据时出错:", error);
-                // 即使动态汇总表数据获取失败，也要显示结果
-                displaySimpleResults(results);
-                // resultArea.innerHTML = `<div class="alert alert-danger">获取动态汇总表数据失败: ${error.message}</div>`;
+                console.error('获取动态汇总数据失败:', error);
+                resultArea.innerHTML = `<div class="alert alert-danger">获取动态汇总数据失败: ${error.message}</div>`;
             });
     }
 
     function displaySimpleResults (results) {
-        let tableRows = results.map((result, index) => `
-            <tr>
-                <td><span class="badge bg-primary rounded-pill">${index + 1}</span></td>
-                <td>${result.bidder_name}</td>
-                <td>${(result.total_score || 0).toFixed(2)}</td>
-            </tr>
-        `).join('');
-
-        resultArea.innerHTML = `
+        let html = `
             <div class="card">
-                <div class="card-header"><h3><i class="fas fa-poll me-2"></i>分析结果</h3></div>
+                <div class="card-header">
+                    <h3 class="card-title"><i class="fas fa-chart-bar me-2"></i>评标结果</h3>
+                </div>
                 <div class="card-body">
                     <div class="table-responsive">
-                        <table class="table table-striped table-hover">
+                        <table class="table table-bordered table-hover">
                             <thead class="table-dark">
                                 <tr>
                                     <th>排名</th>
                                     <th>投标人</th>
                                     <th>总分</th>
+                                    <th>操作</th>
                                 </tr>
                             </thead>
                             <tbody>
-                                ${tableRows}
+        `;
+
+        results.forEach((result, index) => {
+            html += `
+                <tr>
+                    <td>${index + 1}</td>
+                    <td>${result.bidder_name || 'N/A'}</td>
+                    <td>${result.total_score ? result.total_score.toFixed(2) : 'N/A'}</td>
+                    <td>
+                        <button class="btn btn-sm btn-outline-primary view-details-btn" data-result='${JSON.stringify(result)}'>
+                            <i class="fas fa-eye me-1"></i>查看详情
+                        </button>
+                    </td>
+                </tr>
+            `;
+        });
+
+        html += `
                             </tbody>
                         </table>
                     </div>
                 </div>
             </div>
         `;
+
+        resultArea.innerHTML = html;
+
+        // 添加查看详情按钮事件监听器
+        document.querySelectorAll('.view-details-btn').forEach(button => {
+            button.addEventListener('click', function () {
+                const result = JSON.parse(this.getAttribute('data-result'));
+                showSimpleResultDetails(result);
+            });
+        });
     }
 
-    function showResultDetails (resultData) {
+    function showSimpleResultDetails (result) {
+        const modalHtml = `
+            <div class="modal fade" id="simpleResultDetailsModal" tabindex="-1" aria-labelledby="simpleResultDetailsLabel" aria-hidden="true">
+                <div class="modal-dialog modal-lg">
+                    <div class="modal-content">
+                        <div class="modal-header">
+                            <h5 class="modal-title" id="simpleResultDetailsLabel">评标详情 - ${result.bidder_name}</h5>
+                            <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+                        </div>
+                        <div class="modal-body">
+                            <div class="mb-3">
+                                <h6>总分: ${result.total_score ? result.total_score.toFixed(2) : 'N/A'}</h6>
+                            </div>
+                            <div class="table-responsive">
+                                <table class="table table-bordered">
+                                    <thead class="table-light">
+                                        <tr>
+                                            <th>评分项</th>
+                                            <th>得分</th>
+                                            <th>说明</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody>
+        `;
+
+        // 处理详细评分
+        const detailedScores = Array.isArray(result.detailed_scores) ? result.detailed_scores : [];
+        if (detailedScores.length > 0) {
+            detailedScores.forEach(score => {
+                modalHtml += `
+                    <tr>
+                        <td>${score.criteria_name || score.Child_Item_Name || 'N/A'}</td>
+                        <td>${score.score ? score.score.toFixed(2) : 'N/A'}</td>
+                        <td>${score.reason || 'N/A'}</td>
+                    </tr>
+                `;
+            });
+        } else {
+            modalHtml += '<tr><td colspan="3">无详细评分数据</td></tr>';
+        }
+
+        modalHtml += `
+                                    </tbody>
+                                </table>
+                            </div>
+                        </div>
+                        <div class="modal-footer">
+                            <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">关闭</button>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        `;
+
+        // 添加模态框到页面
+        document.body.insertAdjacentHTML('beforeend', modalHtml);
+
+        // 显示模态框
+        const modalElement = document.getElementById('simpleResultDetailsModal');
+        const modal = new bootstrap.Modal(modalElement);
+        modal.show();
+
+        // 模态框关闭后清理
+        modalElement.addEventListener('hidden.bs.modal', function () {
+            document.body.removeChild(modalElement);
+        });
+    }
+
+    async function exportToExcel (results, summaryData) {
+        try {
+            const response = await fetch('/export-results', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json'
+                },
+                body: JSON.stringify({ results, summary_data: summaryData })
+            });
+
+            if (!response.ok) {
+                throw new Error('导出失败');
+            }
+
+            const blob = await response.blob();
+            const url = window.URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = `评标结果_${new Date().toISOString().slice(0, 10)}.xlsx`;
+            document.body.appendChild(a);
+            a.click();
+            document.body.removeChild(a);
+            window.URL.revokeObjectURL(url);
+        } catch (error) {
+            console.error('导出Excel失败:', error);
+            alert('导出Excel失败: ' + (error.message || error));
+        }
+    }
+
+    function showResultDetails (results, rules) {
+        // 获取第一个结果作为示例数据
+        const resultData = results[0];
+
         // 更新模态框内容
         renderPriceChart(resultData);
         renderDetailedScores(resultData);
@@ -713,14 +904,12 @@ document.addEventListener('DOMContentLoaded', function () {
         }
 
         showModal();
-    });
+    }
 
-});
-
-// 编辑投标方名称函数
-async function editBidderName (bidId, currentName) {
-    // 创建模态框HTML
-    const modalHtml = `
+    // 编辑投标方名称函数
+    async function editBidderName (bidId, currentName) {
+        // 创建模态框HTML
+        const modalHtml = `
         <div class="modal fade" id="editBidderNameModal" tabindex="-1" aria-labelledby="editBidderNameModalLabel" aria-hidden="true">
             <div class="modal-dialog">
                 <div class="modal-content">
@@ -747,75 +936,159 @@ async function editBidderName (bidId, currentName) {
         </div>
     `;
 
-    // 添加模态框到页面
-    document.body.insertAdjacentHTML('beforeend', modalHtml);
+        // 添加模态框到页面
+        document.body.insertAdjacentHTML('beforeend', modalHtml);
 
-    // 显示模态框
-    const modalElement = document.getElementById('editBidderNameModal');
-    const modal = new bootstrap.Modal(modalElement);
-    modal.show();
+        // 显示模态框
+        const modalElement = document.getElementById('editBidderNameModal');
+        const modal = new bootstrap.Modal(modalElement);
+        modal.show();
 
-    // 保存按钮事件监听器
-    document.getElementById('saveBidderNameBtn').addEventListener('click', async function () {
-        const newName = document.getElementById('newBidderName').value.trim();
-        const feedbackElement = document.getElementById('editNameFeedback');
+        // 保存按钮事件监听器
+        document.getElementById('saveBidderNameBtn').addEventListener('click', async function () {
+            const newName = document.getElementById('newBidderName').value.trim();
+            const feedbackElement = document.getElementById('editNameFeedback');
 
-        // 简单验证
-        if (newName.length < 2) {
-            feedbackElement.textContent = '名称长度不能少于2个字符';
-            return;
-        }
-
-        // 检查是否包含公司关键词
-        const companyKeywords = ['公司', '有限', '股份', '集团', '厂', '院', '所', '中心'];
-        if (!companyKeywords.some(keyword => newName.includes(keyword))) {
-            feedbackElement.textContent = '名称必须包含公司关键词，如"公司"、"有限"、"股份"、"集团"等';
-            return;
-        }
-
-        try {
-            // 发送请求更新投标方名称
-            const response = await fetch(`/api/bids/${bidId}/name`, {
-                method: 'PATCH',
-                headers: {
-                    'Content-Type': 'application/json'
-                },
-                body: JSON.stringify({ new_name: newName })
-            });
-
-            if (!response.ok) {
-                const errorData = await response.json();
-                throw new Error(errorData.error || '更新失败');
+            // 简单验证
+            if (newName.length < 2) {
+                feedbackElement.textContent = '名称长度不能少于2个字符';
+                return;
             }
 
-            const result = await response.json();
+            // 检查是否包含公司关键词
+            const companyKeywords = ['公司', '有限', '股份', '集团', '厂', '院', '所', '中心'];
+            if (!companyKeywords.some(keyword => newName.includes(keyword))) {
+                feedbackElement.textContent = '名称必须包含公司关键词，如"公司"、"有限"、"股份"、"集团"等';
+                return;
+            }
 
-            // 更新表格中的显示
-            const nameElements = document.querySelectorAll(`.edit-bidder-name[data-bid="${bidId}"]`);
-            nameElements.forEach(element => {
-                const nameSpan = element.closest('td').querySelector('.bidder-name-text');
-                if (nameSpan) {
-                    const truncatedName = newName.length > 10 ? newName.substring(0, 10) + '...' : newName;
-                    nameSpan.textContent = truncatedName;
-                    nameSpan.setAttribute('title', newName);
-                    // 更新按钮的data-current-name属性
-                    element.setAttribute('data-current-name', newName);
+            try {
+                // 发送请求更新投标方名称
+                const response = await fetch(`/api/bids/${bidId}/name`, {
+                    method: 'PATCH',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({ new_name: newName })
+                });
+
+                if (!response.ok) {
+                    const errorData = await response.json();
+                    throw new Error(errorData.error || '更新失败');
                 }
-            });
 
-            // 关闭模态框
-            modal.hide();
+                const result = await response.json();
 
-            // 显示成功消息
-            alert('投标方名称更新成功');
-        } catch (error) {
-            console.error('更新投标方名称失败:', error);
-            feedbackElement.textContent = '更新失败: ' + (error.message || '未知错误');
+                // 更新表格中的显示
+                const nameElements = document.querySelectorAll(`.edit-bidder-name[data-bid="${bidId}"]`);
+                nameElements.forEach(element => {
+                    const nameSpan = element.closest('td').querySelector('.bidder-name-text');
+                    if (nameSpan) {
+                        const truncatedName = newName.length > 10 ? newName.substring(0, 10) + '...' : newName;
+                        nameSpan.textContent = truncatedName;
+                        nameSpan.setAttribute('title', newName);
+                        // 更新按钮的data-current-name属性
+                        element.setAttribute('data-current-name', newName);
+                    }
+                });
+
+                // 关闭模态框
+                modal.hide();
+
+                // 显示成功消息
+                alert('投标方名称更新成功');
+            } catch (error) {
+                console.error('更新投标方名称失败:', error);
+                feedbackElement.textContent = '更新失败: ' + (error.message || '未知错误');
+            }
+        });
+
+        // 模态框关闭后移除DOM元素
+        modalElement.addEventListener('hidden.bs.modal', function () {
+            document.body.removeChild(modalElement);
+        });
+    }
+
+    function renderPriceChart (resultData) {
+        const ctx = document.getElementById('priceChart');
+        if (!ctx) return;
+
+        // 清除之前的图表实例
+        if (window.priceChartInstance) {
+            window.priceChartInstance.destroy();
         }
-    });
 
-    // 模态框关闭后移除DOM元素
-    modalElement.addEventListener('hidden.bs.modal', function () {
-        document.body.removeChild(modalElement);
-    });
-}
+        // 准备数据
+        const labels = ['基准价', '投标价', '价格分'];
+        const data = [
+            resultData.benchmark_price || 0,
+            resultData.bid_price || 0,
+            resultData.price_score || 0
+        ];
+
+        // 创建新图表
+        window.priceChartInstance = new Chart(ctx, {
+            type: 'bar',
+            data: {
+                labels: labels,
+                datasets: [{
+                    label: '价格相关信息',
+                    data: data,
+                    backgroundColor: [
+                        'rgba(54, 162, 235, 0.6)',
+                        'rgba(255, 99, 132, 0.6)',
+                        'rgba(75, 192, 192, 0.6)'
+                    ],
+                    borderColor: [
+                        'rgba(54, 162, 235, 1)',
+                        'rgba(255, 99, 132, 1)',
+                        'rgba(75, 192, 192, 1)'
+                    ],
+                    borderWidth: 1
+                }]
+            },
+            options: {
+                responsive: true,
+                maintainAspectRatio: false,
+                scales: {
+                    y: {
+                        beginAtZero: true
+                    }
+                }
+            }
+        });
+    }
+
+    function renderDetailedScores (resultData) {
+        const detailedScoresContainer = document.getElementById('detailedScoresContainer');
+        if (!detailedScoresContainer) return;
+
+        // 清空容器
+        detailedScoresContainer.innerHTML = '';
+
+        // 处理详细评分数据
+        const detailedScores = resultData.detailed_scores || [];
+        if (detailedScores.length === 0) {
+            detailedScoresContainer.innerHTML = '<p class="text-muted">暂无详细评分数据</p>';
+            return;
+        }
+
+        // 创建评分项卡片
+        detailedScores.forEach(score => {
+            const card = document.createElement('div');
+            card.className = 'col-md-6 mb-3';
+            card.innerHTML = `
+                <div class="card h-100">
+                    <div class="card-body">
+                        <h6 class="card-title">${score.criteria_name || score.Child_Item_Name || '未知评分项'}</h6>
+                        <p class="card-text">
+                            <strong>得分:</strong> ${score.score ? score.score.toFixed(2) : 'N/A'}<br>
+                            <strong>说明:</strong> ${score.reason || '无说明'}
+                        </p>
+                    </div>
+                </div>
+            `;
+            detailedScoresContainer.appendChild(card);
+        });
+    }
+});

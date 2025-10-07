@@ -18,6 +18,7 @@ def _default_config() -> Dict[str, Any]:
         'max_content_length': 500 * 1024 * 1024,  # 文件上传大小限制，默认500MB
         'single_file_max_size': 100 * 1024 * 1024,  # 单个文件大小限制，默认100MB
         'auto_delete_md_files': False,  # 分析完成后是否自动删除MD文件，默认不删除
+        'enable_retry_on_quality_issue': True,  # 当MD质量不达标时是否启用重新分析，默认启用
     }
 
 

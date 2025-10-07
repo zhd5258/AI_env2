@@ -3,9 +3,9 @@
 #
 # 作者           : KingFreeDom
 # 创建时间         : 2025-10-03 14:14:03
-# 最近一次编辑者      : KingFreeDom
-# 最近一次编辑时间     : 2025-10-06 14:11:06
-# 文件相对于项目的路径   : \AI_env2\app.py
+#最近一次编辑者      : KingFreeDom
+#最近一次编辑时间     : 2025-10-07 18:17:12
+#文件相对于项目的路径   : \AI_ENV2\app.py
 #
 # Copyright (c) 2025 by 中车眉山车辆有限公司/KingFreeDom, All Rights Reserved.
 #
@@ -16,6 +16,8 @@
 """
 
 import logging
+import sys
+from pathlib import Path
 from flask import Flask, render_template, send_from_directory
 from config.app_config import Config
 
@@ -28,6 +30,18 @@ logging.basicConfig(
     level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s'
 )
 
+# 检查系统维护锁定文件
+LOCK_FILE = Path('system_maintenance.lock')
+if LOCK_FILE.exists():
+    print('=' * 50)
+    print('系统维护锁定中！')
+    print('检测到系统维护锁定文件，禁止自动启动主程序。')
+    print('请在确认系统优化或纠错完成后手动移除锁定文件：')
+    print(f'  {LOCK_FILE.absolute()}')
+    print('或使用命令：python tools/system_maintenance_lock.py unlock')
+    print('=' * 50)
+    sys.exit(1)
+
 # 创建Flask应用
 app = Flask(__name__, template_folder='templates')
 
@@ -37,7 +51,7 @@ app.config.from_object(Config)
 # 从运行时配置加载文件上传大小限制
 runtime_config = load_config()
 app.config['MAX_CONTENT_LENGTH'] = runtime_config.get(
-    'max_content_length', 500 * 1024 * 1024
+    'max_content_length', 1000 * 1024 * 1024
 )
 
 # 启动资源监控器
@@ -87,4 +101,15 @@ def static_files(filename):
 
 
 if __name__ == '__main__':
+    # 再次检查锁定文件（双重保险）
+    if LOCK_FILE.exists():
+        print('=' * 50)
+        print('系统维护锁定中！')
+        print('检测到系统维护锁定文件，禁止自动启动主程序。')
+        print('请在确认系统优化或纠错完成后手动移除锁定文件：')
+        print(f'  {LOCK_FILE.absolute()}')
+        print('或使用命令：python tools/system_maintenance_lock.py unlock')
+        print('=' * 50)
+        sys.exit(1)
+
     app.run(host='0.0.0.0', port=8000, debug=False)

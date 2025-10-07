@@ -18,6 +18,11 @@ document.addEventListener('DOMContentLoaded', function () {
     let currentPage = 1;
     const projectsPerPage = 10;
 
+    // 确保不在历史项目页面进行轮询
+    if (typeof stopProgressPolling === 'function' && window.stopProgressPolling !== stopProgressPolling) {
+        stopProgressPolling();
+    }
+
     async function fetchProjects () {
         try {
             loadingIndicator.style.display = 'block';

@@ -34,8 +34,14 @@ router = Blueprint('analysis', __name__, url_prefix='/api')
 
 
 # 辅助函数：从文件路径提取文件名
-def get_filename_from_path(file_path: str) -> str:
+def get_filename_from_path(file_path) -> str:
     """从文件路径中提取文件名"""
+    # 处理SQLAlchemy Column类型
+    if hasattr(file_path, 'value'):
+        file_path = file_path.value
+    elif hasattr(file_path, '__str__'):
+        file_path = str(file_path)
+
     if not file_path:
         return ''
     return Path(file_path).name
@@ -322,9 +328,15 @@ def get_project_progress(project_id):
                             progress = 0
 
                     # 准备文档状态信息
+                    # 确保投标人名称不为空
+                    bidder_name = (
+                        doc.bidder_name
+                        if doc.bidder_name and doc.bidder_name.strip()
+                        else '未知投标方'
+                    )
                     doc_status = {
                         'id': doc.id,
-                        'bidder_name': doc.bidder_name,
+                        'bidder_name': bidder_name,
                         'file_path': doc.file_path,
                         'processing_status': doc.processing_status,
                         'processing_phase': doc.processing_phase,  # 添加处理阶段信息
@@ -337,9 +349,15 @@ def get_project_progress(project_id):
                     document_statuses.append(doc_status)
 
                     # 兼容main.js的数据格式
+                    # 确保投标人名称不为空
+                    bidder_name = (
+                        doc.bidder_name
+                        if doc.bidder_name and doc.bidder_name.strip()
+                        else '未知投标方'
+                    )
                     bid_info = {
                         'id': doc.id,
-                        'bidder_name': doc.bidder_name,
+                        'bidder_name': bidder_name,
                         'file_path': doc.file_path,
                         'status': doc.processing_status,
                         'processing_phase': doc.processing_phase,
@@ -449,8 +467,20 @@ def get_project_results(project_id):
 def get_project_summary(project_id):
     """获取项目汇总数据"""
     try:
-        summary_data = generate_summary_data(project_id)
-        return jsonify(summary_data)
+        with get_db() as db:
+            summary_data = generate_summary_data(project_id, db)
+            if not summary_data:
+                return jsonify({'error': '无法生成汇总数据'}), 500
+
+            # 添加项目信息到返回数据
+            project = (
+                db.query(TenderProject).filter(TenderProject.id == project_id).first()
+            )
+            if project:
+                summary_data['project_id'] = project_id
+                summary_data['project_name'] = project.name
+
+            return jsonify(summary_data)
     except Exception as e:
         logging.error(f'生成项目汇总时出错: {e}')
         return jsonify({'error': f'生成汇总失败: {str(e)}'}), 500

@@ -5,7 +5,7 @@
 
 import json
 import logging
-from typing import Dict, Any, Optional
+from typing import Dict, Any, Optional, List
 from sqlalchemy.orm import Session
 from models.database import AnalysisResult, ScoringRule, TenderProject
 from modules.local_ai_analyzer import LocalAIAnalyzer
@@ -97,8 +97,19 @@ class PriceScoreCalculator(PriceScoreCalculatorHelpers):
 
             # 5. 构造发送给AI大模型的完整prompt
             # 格式: "投标人1：投标总价1,投标人2：投标总价2,投标人3：投标总价3,......."
+            # 过滤掉无效的投标人名称
+            valid_bidder_prices = {
+                name: price
+                for name, price in bidder_prices.items()
+                if name and str(name).strip() and name != 'None'
+            }
+
+            if not valid_bidder_prices:
+                self.logger.error('没有有效的投标人报价用于价格分计算')
+                return False
+
             bidder_info_str = ','.join(
-                [f'{name}：{price}' for name, price in bidder_prices.items()]
+                [f'{name}：{price}' for name, price in valid_bidder_prices.items()]
             )
 
             # 获取价格分的最高分
@@ -187,7 +198,19 @@ class PriceScoreCalculator(PriceScoreCalculatorHelpers):
             processed_bidders = {}
 
             for result in analysis_results:
-                bidder_name = result.bidder_name
+                # 使用投标人名称，如果为空则使用"未知投标人_序号"作为备用
+                bidder_name = (
+                    result.bidder_name
+                    if result.bidder_name
+                    else f'未知投标人_{result.id}'
+                )
+                # 确保投标人名称不是None或空字符串
+                if (
+                    not bidder_name
+                    or not str(bidder_name).strip()
+                    or bidder_name == 'None'
+                ):
+                    bidder_name = f'未知投标人_{result.id}'
 
                 # 检查是否已经处理过该投标人
                 if bidder_name in processed_bidders:
@@ -265,6 +288,34 @@ class PriceScoreCalculator(PriceScoreCalculatorHelpers):
         except Exception as e:
             self.logger.error(f'计算项目 {project_id} 的价格分时出错: {e}')
             return False
+
+    def _extract_bidder_prices(self, analysis_results: List[Any]) -> Dict[str, float]:
+        """
+        从分析结果中提取投标人报价，确保使用有效的投标人名称
+
+        Args:
+            analysis_results: 分析结果列表
+
+        Returns:
+            Dict[str, float]: 投标人名称到报价的映射
+        """
+        bidder_prices = {}
+        for result in analysis_results:
+            # 使用投标人名称，如果为空则使用"未知投标人_序号"作为备用
+            bidder_name = (
+                result.bidder_name if result.bidder_name else f'未知投标人_{result.id}'
+            )
+            # 确保投标人名称不是None或空字符串
+            if not bidder_name or not str(bidder_name).strip():
+                bidder_name = f'未知投标人_{result.id}'
+
+            # 提取价格，如果为空则跳过
+            price = result.extracted_price
+            if price is not None:
+                bidder_prices[str(bidder_name)] = float(price)
+
+        self.logger.info(f'提取到的投标人报价: {bidder_prices}')
+        return bidder_prices
 
     def _parse_price_scores_from_ai_response(
         self, ai_response: str

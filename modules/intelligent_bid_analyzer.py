@@ -39,18 +39,29 @@ class IntelligentBidAnalyzer(BidAnalyzerHelpers):
         self.logger = logging.getLogger(__name__)
         self.total_rules_to_analyze = 0  # 初始化实例变量
 
-        if self.db and self.bid_document_id:
-            bid_doc = (
-                self.db.query(BidDocument)
-                .filter(BidDocument.id == self.bid_document_id)
-                .first()
-            )
-            # 修复：确保即使数据库中没有投标人名称，也不使用默认值
-            self.bidder_name = (
-                bid_doc.bidder_name if bid_doc and bid_doc.bidder_name else ''
-            )
+        if self.db is not None and self.bid_document_id is not None:
+            try:
+                bid_doc = (
+                    self.db.query(BidDocument)
+                    .filter(BidDocument.id == self.bid_document_id)
+                    .first()
+                )
+                # 修复：确保即使数据库中没有投标人名称，也使用文件名作为默认值
+                if bid_doc and bid_doc.bidder_name and bid_doc.bidder_name.strip():
+                    self.bidder_name = bid_doc.bidder_name
+                else:
+                    # 使用文件名作为默认投标人名称
+                    filename = os.path.basename(self.bid_file_path)
+                    self.bidder_name = os.path.splitext(filename)[0]
+            except Exception as e:
+                self.logger.warning(f'初始化时获取投标人名称出错: {e}')
+                # 出错时使用文件名作为默认投标人名称
+                filename = os.path.basename(self.bid_file_path)
+                self.bidder_name = os.path.splitext(filename)[0]
         else:
-            self.bidder_name = ''
+            # 没有数据库会话时也使用文件名作为默认投标人名称
+            filename = os.path.basename(self.bid_file_path)
+            self.bidder_name = os.path.splitext(filename)[0]
 
         # 优化：如果已提供提取好的文本，则直接使用
         if extracted_text is not None:
@@ -70,7 +81,7 @@ class IntelligentBidAnalyzer(BidAnalyzerHelpers):
             self.bid_pages = None
 
     def _update_progress(self, completed, total, current_rule, partial_results=None):
-        if not (self.db and self.bid_document_id):
+        if not (self.db is not None and self.bid_document_id is not None):
             return
         try:
             bid_doc = (
@@ -247,23 +258,44 @@ class IntelligentBidAnalyzer(BidAnalyzerHelpers):
         try:
             self.logger.info(f'开始分析投标文件: {self.bid_file_path}')
 
+            # 记录投标人名称信息
+            bidder_name_display = (
+                self.bidder_name
+                if self.bidder_name and self.bidder_name.strip()
+                else os.path.splitext(os.path.basename(self.bid_file_path))[0]
+            )
+            self.logger.info(f'当前投标人名称: {self.bidder_name}')
+
             # 获取投标文档记录
-            if self.db and self.bid_document_id:
-                bid_document = (
-                    self.db.query(BidDocument)
-                    .filter(BidDocument.id == self.bid_document_id)
-                    .first()
-                )
-                if bid_document:
-                    # 检查OCR重试次数
-                    if bid_document.ocr_retry_count >= 3:
-                        self.logger.warning(
-                            f'投标人 {self.bidder_name} OCR重试次数已达上限(3次)'
+            bid_document = None
+            if self.db is not None and self.bid_document_id is not None:
+                try:
+                    bid_document = (
+                        self.db.query(BidDocument)
+                        .filter(BidDocument.id == self.bid_document_id)
+                        .first()
+                    )
+                    if bid_document:
+                        # 检查OCR重试次数
+                        # 确保投标人名称不为空时才使用，否则使用文件名
+                        bidder_name_display = (
+                            self.bidder_name
+                            if self.bidder_name and self.bidder_name.strip()
+                            else os.path.splitext(os.path.basename(self.bid_file_path))[
+                                0
+                            ]
                         )
-                        return {
-                            'status': 'error',
-                            'message': f'投标人 {self.bidder_name} 的PDF文件经过3次OCR重试仍无法满足质量要求',
-                        }
+                        if bid_document.ocr_retry_count >= 3:
+                            self.logger.warning(
+                                f'投标人 {bidder_name_display} OCR重试次数已达上限(3次)'
+                            )
+                            return {
+                                'status': 'error',
+                                'message': f'投标人 {bidder_name_display} 的PDF文件经过3次OCR重试仍无法满足质量要求',
+                            }
+                except Exception as e:
+                    self.logger.warning(f'获取投标文档记录时出错: {e}')
+                    bid_document = None
             else:
                 bid_document = None
 
@@ -272,11 +304,16 @@ class IntelligentBidAnalyzer(BidAnalyzerHelpers):
             if not self.db or not self.project_id:
                 return {'error': '数据库会话或项目ID未提供，无法加载评分规则。'}
 
-            rules_from_db = (
-                self.db.query(ScoringRule)
-                .filter(ScoringRule.project_id == self.project_id)
-                .all()
-            )
+            try:
+                rules_from_db = (
+                    self.db.query(ScoringRule)
+                    .filter(ScoringRule.project_id == self.project_id)
+                    .all()
+                )
+            except Exception as e:
+                self.logger.error(f'从数据库加载评分规则时出错: {e}')
+                return {'error': f'从数据库加载评分规则时出错: {str(e)}'}
+
             if not rules_from_db:
                 return {'error': f'项目 {self.project_id} 在数据库中没有找到评分规则。'}
 
@@ -318,8 +355,14 @@ class IntelligentBidAnalyzer(BidAnalyzerHelpers):
             best_price = self.price_manager.extract_and_select_price(
                 bid_pages, md_file_path
             )
+            # 确保投标人名称不为空时才使用，否则使用文件名
+            bidder_name_display = (
+                self.bidder_name
+                if self.bidder_name and self.bidder_name.strip()
+                else os.path.splitext(os.path.basename(self.bid_file_path))[0]
+            )
             self.logger.info(
-                f'投标人 {self.bidder_name} 提取到的最佳价格: {best_price}'
+                f'投标人 {bidder_name_display} 提取到的最佳价格: {best_price}'
             )
 
             # 4. 执行AI分析 - 首先分析子项规则
@@ -335,7 +378,7 @@ class IntelligentBidAnalyzer(BidAnalyzerHelpers):
             self._update_progress(
                 0,
                 self.total_rules_to_analyze,
-                f'[{self.bidder_name}] 初始化分析...',
+                f'[{bidder_name_display}] 初始化分析...',
                 [],
             )
 
@@ -405,15 +448,25 @@ class IntelligentBidAnalyzer(BidAnalyzerHelpers):
 
             # 6. 质量评估和重新转换逻辑
             # 如果除价格外的总分低于30分，或者没有提取到有效价格，则需要重新转换PDF
-            if other_scores_total < 30 or best_price is None:
+            # 但首先检查是否启用了重新转换功能
+            from modules.runtime_config import load_config, get_bool
+
+            runtime_config = load_config()
+            enable_retry_on_quality_issue = get_bool(
+                runtime_config, 'enable_retry_on_quality_issue', True
+            )
+
+            if (
+                other_scores_total < 30 or best_price is None
+            ) and enable_retry_on_quality_issue:
                 self.logger.warning(
-                    f'投标人 {self.bidder_name} 的评分质量不达标: 总分={other_scores_total}, 价格提取={"成功" if best_price is not None else "失败"}'
+                    f'投标人 {bidder_name_display} 的评分质量不达标: 总分={other_scores_total}, 价格提取={"成功" if best_price is not None else "失败"}'
                 )
 
                 # 检查是否可以重新转换
                 if bid_document and bid_document.ocr_retry_count < 3:
                     self.logger.info(
-                        f'开始第 {bid_document.ocr_retry_count + 1} 次重新转换PDF: {self.bidder_name}'
+                        f'开始第 {bid_document.ocr_retry_count + 1} 次重新转换PDF: {bidder_name_display}'
                     )
 
                     # 更新重试次数
@@ -443,7 +496,7 @@ class IntelligentBidAnalyzer(BidAnalyzerHelpers):
                     # 重新转换PDF
                     retry_result = self._retry_pdf_conversion()
                     if retry_result['status'] == 'success':
-                        self.logger.info(f'重新转换PDF成功: {self.bidder_name}')
+                        self.logger.info(f'重新转换PDF成功: {bidder_name_display}')
                         # 递归调用分析函数
                         return self.analyze_bidding_document()
                     else:
@@ -460,6 +513,16 @@ class IntelligentBidAnalyzer(BidAnalyzerHelpers):
                         warning_msg += '无法获取重试信息'
                     self.logger.warning(warning_msg)
                     return {'status': 'warning', 'message': warning_msg}
+            elif (
+                other_scores_total < 30 or best_price is None
+            ) and not enable_retry_on_quality_issue:
+                # 如果质量不达标但未启用重新转换功能，则直接返回警告
+                warning_msg = (
+                    f'投标人 {self.bidder_name} 的PDF文件质量不达标，但重新转换功能已禁用。'
+                    f'总分={other_scores_total}, 价格提取={"成功" if best_price is not None else "失败"}'
+                )
+                self.logger.warning(warning_msg)
+                return {'status': 'warning', 'message': warning_msg}
 
             # 7. 计算价格分（注意：价格分应该在所有投标人都分析完成后统一计算，这里仅保存提取的价格）
             price_score = 0
@@ -467,7 +530,9 @@ class IntelligentBidAnalyzer(BidAnalyzerHelpers):
                 (rule for rule in rules_from_db if rule.is_price_criteria), None
             )
             if price_rule:
-                self.logger.info(f'投标人 {self.bidder_name} 提取到价格: {best_price}')
+                self.logger.info(
+                    f'投标人 {bidder_name_display} 提取到价格: {best_price}'
+                )
                 # 价格分将在所有投标人分析完成后统一计算，这里仅保存提取的价格
                 self._save_extracted_price(best_price)
             else:
@@ -584,11 +649,34 @@ class IntelligentBidAnalyzer(BidAnalyzerHelpers):
     def _calculate_price_score(self, price_rule, best_price):
         """计算价格分"""
         # 获取项目中所有投标文件的价格
-        all_bids = (
-            self.db.query(BidDocument)
-            .filter(BidDocument.project_id == self.project_id)
-            .all()
-        )
+        if self.db is None:
+            self.logger.warning('数据库会话未提供，无法计算价格分')
+            return {
+                'criteria_name': price_rule.Parent_Item_Name if price_rule else '价格',
+                'max_score': price_rule.Parent_max_score if price_rule else 0,
+                'score': 0,
+                'reason': '数据库会话未提供，无法计算价格分',
+                'is_price_criteria': True,
+                'extracted_price': best_price,
+            }
+
+        try:
+            all_bids = (
+                self.db.query(BidDocument)
+                .filter(BidDocument.project_id == self.project_id)
+                .all()
+            )
+        except Exception as e:
+            self.logger.error(f'查询投标文件时出错: {e}')
+            return {
+                'criteria_name': price_rule.Parent_Item_Name if price_rule else '价格',
+                'max_score': price_rule.Parent_max_score if price_rule else 0,
+                'score': 0,
+                'reason': f'查询投标文件时出错: {str(e)}',
+                'is_price_criteria': True,
+                'extracted_price': best_price,
+            }
+
         project_prices = {}
 
         # 添加当前投标文件的价格
@@ -738,7 +826,8 @@ class IntelligentBidAnalyzer(BidAnalyzerHelpers):
     def clear_pdf_cache(self):
         """清理PDF文本缓存"""
         if self.bid_processor:
-            self.bid_processor.clear_cache()
+            # PDFProcessor类中没有clear_cache方法，所以这里不执行任何操作
+            pass
 
     def _retry_pdf_conversion(self):
         """
@@ -749,6 +838,26 @@ class IntelligentBidAnalyzer(BidAnalyzerHelpers):
         """
         try:
             self.logger.info(f'开始重新转换PDF文件: {self.bid_file_path}')
+
+            # 更新数据库状态为"重新转换PDF中"
+            if self.db and self.bid_document_id:
+                try:
+                    bid_doc = (
+                        self.db.query(BidDocument)
+                        .filter(BidDocument.id == self.bid_document_id)
+                        .first()
+                    )
+                    if bid_doc:
+                        bid_doc.processing_phase = '重新转换PDF中'
+                        # 重置处理状态以便重新分析
+                        bid_doc.processing_status = 'processing'
+                        bid_doc.progress_current_rule = '重新转换PDF...'
+                        self.db.commit()
+                        self.logger.info(
+                            f'已更新数据库状态为重新转换PDF中: {self.bidder_name}'
+                        )
+                except Exception as e:
+                    self.logger.warning(f'更新数据库状态时出错: {e}')
 
             # 使用高级PDF处理器重新转换
             from modules.advanced_pdf_processor import AdvancedPDFProcessor
@@ -780,6 +889,27 @@ class IntelligentBidAnalyzer(BidAnalyzerHelpers):
                         self.logger.info(
                             f'使用 {method} 方法重新转换PDF成功: {output_file}'
                         )
+
+                        # 更新数据库状态为"重新转换PDF完成"
+                        if self.db and self.bid_document_id:
+                            try:
+                                bid_doc = (
+                                    self.db.query(BidDocument)
+                                    .filter(BidDocument.id == self.bid_document_id)
+                                    .first()
+                                )
+                                if bid_doc:
+                                    bid_doc.processing_phase = 'PDF处理完成'
+                                    bid_doc.progress_current_rule = (
+                                        'PDF处理完成，准备分析...'
+                                    )
+                                    self.db.commit()
+                                    self.logger.info(
+                                        f'已更新数据库状态为PDF处理完成: {self.bidder_name}'
+                                    )
+                            except Exception as e:
+                                self.logger.warning(f'更新数据库状态时出错: {e}')
+
                         return {
                             'status': 'success',
                             'message': '重新转换PDF成功',
@@ -795,13 +925,51 @@ class IntelligentBidAnalyzer(BidAnalyzerHelpers):
 
             # 如果所有方法都失败了
             self.logger.error(f'所有重新转换方法都失败了: {self.bid_file_path}')
+
+            # 更新数据库状态为"重新转换PDF失败"
+            if self.db and self.bid_document_id:
+                try:
+                    bid_doc = (
+                        self.db.query(BidDocument)
+                        .filter(BidDocument.id == self.bid_document_id)
+                        .first()
+                    )
+                    if bid_doc:
+                        bid_doc.processing_phase = 'PDF处理失败'
+                        bid_doc.progress_current_rule = 'PDF处理失败'
+                        self.db.commit()
+                        self.logger.info(
+                            f'已更新数据库状态为PDF处理失败: {self.bidder_name}'
+                        )
+                except Exception as e:
+                    self.logger.warning(f'更新数据库状态时出错: {e}')
+
             return {'status': 'error', 'message': '所有重新转换方法都失败了'}
 
-        except Exception as e:
-            self.logger.error(f'重新转换PDF时发生意外错误: {e}')
+        except Exception as outer_e:
+            self.logger.error(f'重新转换PDF时发生意外错误: {outer_e}')
+
+            # 更新数据库状态为"重新转换PDF失败"
+            if self.db and self.bid_document_id:
+                try:
+                    bid_doc = (
+                        self.db.query(BidDocument)
+                        .filter(BidDocument.id == self.bid_document_id)
+                        .first()
+                    )
+                    if bid_doc:
+                        bid_doc.processing_phase = 'PDF处理失败'
+                        bid_doc.progress_current_rule = 'PDF处理失败'
+                        self.db.commit()
+                        self.logger.info(
+                            f'已更新数据库状态为PDF处理失败: {self.bidder_name}'
+                        )
+                except Exception as e:
+                    self.logger.warning(f'更新数据库状态时出错: {e}')
+
             return {
                 'status': 'error',
-                'message': f'重新转换PDF时发生意外错误: {str(e)}',
+                'message': f'重新转换PDF时发生意外错误: {str(outer_e)}',
             }
 
     def analyze(self):

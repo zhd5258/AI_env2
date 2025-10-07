@@ -121,6 +121,16 @@ def update_runtime_config():
             except (ValueError, TypeError):
                 return jsonify({'error': '自动删除MD文件配置必须是布尔值'}), 400
 
+        # 验证质量不达标时重新分析配置
+        if 'enable_retry_on_quality_issue' in updates:
+            # 确保是布尔值
+            try:
+                updates['enable_retry_on_quality_issue'] = bool(
+                    updates['enable_retry_on_quality_issue']
+                )
+            except (ValueError, TypeError):
+                return jsonify({'error': '质量不达标时重新分析配置必须是布尔值'}), 400
+
         # 更新配置
         RUNTIME_CONFIG.update(updates)
 
