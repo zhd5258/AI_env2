@@ -11,6 +11,7 @@ import os
 import logging
 import sys
 import re  # 添加正则表达式模块导入
+import threading
 from typing import List, Optional
 from pathlib import Path
 
@@ -25,6 +26,7 @@ except ImportError:
 # 尝试导入PyMuPDF
 try:
     import fitz  # PyMuPDF
+
     PymuPDF_AVAILABLE = True
 except ImportError:
     PymuPDF_AVAILABLE = False
@@ -33,13 +35,18 @@ except ImportError:
 
 from .advanced_pdf_processor import MinerUProcessor
 
+# 添加一个锁来防止并行PDF转换
+pdf_conversion_lock = threading.Lock()
+
 
 class PDFToMarkdownConverter:
     def __init__(self):
         self.document = None  # type: ignore
         self.logger = logging.getLogger(__name__)
 
-    def convert_pdf_to_markdown(self, pdf_path: str, output_path: Optional[str] = None) -> str:
+    def convert_pdf_to_markdown(
+        self, pdf_path: str, output_path: Optional[str] = None
+    ) -> str:
         """
         将可编辑可搜索PDF转换为格式良好的Markdown
 
@@ -424,10 +431,13 @@ class AdvancedPDFToMarkdownConverter(PDFToMarkdownConverter):
 
         return '\n'.join(lines)
 
+
 class PDFProcessor:
     """PDF处理器，根据PDF文档类型选择合适的处理引擎"""
 
-    def __init__(self, file_path: str, file_type: str = "bid", output_dir: str = "temp/md"):
+    def __init__(
+        self, file_path: str, file_type: str = 'bid', output_dir: str = 'temp/md'
+    ):
         """
         初始化PDF处理器
 
@@ -440,14 +450,13 @@ class PDFProcessor:
         self.file_type = file_type  # "tender" or "bid"
         self.output_dir = output_dir
         self.logger = logging.getLogger(__name__)
-        
+
         # 确保输出目录存在
         Path(self.output_dir).mkdir(exist_ok=True)
-        
+
         # 初始化MinerU处理器
         self.mineru_processor = MinerUProcessor(
-            output_dir=Path(self.output_dir),
-            temp_dir=Path("temp/mineru")
+            output_dir=Path(self.output_dir), temp_dir=Path('temp/mineru')
         )
 
     def _get_expected_output_paths(self):
@@ -458,7 +467,7 @@ class PDFProcessor:
             tuple: (txt_file_path, md_file_path) 对于招标文件返回txt路径，对于投标文件返回md路径
         """
         file_name = Path(self.file_path).stem
-        md_file_path = os.path.join(self.output_dir, f"{file_name}.md")
+        md_file_path = os.path.join(self.output_dir, f'{file_name}.md')
         return None, md_file_path
 
     def _check_output_exists(self):
@@ -469,18 +478,18 @@ class PDFProcessor:
             str or None: 如果文件已存在，返回文件路径；否则返回None
         """
         txt_file_path, md_file_path = self._get_expected_output_paths()
-        
+
         # 对于招标文件，不再检查txt文件是否存在
         # if self.file_type == "tender":
         #     if os.path.exists(txt_file_path):
         #         self.logger.info(f"招标文件的txt文档已存在，跳过处理: {txt_file_path}")
         #         return txt_file_path
         # 对于投标文件，检查md文件是否存在
-        if self.file_type != "tender":  # 修改条件判断
+        if self.file_type != 'tender':  # 修改条件判断
             if os.path.exists(md_file_path):
-                self.logger.info(f"投标文件的md文档已存在，跳过处理: {md_file_path}")
+                self.logger.info(f'投标文件的md文档已存在，跳过处理: {md_file_path}')
                 return md_file_path
-        
+
         return None
 
     def process_pdf_to_md(self) -> str:
@@ -492,21 +501,51 @@ class PDFProcessor:
         Returns:
             str: 生成的MD文件路径
         """
-        # 首先检查输出文件是否已存在，如果存在则直接返回路径
-        existing_file_path = self._check_output_exists()
-        if existing_file_path:
-            return existing_file_path
+        # 使用锁确保PDF转换不会并行执行
+        with pdf_conversion_lock:
+            # 首先检查输出文件是否已存在，如果存在则直接返回路径
+            existing_file_path = self._check_output_exists()
+            if existing_file_path:
+                return existing_file_path
 
-        try:
-            # 对于招标文件和投标文件，都使用PyMuPDF处理生成MD文件
-            self.logger.info(f"PDF文件 {self.file_path} 使用PyMuPDF处理生成MD文件")
-            md_file_path = self._process_with_pymupdf()
-            self.logger.info(f"PDF文件处理完成，生成的MD文件路径: {md_file_path}")
-            return md_file_path
-            
-        except Exception as e:
-            self.logger.error(f"处理PDF文件时出错: {e}")
-            raise
+            try:
+                # 根据文件类型选择处理方式
+                if self.file_type == 'tender':
+                    # 对于招标文件，优先使用PyMuPDF处理
+                    self.logger.info(
+                        f'招标文件 {self.file_path} 使用PyMuPDF处理生成MD文件'
+                    )
+                    md_file_path = self._process_with_pymupdf()
+                    self.logger.info(
+                        f'招标文件处理完成，生成的MD文件路径: {md_file_path}'
+                    )
+                    return md_file_path
+                else:
+                    # 对于投标文件，强制使用MinerU处理
+                    self.logger.info(
+                        f'投标文件 {self.file_path} 使用MinerU处理生成MD文件'
+                    )
+                    md_file_path = self.mineru_processor.process_with_mineru(
+                        self.file_path,
+                        'markdown',
+                        True,  # enable_formula
+                        True,  # enable_table
+                        'ch',  # language
+                    )
+                    self.logger.info(
+                        f'投标文件处理完成，生成的MD文件路径: {md_file_path}'
+                    )
+
+                    # 评估转换质量
+                    if not self._assess_conversion_quality(md_file_path):
+                        self.logger.warning(f'MinerU转换质量不达标: {md_file_path}')
+                        raise RuntimeError('PDF转换质量不达标')
+
+                    return md_file_path
+
+            except Exception as e:
+                self.logger.error(f'处理PDF文件时出错: {e}')
+                raise
 
     def _process_tender_to_text(self) -> str:
         """
@@ -517,7 +556,78 @@ class PDFProcessor:
         """
         # 直接调用PyMuPDF处理方法生成MD文件
         return self._process_with_pymupdf()
-        
+
+    def _assess_conversion_quality(self, md_file_path: str) -> bool:
+        """
+        评估PDF转换为Markdown的质量
+
+        Args:
+            md_file_path: Markdown文件路径
+
+        Returns:
+            bool: 质量是否达标
+        """
+        try:
+            if not os.path.exists(md_file_path):
+                self.logger.warning(f'文件不存在，无法评估质量: {md_file_path}')
+                return False
+
+            with open(md_file_path, 'r', encoding='utf-8') as f:
+                content = f.read()
+
+            # 检查文件是否为空
+            if not content.strip():
+                self.logger.warning(f'转换后的文件为空: {md_file_path}')
+                return False
+
+            # 检查是否全文都是无意义的同一符号（如全是点、横线等）
+            # 提取文本内容，去除Markdown标记
+            text_content = re.sub(r'[\*\_\`\#\-\|\[\]\(\)]', '', content)
+            text_content = re.sub(r'\s+', '', text_content)  # 去除所有空白字符
+
+            if not text_content:
+                self.logger.warning(f'转换后的文件无有效文本内容: {md_file_path}')
+                return False
+
+            # 检查是否大部分内容都是相同的字符
+            char_count = {}
+            for char in text_content:
+                char_count[char] = char_count.get(char, 0) + 1
+
+            # 如果某个字符占比超过80%，认为质量不达标
+            if char_count:
+                most_common_char = max(char_count, key=char_count.get)
+                most_common_ratio = char_count[most_common_char] / len(text_content)
+                if most_common_ratio > 0.8:
+                    self.logger.warning(
+                        f"转换质量差，内容主要由重复字符 '{most_common_char}' 构成，占比 {most_common_ratio:.2%}: {md_file_path}"
+                    )
+                    return False
+
+            # 检查是否有足够的文本内容（至少100个字符）
+            if len(text_content) < 100:
+                self.logger.warning(
+                    f'转换后的文件文本内容过少 ({len(text_content)} 字符): {md_file_path}'
+                )
+                return False
+
+            # 检查是否包含基本的文本结构
+            lines = content.split('\n')
+            non_empty_lines = [line for line in lines if line.strip()]
+
+            if len(non_empty_lines) < 5:
+                self.logger.warning(
+                    f'转换后的文件有效行数过少 ({len(non_empty_lines)} 行): {md_file_path}'
+                )
+                return False
+
+            self.logger.info(f'转换质量评估通过: {md_file_path}')
+            return True
+
+        except Exception as e:
+            self.logger.error(f'评估转换质量时出错: {e}')
+            return False
+
     def _process_with_pymupdf(self) -> str:
         """
         使用PyMuPDF处理PDF并生成MD文件，增强表格处理能力
@@ -527,19 +637,59 @@ class PDFProcessor:
         """
         if not PymuPDF_AVAILABLE or fitz is None:
             raise RuntimeError('PyMuPDF未安装,无法使用此方法')
-            
+
         try:
             doc = fitz.open(self.file_path)
             file_name = Path(self.file_path).stem
-            md_file_path = os.path.join(self.output_dir, f"{file_name}.md")
-            
+            md_file_path = os.path.join(self.output_dir, f'{file_name}.md')
+
             # 使用改进的转换器
             converter = AdvancedPDFToMarkdownConverter()
-            markdown_content = converter.convert_pdf_to_markdown(self.file_path, md_file_path)
-            
+            markdown_content = converter.convert_pdf_to_markdown(
+                self.file_path, md_file_path
+            )
+
+            # 评估转换质量
+            if not self._assess_conversion_quality(md_file_path):
+                self.logger.warning(
+                    f'PDF转换质量不达标，删除文件并尝试重新转换: {md_file_path}'
+                )
+                # 删除质量不达标的文件
+                if os.path.exists(md_file_path):
+                    os.remove(md_file_path)
+
+                # 尝试使用MinerU重新处理
+                try:
+                    self.logger.info(f'尝试使用MinerU重新处理PDF: {self.file_path}')
+                    md_file_path = self.mineru_processor.process_with_mineru(
+                        self.file_path,
+                        'markdown',
+                        True,  # enable_formula
+                        True,  # enable_table
+                        'ch',  # language
+                    )
+
+                    # 再次评估转换质量
+                    if not self._assess_conversion_quality(md_file_path):
+                        self.logger.error(
+                            f'使用MinerU重新处理后质量仍不达标: {md_file_path}'
+                        )
+                        raise RuntimeError(
+                            'PDF转换质量不达标，即使使用MinerU重新处理后仍未改善'
+                        )
+                    else:
+                        self.logger.info(
+                            f'使用MinerU重新处理后质量达标: {md_file_path}'
+                        )
+                except Exception as mineru_error:
+                    self.logger.error(f'使用MinerU重新处理时出错: {mineru_error}')
+                    raise RuntimeError(
+                        f'PDF转换质量不达标且无法通过其他方法改善: {str(mineru_error)}'
+                    )
+
             return md_file_path
         except Exception as e:
-            self.logger.error(f"使用PyMuPDF处理PDF时出错: {e}")
+            self.logger.error(f'使用PyMuPDF处理PDF时出错: {e}')
             raise
 
     def _extract_text_with_enhanced_tables(self, page) -> str:
@@ -565,16 +715,18 @@ class PDFProcessor:
                     if block_text.strip():
                         text_blocks.append(block_text)
 
-            return "\n\n".join(text_blocks)
+            return '\n\n'.join(text_blocks)
         except Exception as e:
-            self.logger.warning(f"使用增强表格处理提取文本时出错，回退到简单文本提取: {e}")
+            self.logger.warning(
+                f'使用增强表格处理提取文本时出错，回退到简单文本提取: {e}'
+            )
             # 回退到简单的文本提取
             try:
                 text = page.get_text()  # type: ignore
-                return text if text else ""
+                return text if text else ''
             except Exception as e2:
-                self.logger.error(f"简单文本提取也失败: {e2}")
-                return ""
+                self.logger.error(f'简单文本提取也失败: {e2}')
+                return ''
 
     def _save_to_temp_word(self, pages_text: List[str]) -> None:
         """
@@ -586,19 +738,20 @@ class PDFProcessor:
         try:
             # 生成基于文件路径的唯一文件名
             import hashlib
+
             file_key = hashlib.md5(self.file_path.encode('utf-8')).hexdigest()
             temp_word_filename = f'{file_key}.txt'
             temp_word_dir = 'temp/md'
             temp_word_path = os.path.join(temp_word_dir, temp_word_filename)
-            
+
             # 确保目录存在
             os.makedirs(temp_word_dir, exist_ok=True)
-            
+
             # 将所有页面文本合并后保存
             full_text = '\n\n'.join(pages_text)
             with open(temp_word_path, 'w', encoding='utf-8') as f:
                 f.write(full_text)
-                
+
             self.logger.info('文本已保存到temp_word目录: %s', temp_word_path)
         except Exception as e:
             self.logger.warning('保存文本到temp_word目录失败: %s', e)
@@ -615,31 +768,33 @@ class PDFProcessor:
         """
         try:
             # 检查块中是否包含多个行，且行中有多个span
-            if "lines" not in block:
+            if 'lines' not in block:
                 return False
-                
-            lines = block["lines"]
+
+            lines = block['lines']
             if len(lines) < 2:
                 return False
-                
+
             # 检查是否有多行具有相似的span数量（表格特征）
             span_counts = []
             for line in lines:
-                if "spans" in line:
-                    span_counts.append(len(line["spans"]))
-            
+                if 'spans' in line:
+                    span_counts.append(len(line['spans']))
+
             if len(span_counts) < 2:
                 return False
-                
+
             # 如果大部分行的span数量相同或相近，则可能是表格
             avg_spans = sum(span_counts) / len(span_counts)
-            similar_spans = sum(1 for count in span_counts if abs(count - avg_spans) <= 1)
-            
+            similar_spans = sum(
+                1 for count in span_counts if abs(count - avg_spans) <= 1
+            )
+
             # 提高表格识别的准确性：要求至少70%的行具有相似span数量
             result = similar_spans >= len(span_counts) * 0.7
             return result
         except Exception as e:
-            self.logger.warning(f"判断表格块时出错: {e}")
+            self.logger.warning(f'判断表格块时出错: {e}')
             return False
 
     def _process_table_block(self, block: dict) -> str:
@@ -653,98 +808,95 @@ class PDFProcessor:
             str: 格式化后的表格内容
         """
         try:
-            lines = block["lines"]
+            lines = block['lines']
             if not lines:
-                return ""
-                
+                return ''
+
             # 提取表格行数据，保持原始位置信息
             table_rows = []
             for line in lines:
-                if "spans" in line:
+                if 'spans' in line:
                     # 合并同一行中的span文本，保持位置信息
                     row_spans = []
-                    for span in line["spans"]:
+                    for span in line['spans']:
                         # 确保正确处理文本编码
-                        span_text = span.get("text", "")
+                        span_text = span.get('text', '')
                         if span_text:
                             # 获取span的位置信息
-                            bbox = span.get("bbox", [0, 0, 0, 0])
-                            row_spans.append({
-                                "text": span_text,
-                                "bbox": bbox
-                            })
+                            bbox = span.get('bbox', [0, 0, 0, 0])
+                            row_spans.append({'text': span_text, 'bbox': bbox})
                     # 清理文本
                     if row_spans:
                         table_rows.append(row_spans)
-            
+
             if not table_rows:
-                return ""
-                
+                return ''
+
             # 智能分割表格列，基于位置信息而不是简单的文本分割
             processed_rows = self._smart_table_column_split(table_rows)
-            
+
             if not processed_rows:
                 # 如果智能分割失败，回退到简单的文本分割
                 simple_rows = []
                 for row_spans in table_rows:
-                    row_text = "".join([span["text"] for span in row_spans])
+                    row_text = ''.join([span['text'] for span in row_spans])
                     # 使用正则表达式更好地分割列
                     columns = re.split(r'\s{2,}', row_text)
                     # 清理每列内容
                     columns = [self._clean_cell_content(col) for col in columns]
                     simple_rows.append(columns)
                 processed_rows = simple_rows
-                
+
             if not processed_rows:
                 # 如果所有方法都失败，返回原始文本
                 raw_lines = []
                 for row_spans in table_rows:
-                    row_text = "".join([span["text"] for span in row_spans])
+                    row_text = ''.join([span['text'] for span in row_spans])
                     raw_lines.append(row_text)
-                return "\n".join(raw_lines)
-                
+                return '\n'.join(raw_lines)
+
             # 确定最大列数
             max_cols = max(len(row) for row in processed_rows) if processed_rows else 0
             if max_cols == 0:
                 raw_lines = []
                 for row_spans in table_rows:
-                    row_text = "".join([span["text"] for span in row_spans])
+                    row_text = ''.join([span['text'] for span in row_spans])
                     raw_lines.append(row_text)
-                return "\n".join(raw_lines)
-                
+                return '\n'.join(raw_lines)
+
             # 格式化为Markdown表格
             formatted_rows = []
             for row in processed_rows:
                 # 确保每行都有相同数量的列
                 while len(row) < max_cols:
-                    row.append("")
+                    row.append('')
                 # 格式化为表格行
-                formatted_row = "|" + "|".join([f" {cell} " for cell in row]) + "|"
+                formatted_row = '|' + '|'.join([f' {cell} ' for cell in row]) + '|'
                 formatted_rows.append(formatted_row)
-            
+
             # 添加表头分隔行
             if len(formatted_rows) > 1:
-                separator = "|" + "|".join(["---"] * max_cols) + "|"
+                separator = '|' + '|'.join(['---'] * max_cols) + '|'
                 # 在第一行后插入分隔行
                 formatted_rows.insert(1, separator)
-            
-            return "\n".join(formatted_rows)
+
+            return '\n'.join(formatted_rows)
         except Exception as e:
-            self.logger.warning(f"处理表格块时出错，返回原始文本: {e}")
+            self.logger.warning(f'处理表格块时出错，返回原始文本: {e}')
             # 出错时返回原始文本
             try:
-                lines = block.get("lines", [])
+                lines = block.get('lines', [])
                 raw_lines = []
                 for line in lines:
-                    if "spans" in line:
-                        line_text = ""
-                        for span in line["spans"]:
-                            line_text += span.get("text", "")
+                    if 'spans' in line:
+                        line_text = ''
+                        for span in line['spans']:
+                            line_text += span.get('text', '')
                         raw_lines.append(line_text)
-                return "\n".join(raw_lines)
+                return '\n'.join(raw_lines)
             except Exception as e2:
-                self.logger.error(f"返回原始文本也失败: {e2}")
-                return ""
+                self.logger.error(f'返回原始文本也失败: {e2}')
+                return ''
 
     def _smart_table_column_split(self, table_rows: list) -> list:
         """
@@ -759,71 +911,75 @@ class PDFProcessor:
         try:
             if not table_rows:
                 return []
-                
+
             # 收集所有span的位置信息
             all_spans = []
             for row_spans in table_rows:
                 for span in row_spans:
                     all_spans.append(span)
-                    
+
             if not all_spans:
                 return []
-                
+
             # 计算列的边界，基于span的x坐标
             x_positions = []
             for span in all_spans:
-                bbox = span["bbox"]
+                bbox = span['bbox']
                 # 添加左边界和右边界
                 x_positions.extend([bbox[0], bbox[2]])
-                
+
             if not x_positions:
                 return []
-                
+
             # 对x坐标进行排序和聚类
             x_positions.sort()
-            
+
             # 简单的聚类方法：将相近的x坐标合并为一列
             column_boundaries = []
             threshold = 20  # 列边界的最小间距阈值
-            
+
             if x_positions:
                 current_boundary = x_positions[0]
                 column_boundaries.append(current_boundary)
-                
+
                 for x in x_positions[1:]:
                     if x - current_boundary > threshold:
                         column_boundaries.append(x)
                         current_boundary = x
-                        
+
             if len(column_boundaries) < 2:
                 return []
-                
+
             # 根据列边界分割每一行
             processed_rows = []
             for row_spans in table_rows:
                 # 为每一列创建一个空列表
                 columns = [[] for _ in range(len(column_boundaries) - 1)]
-                
+
                 # 将span分配到对应的列中
                 for span in row_spans:
-                    bbox = span["bbox"]
+                    bbox = span['bbox']
                     span_center = (bbox[0] + bbox[2]) / 2
-                    
+
                     # 找到span应该归属的列
                     for i in range(len(column_boundaries) - 1):
-                        if column_boundaries[i] <= span_center < column_boundaries[i + 1]:
-                            columns[i].append(span["text"])
+                        if (
+                            column_boundaries[i]
+                            <= span_center
+                            < column_boundaries[i + 1]
+                        ):
+                            columns[i].append(span['text'])
                             break
-                            
+
                 # 合并每列中的文本
-                row_text = ["".join(column) for column in columns]
+                row_text = [''.join(column) for column in columns]
                 # 清理每列内容
                 row_text = [self._clean_cell_content(col) for col in row_text]
                 processed_rows.append(row_text)
-                
+
             return processed_rows
         except Exception as e:
-            self.logger.warning(f"智能表格列分割时出错: {e}")
+            self.logger.warning(f'智能表格列分割时出错: {e}')
             return []
 
     def _clean_cell_content(self, content: str) -> str:
@@ -838,23 +994,23 @@ class PDFProcessor:
         """
         try:
             if not content:
-                return ""
-                
+                return ''
+
             # 去除首尾空白字符
             content = content.strip()
-            
+
             # 将多个连续的空白字符（包括换行符）替换为单个空格
             # 但在表格环境中，我们需要更智能地处理
             content = re.sub(r'[ \t]+', ' ', content)  # 替换多个空格和制表符为单个空格
             content = re.sub(r'\n\s*\n', '\n', content)  # 替换多个换行符为单个换行符
-            
+
             # 去除行首行尾的换行符，但保留行内的换行符（表格单元格中的换行）
             content = content.strip('\n')
-            
+
             return content
         except Exception as e:
-            self.logger.warning(f"清理单元格内容时出错，返回原始内容: {e}")
-            return content if content else ""
+            self.logger.warning(f'清理单元格内容时出错，返回原始内容: {e}')
+            return content if content else ''
 
     def _extract_block_text(self, block: dict) -> str:
         """
@@ -866,45 +1022,45 @@ class PDFProcessor:
         Returns:
             str: 提取的文本内容
         """
-        if "lines" in block:
+        if 'lines' in block:
             lines = []
-            for line in block["lines"]:
-                if "spans" in line:
-                    line_text = ""
-                    for span in line["spans"]:
+            for line in block['lines']:
+                if 'spans' in line:
+                    line_text = ''
+                    for span in line['spans']:
                         # 确保正确处理文本编码
-                        span_text = span.get("text", "")
+                        span_text = span.get('text', '')
                         if span_text:
                             # 根据字体大小和样式判断是否需要特殊标记
                             fontsize = span.get('size', 12)
                             flags = span.get('flags', 0)
-                            
+
                             # 粗体检测
                             if flags & 2**4:  # bit 4 indicates bold
                                 span_text = f'**{span_text}**'
-                            
+
                             # 斜体检测
                             if flags & 2**1:  # bit 1 indicates italic
                                 span_text = f'*{span_text}*'
-                            
+
                             line_text += span_text
                     lines.append(line_text)
-            return "\n".join(lines)
-        elif "image" in block:
+            return '\n'.join(lines)
+        elif 'image' in block:
             # 对于图像块，尝试提取其中的文本内容而不是简单返回[图像]
             if 'blocks' in block.get('image', {}):
                 # 如果图像块中有文本内容，提取它
-                image_text = ""
+                image_text = ''
                 for img_block in block['image']['blocks']:
                     if 'lines' in img_block:
                         for line in img_block['lines']:
                             if 'spans' in line:
                                 for span in line['spans']:
                                     image_text += span.get('text', '')
-                return image_text if image_text else ""
-            return ""
+                return image_text if image_text else ''
+            return ''
         else:
-            return ""
+            return ''
 
     def get_md_file_path(self) -> str:
         """
@@ -916,11 +1072,11 @@ class PDFProcessor:
         # 生成MD文件路径
         pdf_filename = os.path.basename(self.file_path)
         file_key = os.path.splitext(pdf_filename)[0]
-        md_filename = f"{file_key}.md"
-        
+        md_filename = f'{file_key}.md'
+
         # MD文件存放在temp/md目录下
         md_file_path = os.path.join(self.output_dir, md_filename)
-        
+
         return md_file_path
 
     def load_content_from_md_file(self) -> Optional[List[str]]:
@@ -932,20 +1088,20 @@ class PDFProcessor:
         """
         try:
             md_file_path = self.get_md_file_path()
-            
+
             if not os.path.exists(md_file_path):
-                self.logger.warning(f"MD文件不存在: {md_file_path}")
+                self.logger.warning(f'MD文件不存在: {md_file_path}')
                 return None
-                
+
             with open(md_file_path, 'r', encoding='utf-8') as f:
                 content = f.read()
-            
+
             # 按页面分隔符分割内容
             pages = content.split('\n\n---\n\n')
-            self.logger.info(f"从MD文件 {md_file_path} 加载了 {len(pages)} 页内容")
+            self.logger.info(f'从MD文件 {md_file_path} 加载了 {len(pages)} 页内容')
             return pages
         except Exception as e:
-            self.logger.error(f"从MD文件加载内容时出错: {e}")
+            self.logger.error(f'从MD文件加载内容时出错: {e}')
             return None
 
     def extract_text_per_page(self, use_cache: bool = True) -> List[str]:
@@ -959,7 +1115,7 @@ class PDFProcessor:
             List[str]: 每页的文本内容列表
         """
         # 根据文件类型采用不同的处理方式
-        if self.file_type == "tender":
+        if self.file_type == 'tender':
             # 招标文件：检查是否已存在txt文件
             txt_file_path, _ = self._get_expected_output_paths()
             if os.path.exists(txt_file_path):
@@ -981,14 +1137,16 @@ class PDFProcessor:
                 self.process_pdf_to_md()
                 # 从MD文件加载内容
                 pages_content = self.load_content_from_md_file()
-            
+
             if pages_content is not None:
                 return pages_content
             else:
-                self.logger.warning("未能从MD文件加载内容，返回空列表")
+                self.logger.warning('未能从MD文件加载内容，返回空列表')
                 return []
 
-    def _load_content_from_existing_md_file(self, md_file_path: str) -> Optional[List[str]]:
+    def _load_content_from_existing_md_file(
+        self, md_file_path: str
+    ) -> Optional[List[str]]:
         """
         从已存在的MD文件中加载内容并转换为页面列表格式
 
@@ -1000,18 +1158,20 @@ class PDFProcessor:
         """
         try:
             if not os.path.exists(md_file_path):
-                self.logger.warning(f"MD文件不存在: {md_file_path}")
+                self.logger.warning(f'MD文件不存在: {md_file_path}')
                 return None
-                
+
             with open(md_file_path, 'r', encoding='utf-8') as f:
                 content = f.read()
-            
+
             # 按页面分隔符分割内容
             pages = content.split('\n\n---\n\n')
-            self.logger.info(f"从已存在的MD文件 {md_file_path} 加载了 {len(pages)} 页内容")
+            self.logger.info(
+                f'从已存在的MD文件 {md_file_path} 加载了 {len(pages)} 页内容'
+            )
             return pages
         except Exception as e:
-            self.logger.error(f"从已存在的MD文件加载内容时出错: {e}")
+            self.logger.error(f'从已存在的MD文件加载内容时出错: {e}')
             return None
 
     def load_content_from_text_file(self, txt_file_path: str) -> List[str]:
@@ -1026,34 +1186,38 @@ class PDFProcessor:
         """
         try:
             if not os.path.exists(txt_file_path):
-                self.logger.warning(f"文本文件不存在: {txt_file_path}")
+                self.logger.warning(f'文本文件不存在: {txt_file_path}')
                 return []
-                
+
             with open(txt_file_path, 'r', encoding='utf-8') as f:
                 content = f.read()
-            
+
             # 按页面分隔符分割内容
             pages = content.split('\n\n--- Page ')
             # 处理第一页（没有"--- Page "前缀）
             if pages:
                 first_page = pages[0]
-                if first_page.startswith("--- Page "):
+                if first_page.startswith('--- Page '):
                     # 如果第一页也有前缀，需要特殊处理
                     pages[0] = first_page
                 else:
                     # 第一页正常处理
                     pass
-                    
+
             # 清理每页内容，移除页码行
             cleaned_pages = []
             for page in pages:
                 lines = page.split('\n')
                 # 过滤掉页码行
-                cleaned_lines = [line for line in lines if not line.startswith("--- Page ")]
+                cleaned_lines = [
+                    line for line in lines if not line.startswith('--- Page ')
+                ]
                 cleaned_pages.append('\n'.join(cleaned_lines))
-            
-            self.logger.info(f"从文本文件 {txt_file_path} 加载了 {len(cleaned_pages)} 页内容")
+
+            self.logger.info(
+                f'从文本文件 {txt_file_path} 加载了 {len(cleaned_pages)} 页内容'
+            )
             return cleaned_pages
         except Exception as e:
-            self.logger.error(f"从文本文件加载内容时出错: {e}")
+            self.logger.error(f'从文本文件加载内容时出错: {e}')
             return []

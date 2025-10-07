@@ -119,6 +119,19 @@ class PriceExtractionManager:
             '投标担保',
             '银行保函',
         ]
+        # 增加投标一览表关键词，包括更多变体
+        self.bid_summary_keywords = [
+            '投标一览表',
+            '开标一览表',
+            '价格一览表',
+            '投标报价一览表',
+            '报价一览表',
+            '投标文件一览表',
+            '投标价格汇总表',
+            '投标汇总表',
+            '投标总价',  # 增加这个关键词
+            '货物名称.*投标总价',  # 增加这个模式
+        ]
         # 匹配 "关键字" 和 数字 的模式
         self.price_patterns = [
             # 格式: (关键字) 金额(阿拉伯数字, 带/不带逗号, 带/不带小数) (可选的大写中文)
@@ -256,14 +269,7 @@ class PriceExtractionManager:
         # 1. 识别关键章节 - 优先识别投标一览表
         price_summary_pages = self._identify_sections(
             pages,
-            [
-                '投标一览表',
-                '开标一览表',
-                '价格一览表',
-                '投标报价一览表',
-                '报价一览表',
-                '投标文件一览表',
-            ],
+            self.bid_summary_keywords,  # 使用我们定义的关键词列表
         )
         price_doc_pages = self._identify_sections(pages, ['价格文件', '报价部分'])
 
@@ -304,13 +310,15 @@ class PriceExtractionManager:
                         chinese_price_str=chinese_price_str,
                         price_summary_pages=price_summary_pages,
                         price_doc_pages=price_doc_pages,
+                        pattern_used=pattern,
+                        context_text=window_text,
                     )
                     all_prices.append(
                         {
                             'value': price_value,
                             'page': i,
                             'confidence': confidence,
-                            'reason': '关键字匹配',
+                            'reason': f'关键字匹配 (pattern: {pattern})',
                         }
                     )
 
@@ -333,13 +341,15 @@ class PriceExtractionManager:
                         keyword_found=False,
                         price_summary_pages=price_summary_pages,
                         price_doc_pages=price_doc_pages,
+                        pattern_used=pattern,
+                        context_text=window_text,
                     )
                     all_prices.append(
                         {
                             'value': price_value,
                             'page': i,
                             'confidence': confidence,
-                            'reason': '通用格式匹配',
+                            'reason': f'通用格式匹配 (pattern: {pattern})',
                         }
                     )
 
@@ -353,6 +363,43 @@ class PriceExtractionManager:
         """
         self.logger.info(f'开始从第 {page_index} 页提取价格，页面包含"投标一览表"')
         prices = []
+
+        # 首先尝试提取江苏鑫桥文件中的特殊格式
+        # 模式: （小写）1522300.00元（写）壹佰伍拾贰万贰仟叁佰元整。含13%增值税
+        self.logger.info('尝试匹配江苏鑫桥文件特殊格式')
+        jiangsu_pattern = r'（小写）([￥¥]?[\d,]+\.?\d*)元（写）([壹贰叁肆伍陆柒捌玖拾佰仟万亿零一二三四五六七八九十百千万亿\s]+)元整。含[\d%]*增值税'
+        jiangsu_match = re.search(jiangsu_pattern, page_text)
+
+        if jiangsu_match:
+            self.logger.info('江苏鑫桥文件特殊格式匹配成功!')
+            small_price_str = jiangsu_match.group(1)
+            chinese_text = jiangsu_match.group(2)
+
+            small_price = self._str_to_float(small_price_str)
+            large_price = self.converter.chinese_to_number(chinese_text)
+
+            self.logger.info(f'小写价格: {small_price}, 大写价格: {large_price}')
+
+            if small_price is not None and small_price > 1000:
+                prices.append(
+                    {
+                        'value': small_price,
+                        'page': page_index,
+                        'confidence': 100,
+                        'reason': '江苏鑫桥文件特殊格式价格',
+                    }
+                )
+                self.logger.info(f'从江苏鑫桥文件特殊格式提取到价格: {small_price}')
+                return prices  # 直接返回，因为这是最准确的价格
+        else:
+            self.logger.info('江苏鑫桥文件特殊格式匹配失败')
+            # 调试信息
+            test_pattern = r'（小写）.*?（写）'
+            test_match = re.search(test_pattern, page_text)
+            if test_match:
+                self.logger.info(f'测试模式匹配到: {test_match.group()}')
+
+        # 如果没有找到江苏鑫桥文件的特殊格式，继续使用原有逻辑
         xiaoxie_price = None
         daxie_price_text = None
         daxie_price_value = None
@@ -367,15 +414,24 @@ class PriceExtractionManager:
             r'(人民币)[:：\s]*￥?\s*([\d,]+\.?\d*)',
             r'￥\s*([\d,]+\.?\d*)',
             r'([\d,]+\.?\d*)\s*(?:元|人民币)',
+            # 新增处理您提到的特殊格式
+            r'（小写）¥([\d,]+\.?\d*)',
+            r'（小写）￥([\d,]+\.?\d*)',
+            r'小写[:：]\s*¥([\d,]+\.?\d*)',
+            r'小写[:：]\s*￥([\d,]+\.?\d*)',
         ]
 
         # 首先查找更明确的投标报价、总报价等关键字
-        for pattern in xiaoxie_patterns[:6]:  # 前6个模式是更明确的关键字
+        for pattern in xiaoxie_patterns:
             xiaoxie_match = re.search(pattern, page_text, re.IGNORECASE)
             if xiaoxie_match:
                 self.logger.info(f'模式匹配成功: {pattern}')
                 self.logger.info(f'匹配结果: {xiaoxie_match.groups()}')
-                xiaoxie_price_str = xiaoxie_match.group(2)  # 获取价格组
+                xiaoxie_price_str = (
+                    xiaoxie_match.group(2)
+                    if len(xiaoxie_match.groups()) >= 2
+                    else xiaoxie_match.group(1)
+                )  # 获取价格组
                 # 行级过滤以排除保证金等干扰项
                 line_start = page_text.rfind('\n', 0, xiaoxie_match.start()) + 1
                 line_end = page_text.find('\n', xiaoxie_match.end())
@@ -402,39 +458,16 @@ class PriceExtractionManager:
                     self.logger.info(f'成功添加价格: {xiaoxie_price}')
                     break  # 找到第一个有效价格就停止
 
-        # 如果没找到明确关键字，再使用通用模式
-        if not prices:
-            for pattern in xiaoxie_patterns[6:]:  # 后面的通用模式
-                xiaoxie_match = re.search(pattern, page_text, re.IGNORECASE)
-                if xiaoxie_match:
-                    xiaoxie_price_str = xiaoxie_match.group(1)  # 获取价格组
-                    # 行级过滤以排除保证金等干扰项
-                    line_start = page_text.rfind('\n', 0, xiaoxie_match.start()) + 1
-                    line_end = page_text.find('\n', xiaoxie_match.end())
-                    if line_end == -1:
-                        line_end = len(page_text)
-                    line_text = page_text[line_start:line_end]
-                    if any(k in line_text for k in self.exclude_keywords):
-                        continue
-                    xiaoxie_price = self._str_to_float(xiaoxie_price_str)
-                    if (
-                        xiaoxie_price is not None and xiaoxie_price > 1000
-                    ):  # 过滤掉过小的价格
-                        prices.append(
-                            {
-                                'value': xiaoxie_price,
-                                'page': page_index,
-                                'confidence': 90,  # 高置信度
-                                'reason': f'价格一览表通用模式价格 (pattern: {pattern})',
-                            }
-                        )
-                        break  # 找到第一个有效价格就停止
-
         # 查找大写价格，增加更多模式
         daxie_patterns = [
             r'(大写)[:：\s]*([壹贰叁肆伍陆柒捌玖拾佰仟万亿零一二三四五六七八九十百千万亿\s]+)',
             r'(大写金额)[:：\s]*([壹贰叁肆伍陆柒捌玖拾佰仟万亿零一二三四五六七八九十百千万亿\s]+)',
             r'([壹贰叁肆伍陆柒捌玖拾佰仟万亿零一二三四五六七八九十百千万亿\s]+)[:：\s]*(?:元|人民币)',
+            # 新增处理您提到的特殊格式
+            r'（大写）([壹贰叁肆伍陆柒捌玖拾佰仟万亿零一二三四五六七八九十百千万亿\s]+)',
+            r'大写[:：]\s*([壹贰叁肆伍陆柒捌玖拾佰仟万亿零一二三四五六七八九十百千万亿\s]+)',
+            # 江苏鑫桥文件中的特殊格式
+            r'（写）([壹贰叁肆伍陆柒捌玖拾佰仟万亿零一二三四五六七八九十百千万亿\s]+)',
         ]
 
         for pattern in daxie_patterns:
@@ -494,6 +527,8 @@ class PriceExtractionManager:
         price_summary_pages: List[int],
         price_doc_pages: List[int],
         chinese_price_str: Optional[str] = None,
+        pattern_used: Optional[str] = None,
+        context_text: Optional[str] = None,
     ) -> float:
         """
         为提取到的价格计算置信度分数。
@@ -522,6 +557,27 @@ class PriceExtractionManager:
         elif price_value > 1000000000:  # 超过10亿元，可能是总价
             confidence += 5
 
+        # 根据使用的模式增加置信度
+        if pattern_used:
+            # 如果使用了明确的关键字模式，增加置信度
+            if any(
+                keyword in pattern_used
+                for keyword in ['投标报价', '总报价', '总价', '小写', '大写']
+            ):
+                confidence += 15
+            # 如果使用了人民币符号模式，增加置信度
+            elif '￥' in pattern_used or '¥' in pattern_used:
+                confidence += 10
+
+        # 上下文相关性加分
+        if context_text:
+            # 检查上下文是否包含价格相关的关键词
+            price_context_keywords = ['含税', '税率', '增值税', '13%', '6%', '3%']
+            context_matches = sum(
+                1 for keyword in price_context_keywords if keyword in context_text
+            )
+            confidence += min(context_matches * 5, 15)  # 最多增加15分
+
         # 限制最大置信度
         confidence = min(confidence, 100.0)
 
@@ -544,6 +600,11 @@ class PriceExtractionManager:
             lower_text = page_text.lower()
             # 检查是否包含任何关键词
             if any(keyword.lower() in lower_text for keyword in keywords):
+                matched_pages.append(i)
+            # 增加对"投标总价"的特殊处理
+            elif '投标总价' in page_text and (
+                '货物名称' in page_text or '制造商名称' in page_text
+            ):
                 matched_pages.append(i)
         return matched_pages
 

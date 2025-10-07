@@ -332,7 +332,7 @@ document.addEventListener('DOMContentLoaded', function () {
 
     async function pollProgress (projectId) {
         try {
-            const response = await fetch(`/api/projects/${projectId}/analysis-status`);
+            const response = await fetch(`/api/projects/${projectId}/progress`);
             if (!response.ok) {
                 // If the server is just not ready, we don't want to kill the polling
                 if (response.status === 404) {
@@ -366,7 +366,7 @@ document.addEventListener('DOMContentLoaded', function () {
         if (data.document_statuses) {
             data.document_statuses.forEach(bid => {
                 let bidProgress = bid.progress_total > 0 ? (bid.progress_completed / bid.progress_total * 100) : 0;
-                if (bid.processing_status === 'completed' || bid.processing_status === 'error') {
+                if (bid.processing_status === 'completed') {
                     completedBids++;
                 }
                 detailedProgress.innerHTML += createBidProgressItem(bid, bidProgress);
@@ -409,7 +409,7 @@ document.addEventListener('DOMContentLoaded', function () {
         if (bid.processing_phase) {
             statusText = bid.processing_phase;
         } else {
-            switch (bid.status) {
+            switch (bid.processing_status) {
                 case 'completed':
                     statusIcon = '<i class="fas fa-check-circle text-success me-2"></i>';
                     statusClass = 'bg-success';
@@ -422,7 +422,7 @@ document.addEventListener('DOMContentLoaded', function () {
                     break;
                 case 'processing':
                     statusIcon = '<i class="fas fa-spinner fa-spin me-2"></i>';
-                    statusClass = 'progress-bar-striped progress-bar-animated';
+                    statusClass = 'progress-bar-striped progress-bar-animated bg-info';
                     statusText = '处理中';
                     break;
                 default:
@@ -430,6 +430,17 @@ document.addEventListener('DOMContentLoaded', function () {
                     statusClass = 'bg-secondary';
                     statusText = '等待处理';
             }
+        }
+
+        // 如果有当前规则信息，显示在进度条上
+        if (bid.current_rule && bid.processing_status === 'processing') {
+            statusText = bid.current_rule;
+        }
+
+        // 处理警告状态
+        let warningAlert = '';
+        if (bid.error_message && bid.processing_status === 'completed') {
+            warningAlert = `<div class="alert alert-warning mt-1 mb-0 py-1 small">${bid.error_message}</div>`;
         }
 
         return `
@@ -443,7 +454,8 @@ document.addEventListener('DOMContentLoaded', function () {
                         ${statusText}
                     </div>
                 </div>
-                ${bid.error_message ? `<div class="alert alert-danger mt-1 mb-0 py-1 small">${bid.error_message}</div>` : ''}
+                ${bid.error_message && bid.processing_status === 'error' ? `<div class="alert alert-danger mt-1 mb-0 py-1 small">${bid.error_message}</div>` : ''}
+                ${warningAlert}
             </div>
         `;
     }
@@ -647,7 +659,9 @@ document.addEventListener('DOMContentLoaded', function () {
             })
             .catch(error => {
                 console.error("获取动态汇总表数据时出错:", error);
-                resultArea.innerHTML = `<div class="alert alert-danger">获取动态汇总表数据失败: ${error.message}</div>`;
+                // 即使动态汇总表数据获取失败，也要显示结果
+                displaySimpleResults(results);
+                // resultArea.innerHTML = `<div class="alert alert-danger">获取动态汇总表数据失败: ${error.message}</div>`;
             });
     }
 

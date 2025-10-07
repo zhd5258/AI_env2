@@ -309,26 +309,32 @@ document.addEventListener('DOMContentLoaded', function () {
 
             modalBody.innerHTML = content;
 
-            // 渲染图表
+            // 渲染图表（添加错误处理）
             if (summaryData && summaryData.rows) {
                 const ctx = document.getElementById('summaryChart');
                 if (ctx) {
-                    new Chart(ctx, {
-                        type: 'bar',
-                        data: {
-                            labels: summaryData.rows.map(r => r.bidder_name),
-                            datasets: [
-                                { label: '总分', data: summaryData.rows.map(r => (typeof r.total_score === 'number' ? r.total_score : 0)), backgroundColor: 'rgba(54, 162, 235, 0.6)' },
-                                { label: '价格分', data: summaryData.rows.map(r => (typeof r.price_score === 'number' ? r.price_score : 0)), backgroundColor: 'rgba(255, 159, 64, 0.6)' }
-                            ]
-                        },
-                        options: {
-                            responsive: true,
-                            maintainAspectRatio: false,
-                            plugins: { legend: { position: 'top' } },
-                            scales: { y: { beginAtZero: true } }
-                        }
-                    });
+                    // 检查Chart是否已定义
+                    if (typeof Chart !== 'undefined') {
+                        new Chart(ctx, {
+                            type: 'bar',
+                            data: {
+                                labels: summaryData.rows.map(r => r.bidder_name),
+                                datasets: [
+                                    { label: '总分', data: summaryData.rows.map(r => (typeof r.total_score === 'number' ? r.total_score : 0)), backgroundColor: 'rgba(54, 162, 235, 0.6)' },
+                                    { label: '价格分', data: summaryData.rows.map(r => (typeof r.price_score === 'number' ? r.price_score : 0)), backgroundColor: 'rgba(255, 159, 64, 0.6)' }
+                                ]
+                            },
+                            options: {
+                                responsive: true,
+                                maintainAspectRatio: false,
+                                plugins: { legend: { position: 'top' } },
+                                scales: { y: { beginAtZero: true } }
+                            }
+                        });
+                    } else {
+                        // 如果Chart未定义，显示错误消息
+                        ctx.innerHTML = '<div class="alert alert-warning">图表库加载失败，无法显示图表。</div>';
+                    }
                 }
             }
 

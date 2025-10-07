@@ -79,6 +79,8 @@ class BidDocument(Base):
     price_extraction_attempts = Column(Integer, default=0)
     price_extraction_error = Column(String, nullable=True)
     price_extracted = Column(Boolean, default=False)
+    # Adding OCR retry count field
+    ocr_retry_count = Column(Integer, default=0)
 
     project = relationship('TenderProject', back_populates='bid_documents')
     analysis_result = relationship(

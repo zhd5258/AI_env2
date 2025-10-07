@@ -108,6 +108,10 @@ def _filter_bidder_name(bidder_name: str) -> str:
     # Normalize whitespace
     bidder_name = re.sub(r'\s+', ' ', bidder_name).strip()
 
+    # 确保返回的名称不是空字符串
+    if not bidder_name:
+        return ''
+
     return bidder_name
 
 
@@ -118,7 +122,7 @@ def _looks_garbled_or_incomplete(name: str) -> bool:
     """
     if not name:
         return True
-    if len(name) < 6:
+    if len(name) < 2:  # 放宽长度限制
         return True
     # 孤立括号或方括号
     if any(
@@ -129,23 +133,31 @@ def _looks_garbled_or_incomplete(name: str) -> bool:
     noise = sum(
         1
         for ch in name
-        if not re.match(r'[\u4e00-\u9fa5a-zA-Z0-9·．\.（）()有限公司集团股份]+', ch)
+        if not re.match(
+            r'[\u4e00-\u9fa5a-zA-Z0-9·．\.#（）()有限公司集团股份公司厂院所社中心]+', ch
+        )
     )
-    # 如果噪声字符比例超过20%，则认为是乱码
-    if noise > len(name) * 0.2:
+    # 如果噪声字符比例超过30%，则认为是乱码
+    if noise > len(name) * 0.3:
         return True
-    return noise > max(1, len(name) // 6)
+    return noise > max(1, len(name) // 5)
 
 
 def _is_valid_company_name(bidder_name: str) -> bool:
     """
     Checks if a string is a valid company name.
     """
-    if not bidder_name or len(bidder_name) <= 5:
+    if not bidder_name or len(bidder_name) < 2:  # 放宽长度限制
         return False
+
+    # 检查是否包含公司相关关键词或者至少包含一些基本的公司名称特征
     company_keywords = ['公司', '有限', '股份', '集团', '厂', '院', '所', '社', '中心']
-    if not any(keyword in bidder_name for keyword in company_keywords):
+    has_company_keyword = any(keyword in bidder_name for keyword in company_keywords)
+
+    # 如果没有公司关键词，但有合理的长度和格式，也可以接受
+    if not has_company_keyword and len(bidder_name) < 4:
         return False
+
     # Further checks to exclude common false positives
     invalid_keywords = [
         '招标',
@@ -157,25 +169,23 @@ def _is_valid_company_name(bidder_name: str) -> bool:
         '单位章',
         '法定代表',
         '中车眉山车辆有限公司',  # 明确排除招标方名称
-        '#',  # 排除以#开头的奇怪名称
-        '*',  # 排除以*开头的奇怪名称
-        '●',  # 排除以●开头的奇怪名称
-        '■',  # 排除以■开头的奇怪名称
-        '◆',  # 排除以◆开头的奇怪名称
-        '▲',  # 排除以▲开头的奇怪名称
-        '▼',  # 排除以▼开头的奇怪名称
-        '※',  # 排除以※开头的奇怪名称
-        '·',  # 排除以·开头的奇怪名称
     ]
+
     if any(keyword in bidder_name for keyword in invalid_keywords):
         return False
-    # 检查是否以特殊字符开头
-    if bidder_name.startswith(('#', '*', '●', '■', '◆', '▲', '▼', '※', '·')):
+
+    # 检查是否以特殊字符开头（排除正常情况）
+    if (
+        bidder_name.startswith(('#', '*', '●', '■', '◆', '▲', '▼', '※', '·'))
+        and len(bidder_name) < 4
+    ):
         return False
+
     # 检查是否包含过多的特殊符号
     special_chars = sum(1 for ch in bidder_name if ch in '#*●■◆▲▼※·')
-    if special_chars > 2:  # 如果特殊符号超过2个，认为是无效名称
+    if special_chars > 3:  # 如果特殊符号超过3个，认为是无效名称
         return False
+
     return True
 
 
@@ -199,7 +209,10 @@ def _search_bidder_name_in_special_sections(pages: list[str]) -> str | None:
         '投标函',
         '资格审查',
         '制造商名称',
-        '法定代表人（单位负责人）身份证明'
+        '法定代表人（单位负责人）身份证明',
+        '投标人信息',
+        '投标单位信息',
+        '供应商信息',
     ]
     candidate_indices = []
     for idx, text in enumerate(pages):
@@ -209,9 +222,9 @@ def _search_bidder_name_in_special_sections(pages: list[str]) -> str | None:
     # 扩大检索窗口到命中页、前一页和后一页
     indices = sorted(
         set(
-            candidate_indices + 
-            [i - 1 for i in candidate_indices if i - 1 >= 0] +
-            [i + 1 for i in candidate_indices if i + 1 < len(pages)]
+            candidate_indices
+            + [i - 1 for i in candidate_indices if i - 1 >= 0]
+            + [i + 1 for i in candidate_indices if i + 1 < len(pages)]
         )
     )
     patterns = [
@@ -233,6 +246,10 @@ def _search_bidder_name_in_special_sections(pages: list[str]) -> str | None:
         r'(?:制造商名称|制造厂家|生产厂家)\s*[:：]\s*([^\n]+?有限公司)',
         # 投标函末尾盖章行
         r'(投标人|投标单位)：\s*([^\s]+?公司)(?:\s*（盖单位章）)?',
+        # 新增处理"投标人："格式的模式
+        r'投标人[:：]\s*([^\r\n]+?公司)',
+        r'投标单位[:：]\s*([^\r\n]+?公司)',
+        r'供应商[:：]\s*([^\r\n]+?公司)',
     ]
 
     # 尝试在每个候选页面中查找投标方名称
@@ -262,17 +279,34 @@ def _extract_bidder_name_by_regex(text_to_search: str) -> str | None:
     Uses regular expressions to extract the bidder name.
     """
     patterns = [
-        r'投\s*标\s*人\s*[:：\s]([^\n]+)',
-        r'投标(?:人|单位|方)名称\s*[:：\s]([^\n]+)',
-        r'供\s*应\s*商\s*名\s*称\s*[:：\s]([^\n]+)',
-        r'致\s*[:：\s]([^\n]+?)(?:\s*公司|\s*单位)',
-        r'^\s*([^\n]+?公司)\s*$',  # A line that is just a company name
-        r'投标人名称\s*[:：]\s*([\u4e00-\u9fa5a-zA-Z0-9（）()·．\.]+?公司)',  # 更精确的投标人名称匹配
+        r'投\s*标\s*人\s*[:：\s]([^\n\r]+?)[\r\n]',
+        r'投标(?:人|单位|方)名称\s*[:：\s]([^\n\r]+?)[\r\n]',
+        r'供\s*应\s*商\s*名\s*称\s*[:：\s]([^\n\r]+?)[\r\n]',
+        r'致\s*[:：\s]([^\n\r]+?)(?:\s*公司|\s*单位)',
+        r'^\s*([^\n\r]+?公司)\s*$',
+        r'投标人名称\s*[:：]\s*([\u4e00-\u9fa5a-zA-Z0-9（）()·．\.#\-—]+?公司)',
         # 新增更强大的模式来匹配公司名称
-        r'(?:投标单位|投标人|供应商|单位名称)\s*[:：]?\s*([^\n]*[有限公司|公司|集团|厂|院|所][^\n]*)',
-        r'([^\n]*[有限公司|公司|集团|厂|院|所][^\n]*)\s*(?:法定代表人|授权代表|地址|电话)',
+        r'(?:投标单位|投标人|供应商|单位名称)\s*[:：]?\s*([^\n\r]*[有限公司|公司|集团|厂|院|所][^\n\r]*)',
+        r'([^\n\r]*[有限公司|公司|集团|厂|院|所][^\n\r]*)\s*(?:法定代表人|授权代表|地址|电话)',
         # 特别处理以特殊字符开头的名称
-        r'^\s*[#*●■◆▲▼※·]?\s*([^\n]*[有限公司|公司|集团|厂|院|所][^\n]*)\s*$',
+        r'^\s*[#*●■◆▲▼※·]?\s*([^\n\r]*[有限公司|公司|集团|厂|院|所][^\n\r]*)\s*$',
+        # 新增更直接的模式
+        r'(?:投标人|投标单位|供应商)[:：]([^\r\n]+)',
+        r'(?:投标人|投标单位|供应商)\s*[:：]\s*([^\r\n]+)',
+        # 新增处理"投标人："格式的模式
+        r'投标人[:：]\s*([^\r\n]+?公司)',
+        r'投标单位[:：]\s*([^\r\n]+?公司)',
+        r'供应商[:：]\s*([^\r\n]+?公司)',
+        # 处理可能带有特殊符号的投标人名称
+        r'[#*●■◆▲▼※·]?\s*(?:投标人|投标单位|供应商)[:：]\s*([^\r\n]+?公司)',
+        # 处理常见的投标人名称格式
+        r'(?:投标人|投标单位|供应商)名称[:：]?\s*([^\r\n]+?有限公司)',
+        r'(?:投标人|投标单位|供应商)名称[:：]?\s*([^\r\n]+?集团)',
+        r'(?:投标人|投标单位|供应商)名称[:：]?\s*([^\r\n]+?厂)',
+        r'(?:投标人|投标单位|供应商)名称[:：]?\s*([^\r\n]+?院)',
+        # 新增处理没有"公司"关键词但可能是有效名称的模式
+        r'(?:投标人|投标单位|供应商)名称[:：]?\s*([^\r\n]+?(?:科技|贸易|工程|设备|服务)[^\r\n]*?)\s*[\r\n]',
+        r'(?:投标人|投标单位|供应商)[:：]\s*([^\r\n]+?(?:科技|贸易|工程|设备|服务)[^\r\n]*?)\s*[\r\n]',
     ]
 
     for pattern in patterns:
@@ -283,7 +317,8 @@ def _extract_bidder_name_by_regex(text_to_search: str) -> str | None:
 
             filtered_name = _filter_bidder_name(potential_name)
 
-            if _is_valid_company_name(filtered_name):
+            # 放宽验证条件，只要不是空字符串就可以
+            if filtered_name and len(filtered_name) > 1:
                 logger.info(f"Valid bidder name found via regex: '{filtered_name}'")
                 return filtered_name
             else:
@@ -291,6 +326,7 @@ def _extract_bidder_name_by_regex(text_to_search: str) -> str | None:
                     "Filtered name '%s' is not a valid company name.", filtered_name
                 )
 
+    # 如果没有找到有效的投标人名称，返回None
     return None
 
 
@@ -306,6 +342,8 @@ def _extract_bidder_name_from_markdown(text_to_search: str) -> str | None:
         r'#\s*投标人信息',
         r'#\s*投标单位信息',
         r'#\s*供应商信息',
+        r'##\s*基本信息',
+        r'#\s*基本信息',
     ]
 
     bidder_section_start = -1
@@ -334,10 +372,18 @@ def _extract_bidder_name_from_markdown(text_to_search: str) -> str | None:
 
     # 在投标人信息章节中查找投标人名称
     patterns = [
-        r'投标人名称\s*[:：]\s*([\u4e00-\u9fa5a-zA-Z0-9（）()·．\.]+?公司)',
-        r'投标单位\s*[:：]\s*([\u4e00-\u9fa5a-zA-Z0-9（）()·．\.]+?公司)',
-        r'供应商\s*[:：]\s*([\u4e00-\u9fa5a-zA-Z0-9（）()·．\.]+?公司)',
-        r'单位名称\s*[:：]\s*([\u4e00-\u9fa5a-zA-Z0-9（）()·．\.]+?公司)',
+        r'投标人名称\s*[:：]\s*([\u4e00-\u9fa5a-zA-Z0-9（）()·．\.#\-—]+?公司)',
+        r'投标单位\s*[:：]\s*([\u4e00-\u9fa5a-zA-Z0-9（）()·．\.#\-—]+?公司)',
+        r'供应商\s*[:：]\s*([\u4e00-\u9fa5a-zA-Z0-9（）()·．\.#\-—]+?公司)',
+        r'单位名称\s*[:：]\s*([\u4e00-\u9fa5a-zA-Z0-9（）()·．\.#\-—]+?公司)',
+        # 更通用的模式
+        r'(?:投标人名称|投标单位|供应商|单位名称)\s*[:：]?\s*([^\r\n]+)',
+        # 新增处理"投标人："格式的模式
+        r'投标人[:：]\s*([^\r\n]+?公司)',
+        r'投标单位[:：]\s*([^\r\n]+?公司)',
+        r'供应商[:：]\s*([^\r\n]+?公司)',
+        # 处理可能带有特殊符号的投标人名称
+        r'[#*●■◆▲▼※·]?\s*(?:投标人|投标单位|供应商)[:：]\s*([^\r\n]+?公司)',
     ]
 
     for pattern in patterns:
@@ -348,7 +394,8 @@ def _extract_bidder_name_from_markdown(text_to_search: str) -> str | None:
 
             filtered_name = _filter_bidder_name(potential_name)
 
-            if _is_valid_company_name(filtered_name):
+            # 放宽验证条件
+            if filtered_name and len(filtered_name) > 1:
                 logger.info(f"Valid bidder name found via Markdown: '{filtered_name}'")
                 return filtered_name
             else:
@@ -366,6 +413,7 @@ def _extract_bidder_name_by_ai(text_to_search: str) -> str | None:
     try:
         # 延迟导入，避免循环依赖
         from .local_ai_analyzer import LocalAIAnalyzer
+
         ai_analyzer = LocalAIAnalyzer()
         prompt = f"""
         请从以下投标文件内容中，仅抽取出完整的投标公司名称。
@@ -396,9 +444,9 @@ def _extract_bidder_name_by_ai(text_to_search: str) -> str | None:
             # 对AI提取的结果也进行过滤和验证
             filtered_name = _filter_bidder_name(potential_name)
 
-            if _is_valid_company_name(
+            if len(filtered_name) > 1 and not _looks_garbled_or_incomplete(
                 filtered_name
-            ) and not _looks_garbled_or_incomplete(filtered_name):
+            ):
                 logger.info(f"Valid bidder name found via AI: '{filtered_name}'")
                 return filtered_name
             else:
@@ -408,6 +456,31 @@ def _extract_bidder_name_by_ai(text_to_search: str) -> str | None:
 
     except Exception as e:
         logger.error(f'Error during AI bidder name extraction: {e}')
+
+    # 如果AI提取失败，尝试使用简单的正则表达式作为回退
+    try:
+        # 使用一个简单的模式来提取可能的公司名称
+        simple_patterns = [
+            r'([^\n\r]+?有限公司)',
+            r'([^\n\r]+?公司)',
+            r'([^\n\r]+?集团)',
+            r'([^\n\r]+?厂)',
+            r'([^\n\r]+?院)',
+        ]
+
+        for pattern in simple_patterns:
+            matches = re.finditer(pattern, text_to_search[:1000], re.MULTILINE)
+            for match in matches:
+                potential_name = match.group(1).strip()
+                filtered_name = _filter_bidder_name(potential_name)
+
+                if len(filtered_name) > 1 and _is_valid_company_name(filtered_name):
+                    logger.info(
+                        f"Valid bidder name found via fallback regex: '{filtered_name}'"
+                    )
+                    return filtered_name
+    except Exception as e:
+        logger.error(f'Error during fallback regex extraction: {e}')
 
     return None
 
@@ -497,7 +570,7 @@ def extract_bidder_name_from_file_after_analysis(file_path: str) -> str | None:
         bidder_name = _extract_bidder_name_by_regex(text_to_search)
         if (
             bidder_name
-            and _is_valid_company_name(bidder_name)
+            and len(bidder_name) > 1
             and not _looks_garbled_or_incomplete(bidder_name)
         ):
             logger.info(f"Valid bidder name found via regex: '{bidder_name}'")
@@ -508,7 +581,7 @@ def extract_bidder_name_from_file_after_analysis(file_path: str) -> str | None:
         bidder_name = _extract_bidder_name_from_markdown(text_to_search)
         if (
             bidder_name
-            and _is_valid_company_name(bidder_name)
+            and len(bidder_name) > 1
             and not _looks_garbled_or_incomplete(bidder_name)
         ):
             logger.info(f"Valid bidder name found via Markdown: '{bidder_name}'")
@@ -551,9 +624,11 @@ def extract_bidder_name_from_file_after_analysis(file_path: str) -> str | None:
                             potential_name = row_values[name_col_index]
                             if potential_name:
                                 filtered_name = _filter_bidder_name(potential_name)
-                                if _is_valid_company_name(
+                                if len(
                                     filtered_name
-                                ) and not _looks_garbled_or_incomplete(filtered_name):
+                                ) > 1 and not _looks_garbled_or_incomplete(
+                                    filtered_name
+                                ):
                                     logger.info(
                                         f"Valid bidder name found via table: '{filtered_name}'"
                                     )
@@ -576,7 +651,7 @@ def extract_bidder_name_from_file_after_analysis(file_path: str) -> str | None:
         bidder_name = _extract_bidder_name_by_ai(text_to_search)
         if (
             bidder_name
-            and _is_valid_company_name(bidder_name)
+            and len(bidder_name) > 1
             and not _looks_garbled_or_incomplete(bidder_name)
         ):
             logger.info(f"Valid bidder name found via AI: '{bidder_name}'")
@@ -594,21 +669,27 @@ def extract_bidder_name_from_file(file_path: str) -> str:
     从文件中提取投标人名称的主函数
     """
     try:
-        logger.info(f"开始从文件提取投标人名称: {file_path}")
-        
+        logger.info(f'开始从文件提取投标人名称: {file_path}')
+
         # 获取缓存键
         cache_key = _get_cache_key(file_path)
-        
+
         # 尝试从缓存获取
         if cache_key in _bidder_name_cache:
             cached_result = _bidder_name_cache[cache_key]
-            logger.info(f"从缓存获取投标人名称: {cached_result}")
-            return cached_result
+            logger.info(f'从缓存获取投标人名称: {cached_result}')
+            # 确保返回的不是None或空字符串
+            if cached_result is not None and cached_result.strip():
+                return cached_result
+            else:
+                # 如果缓存中的结果是None或空字符串，继续执行正常流程
+                pass
 
         # 确定文件类型并选择合适的处理方法
         if file_path.lower().endswith('.pdf'):
             # 对于PDF文件，使用PDFProcessor处理
             from .pdf_processor import PDFProcessor
+
             processor = PDFProcessor(file_path)
             pages = processor.extract_text_per_page()
         elif file_path.lower().endswith('.md'):
@@ -623,7 +704,7 @@ def extract_bidder_name_from_file(file_path: str) -> str:
             pages = [content]
 
         if not pages:
-            logger.warning(f"文件 {file_path} 没有内容")
+            logger.warning(f'文件 {file_path} 没有内容')
             # 返回文件名作为备用方案
             filename = os.path.basename(file_path)
             bidder_name = os.path.splitext(filename)[0]
@@ -632,47 +713,49 @@ def extract_bidder_name_from_file(file_path: str) -> str:
 
         # 在特殊章节中搜索投标人名称
         name = _search_bidder_name_in_special_sections(pages)
-        if name:
-            logger.info(f"在特殊章节中找到投标人名称: {name}")
+        if name and name.strip():
+            logger.info(f'在特殊章节中找到投标人名称: {name}')
             _bidder_name_cache[cache_key] = name
             return name
 
         # 尝试使用正则表达式提取
         combined_text = '\n'.join(pages)
         name = _extract_bidder_name_by_regex(combined_text)
-        if name:
-            logger.info(f"通过正则表达式找到投标人名称: {name}")
+        if name and len(name) > 1 and name.strip():
+            logger.info(f'通过正则表达式找到投标人名称: {name}')
             _bidder_name_cache[cache_key] = name
             return name
 
         # 尝试从Markdown格式提取
         name = _extract_bidder_name_from_markdown(combined_text)
-        if name:
-            logger.info(f"从Markdown格式找到投标人名称: {name}")
+        if name and len(name) > 1 and name.strip():
+            logger.info(f'从Markdown格式找到投标人名称: {name}')
             _bidder_name_cache[cache_key] = name
             return name
 
         # 最后尝试使用AI提取
         name = _extract_bidder_name_by_ai(combined_text)
-        if name:
-            logger.info(f"通过AI找到投标人名称: {name}")
+        if name and len(name) > 1 and name.strip():
+            logger.info(f'通过AI找到投标人名称: {name}')
             _bidder_name_cache[cache_key] = name
             return name
 
         # 如果所有方法都失败，返回文件名作为备用方案
         filename = os.path.basename(file_path)
-        bidder_name = os.path.splitext(filename)[0]
-        logger.warning(f"无法从文件内容提取投标人名称，使用文件名作为备用: {bidder_name}")
+        bidder_name = os.path.splitext(filename)[0].replace('.', '')
+        logger.warning(
+            f'无法从文件内容提取投标人名称，使用文件名作为备用: {bidder_name}'
+        )
         _bidder_name_cache[cache_key] = bidder_name
         return bidder_name
 
     except Exception as e:
-        logger.error(f"从文件 {file_path} 提取投标人名称时出错: {e}", exc_info=True)
+        logger.error(f'从文件 {file_path} 提取投标人名称时出错: {e}', exc_info=True)
         # 出错时返回文件名作为备用方案
         try:
             filename = os.path.basename(file_path)
-            bidder_name = os.path.splitext(filename)[0]
-            logger.warning(f"提取出错，使用文件名作为备用: {bidder_name}")
+            bidder_name = os.path.splitext(filename)[0].replace('.', '')
+            logger.warning(f'提取出错，使用文件名作为备用: {bidder_name}')
             return bidder_name
         except:
-            return "未知投标方"
+            return '未知投标方'

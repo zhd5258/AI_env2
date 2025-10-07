@@ -14,6 +14,7 @@ import os
 import shutil
 from datetime import datetime
 from pathlib import Path
+from contextlib import contextmanager
 
 from models.database import (
     SessionLocal,
@@ -34,12 +35,19 @@ def get_filename_from_path(file_path: str) -> str:
 router = Blueprint('projects', __name__, url_prefix='/api')
 
 # 数据库依赖
+@contextmanager
 def get_db():
     db = SessionLocal()
     try:
         yield db
+    except Exception as e:
+        logging.error(f"数据库连接错误: {e}")
+        raise
     finally:
-        db.close()
+        try:
+            db.close()
+        except Exception as e:
+            logging.error(f"关闭数据库连接时出错: {e}")
 
 # 数据模型（替代Pydantic模型）
 class UpdateBidderNameRequest:
@@ -265,9 +273,7 @@ def get_failed_pages_info(project_id, bid_document_id):
     """获取处理失败页面的详细信息"""
     try:
         # 获取数据库会话
-        db_gen = get_db()
-        db = next(db_gen)
-        try:
+        with get_db() as db:
             # 验证投标文件存在且属于指定项目
             bid_doc = (
                 db.query(BidDocument)
@@ -288,11 +294,6 @@ def get_failed_pages_info(project_id, bid_document_id):
                 'processing_status': bid_doc.processing_status,
                 'failed_pages': [],  # 实际实现中可以从日志或其他地方获取失败页面信息
             })
-        finally:
-            try:
-                next(db_gen)  # 触发finally块
-            except StopIteration:
-                pass
 
     except Exception as e:
         logging.error(f'获取失败页面信息时出错: {e}')
@@ -303,9 +304,7 @@ def cleanup_temp_files(project_id):
     """清理临时文件"""
     try:
         # 获取数据库会话
-        db_gen = get_db()
-        db = next(db_gen)
-        try:
+        with get_db() as db:
             # 验证项目存在
             project = db.query(TenderProject).filter(TenderProject.id == project_id).first()
             if not project:
@@ -407,12 +406,28 @@ def cleanup_temp_files(project_id):
                 'project_id': project_id,
                 'results': cleanup_results,
             })
-        finally:
-            try:
-                next(db_gen)  # 触发finally块
-            except StopIteration:
-                pass
 
     except Exception as e:
         logging.error(f'清理临时文件时出错: {e}')
         return jsonify({'error': f'清理临时文件失败: {str(e)}'}), 500
+
+@router.route('/projects/<int:project_id>/dynamic-summary', methods=['GET'])
+def get_project_dynamic_summary(project_id):
+    """获取项目动态汇总表数据"""
+    try:
+        with get_db() as db:
+            from modules.summary_generator import generate_summary_data
+            summary_data = generate_summary_data(project_id, db)
+            if not summary_data:
+                return jsonify({'error': '无法生成汇总数据'}), 500
+            
+            # 添加项目信息到返回数据
+            project = db.query(TenderProject).filter(TenderProject.id == project_id).first()
+            if project:
+                summary_data['project_id'] = project_id
+                summary_data['project_name'] = project.name
+            
+            return jsonify(summary_data)
+    except Exception as e:
+        logging.error(f'生成项目动态汇总时出错: {e}')
+        return jsonify({'error': f'生成汇总失败: {str(e)}'}), 500

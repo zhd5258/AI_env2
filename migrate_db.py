@@ -79,6 +79,19 @@ def migrate_database():
             print("original_filename列添加完成")
         else:
             print("original_filename列已存在")
+            
+        # 检查是否需要添加ocr_retry_count列
+        if 'ocr_retry_count' not in bid_document_table.c:
+            print("添加ocr_retry_count列...")
+            with engine.connect() as conn:
+                # 使用ALTER TABLE语句添加列
+                conn.execute(
+                    text('ALTER TABLE bid_document ADD COLUMN ocr_retry_count INTEGER DEFAULT 0')
+                )
+                conn.commit()
+            print("ocr_retry_count列添加完成")
+        else:
+            print("ocr_retry_count列已存在")
     
     print("数据库迁移完成")
 

@@ -13,7 +13,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>系统设置 - 智能评标系统</title>
-    <link rel="stylesheet" href="/public/css/style.css">
+    <link rel="stylesheet" href="/static/css/style.css">
     <style>
         body {
             font-family: Arial, sans-serif;
@@ -156,6 +156,14 @@
                 <small>单个PDF文件的最小总处理时间（30-600秒）</small>
             </div>
             
+            <div class="form-group">
+                <label for="auto_delete_md_files">
+                    <input type="checkbox" id="auto_delete_md_files" name="auto_delete_md_files">
+                    分析完成后自动删除MD文件
+                </label>
+                <small>启用后，分析完成后将自动删除生成的MD文件以节省磁盘空间</small>
+            </div>
+            
             <button type="submit" id="runtimeConfigSubmitBtn">保存设置</button>
         </form>
     </div>
@@ -262,6 +270,8 @@
                     document.getElementById('pdf_page_max_workers').value = runtimeConfig.pdf_page_max_workers || 4;
                     document.getElementById('pdf_page_timeout_sec').value = runtimeConfig.pdf_page_timeout_sec || 20;
                     document.getElementById('pdf_overall_min_timeout_sec').value = runtimeConfig.pdf_overall_min_timeout_sec || 60;
+                    // 设置自动删除MD文件的复选框状态
+                    document.getElementById('auto_delete_md_files').checked = runtimeConfig.auto_delete_md_files || false;
                 }
             } catch (error) {
                 console.error('获取运行时配置失败:', error);
@@ -335,6 +345,8 @@
             config.pdf_page_max_workers = parseInt(config.pdf_page_max_workers);
             config.pdf_page_timeout_sec = parseInt(config.pdf_page_timeout_sec);
             config.pdf_overall_min_timeout_sec = parseInt(config.pdf_overall_min_timeout_sec);
+            // 获取复选框的值
+            config.auto_delete_md_files = document.getElementById('auto_delete_md_files').checked;
             
             try {
                 const response = await fetch('/api/runtime-config', {

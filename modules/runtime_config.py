@@ -17,6 +17,7 @@ def _default_config() -> Dict[str, Any]:
         'pdf_overall_min_timeout_sec': 60,  # 单文件最小总超时
         'max_content_length': 500 * 1024 * 1024,  # 文件上传大小限制，默认500MB
         'single_file_max_size': 100 * 1024 * 1024,  # 单个文件大小限制，默认100MB
+        'auto_delete_md_files': False,  # 分析完成后是否自动删除MD文件，默认不删除
     }
 
 
@@ -74,5 +75,14 @@ def get_int(cfg: Dict[str, Any], key: str, default_value: int) -> int:
     try:
         v = cfg.get(key, default_value)
         return int(v)
+    except Exception:
+        return default_value
+
+
+def get_bool(cfg: Dict[str, Any], key: str, default_value: bool) -> bool:
+    """安全获取布尔型配置。"""
+    try:
+        v = cfg.get(key, default_value)
+        return bool(v)
     except Exception:
         return default_value

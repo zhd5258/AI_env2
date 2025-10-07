@@ -15,6 +15,7 @@ from modules.runtime_config import (
     save_config,
     load_config_for_project,
     save_config_for_project,
+    get_bool,
 )
 
 # 创建蓝图
@@ -36,6 +37,7 @@ DEFAULT_OCR_CONFIG = {
     'cls_model_dir': None,
 }
 
+
 def load_ocr_config():
     """加载OCR配置"""
     if os.path.exists(OCR_CONFIG_FILE):
@@ -45,6 +47,7 @@ def load_ocr_config():
         except Exception as e:
             logging.error(f'加载OCR配置失败: {e}')
     return DEFAULT_OCR_CONFIG.copy()
+
 
 def save_ocr_config(config):
     """保存OCR配置"""
@@ -56,10 +59,12 @@ def save_ocr_config(config):
         logging.error(f'保存OCR配置失败: {e}')
         return False
 
+
 @router.route('/runtime-config', methods=['GET'])
 def get_runtime_config():
     """获取当前运行参数配置（全局默认）。"""
     return jsonify(RUNTIME_CONFIG)
+
 
 @router.route('/runtime-config', methods=['POST'])
 def update_runtime_config():
@@ -68,7 +73,7 @@ def update_runtime_config():
 
     try:
         data = request.get_json()
-        
+
         # 验证参数范围
         updates = {k: v for k, v in data.items() if v is not None}
 
@@ -87,7 +92,9 @@ def update_runtime_config():
             try:
                 max_content_length = int(max_content_length)
                 if not (1 * 1024 * 1024 <= max_content_length <= 1000 * 1024 * 1024):
-                    return jsonify({'error': '文件上传大小限制必须在1MB到1000MB之间'}), 400
+                    return jsonify(
+                        {'error': '文件上传大小限制必须在1MB到1000MB之间'}
+                    ), 400
                 updates['max_content_length'] = max_content_length
             except (ValueError, TypeError):
                 return jsonify({'error': '文件上传大小限制必须是整数'}), 400
@@ -99,10 +106,20 @@ def update_runtime_config():
             try:
                 single_file_max_size = int(single_file_max_size)
                 if not (1 * 1024 * 1024 <= single_file_max_size <= 500 * 1024 * 1024):
-                    return jsonify({'error': '单个文件大小限制必须在1MB到500MB之间'}), 400
+                    return jsonify(
+                        {'error': '单个文件大小限制必须在1MB到500MB之间'}
+                    ), 400
                 updates['single_file_max_size'] = single_file_max_size
             except (ValueError, TypeError):
                 return jsonify({'error': '单个文件大小限制必须是整数'}), 400
+
+        # 验证自动删除MD文件配置
+        if 'auto_delete_md_files' in updates:
+            # 确保是布尔值
+            try:
+                updates['auto_delete_md_files'] = bool(updates['auto_delete_md_files'])
+            except (ValueError, TypeError):
+                return jsonify({'error': '自动删除MD文件配置必须是布尔值'}), 400
 
         # 更新配置
         RUNTIME_CONFIG.update(updates)
@@ -110,14 +127,12 @@ def update_runtime_config():
         # 保存到文件
         save_config(RUNTIME_CONFIG)
         logging.info(f'全局运行配置已更新: {updates}')
-        return jsonify({
-            'message': '配置更新成功',
-            'config': RUNTIME_CONFIG
-        })
+        return jsonify({'message': '配置更新成功', 'config': RUNTIME_CONFIG})
 
     except Exception as e:
         logging.error(f'更新运行配置时出错: {e}')
         return jsonify({'error': f'更新配置失败: {str(e)}'}), 500
+
 
 @router.route('/projects/<int:project_id>/runtime-config', methods=['GET'])
 def get_project_runtime_config(project_id):
@@ -135,12 +150,13 @@ def get_project_runtime_config(project_id):
         logging.error(f'获取项目 {project_id} 运行配置时出错: {e}')
         return jsonify({'error': f'获取项目配置失败: {str(e)}'}), 500
 
+
 @router.route('/projects/<int:project_id>/runtime-config', methods=['POST'])
 def update_project_runtime_config(project_id):
     """更新项目级运行参数配置（数值校验+落盘）。"""
     try:
         data = request.get_json()
-        
+
         # 验证参数范围（同全局配置）
         updates = {k: v for k, v in data.items() if v is not None}
 
@@ -159,7 +175,9 @@ def update_project_runtime_config(project_id):
             try:
                 max_content_length = int(max_content_length)
                 if not (1 * 1024 * 1024 <= max_content_length <= 1000 * 1024 * 1024):
-                    return jsonify({'error': '文件上传大小限制必须在1MB到1000MB之间'}), 400
+                    return jsonify(
+                        {'error': '文件上传大小限制必须在1MB到1000MB之间'}
+                    ), 400
                 updates['max_content_length'] = max_content_length
             except (ValueError, TypeError):
                 return jsonify({'error': '文件上传大小限制必须是整数'}), 400
@@ -171,10 +189,20 @@ def update_project_runtime_config(project_id):
             try:
                 single_file_max_size = int(single_file_max_size)
                 if not (1 * 1024 * 1024 <= single_file_max_size <= 500 * 1024 * 1024):
-                    return jsonify({'error': '单个文件大小限制必须在1MB到500MB之间'}), 400
+                    return jsonify(
+                        {'error': '单个文件大小限制必须在1MB到500MB之间'}
+                    ), 400
                 updates['single_file_max_size'] = single_file_max_size
             except (ValueError, TypeError):
                 return jsonify({'error': '单个文件大小限制必须是整数'}), 400
+
+        # 验证自动删除MD文件配置
+        if 'auto_delete_md_files' in updates:
+            # 确保是布尔值
+            try:
+                updates['auto_delete_md_files'] = bool(updates['auto_delete_md_files'])
+            except (ValueError, TypeError):
+                return jsonify({'error': '自动删除MD文件配置必须是布尔值'}), 400
 
         # 获取当前项目配置
         current_config = load_config_for_project(project_id) or RUNTIME_CONFIG.copy()
@@ -185,10 +213,7 @@ def update_project_runtime_config(project_id):
         # 保存项目配置
         if save_config_for_project(project_id, current_config):
             logging.info(f'项目 {project_id} 运行配置已更新: {updates}')
-            return jsonify({
-                'message': '项目配置更新成功',
-                'config': current_config
-            })
+            return jsonify({'message': '项目配置更新成功', 'config': current_config})
         else:
             return jsonify({'error': '项目配置保存失败'}), 500
 
@@ -196,29 +221,33 @@ def update_project_runtime_config(project_id):
         logging.error(f'更新项目 {project_id} 运行配置时出错: {e}')
         return jsonify({'error': f'更新项目配置失败: {str(e)}'}), 500
 
+
 @router.route('/ocr-config', methods=['GET'])
 def get_ocr_config():
     """获取当前OCR配置"""
-    return jsonify({
-        'success': True,
-        'data': load_ocr_config(),
-        'available_engines': [
-            'smart',
-            'rapid',
-            'pp_ocrv5',
-            'hybrid',
-            'optimized',
-            'v3_2',
-            '3_2_final',
-        ],
-    })
+    return jsonify(
+        {
+            'success': True,
+            'data': load_ocr_config(),
+            'available_engines': [
+                'smart',
+                'rapid',
+                'pp_ocrv5',
+                'hybrid',
+                'optimized',
+                'v3_2',
+                '3_2_final',
+            ],
+        }
+    )
+
 
 @router.route('/ocr-config', methods=['POST'])
 def update_ocr_config():
     """更新OCR配置"""
     try:
         data = request.get_json()
-        
+
         # 验证OCR引擎
         valid_engines = [
             'smart',
@@ -231,26 +260,32 @@ def update_ocr_config():
         ]
 
         if data.get('ocr_engine') not in valid_engines:
-            return jsonify({
-                'success': False,
-                'error': f'无效的OCR引擎: {data.get("ocr_engine")}',
-                'valid_engines': valid_engines,
-            }), 400
+            return jsonify(
+                {
+                    'success': False,
+                    'error': f'无效的OCR引擎: {data.get("ocr_engine")}',
+                    'valid_engines': valid_engines,
+                }
+            ), 400
 
         # 保存配置
         if save_ocr_config(data):
             logging.info(f'OCR配置已更新: {data}')
-            return jsonify({
-                'success': True,
-                'message': 'OCR配置更新成功',
-                'config': data,
-            })
+            return jsonify(
+                {
+                    'success': True,
+                    'message': 'OCR配置更新成功',
+                    'config': data,
+                }
+            )
         else:
             return jsonify({'success': False, 'error': 'OCR配置保存失败'}), 500
 
     except Exception as e:
         logging.error(f'更新OCR配置时出错: {e}')
-        return jsonify({
-            'success': False,
-            'error': f'更新OCR配置失败: {str(e)}',
-        }), 500
+        return jsonify(
+            {
+                'success': False,
+                'error': f'更新OCR配置失败: {str(e)}',
+            }
+        ), 500

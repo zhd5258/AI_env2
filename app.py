@@ -1,13 +1,13 @@
 #!/usr/bin/env python
 # -*- coding:utf-8 -*-
 #
-#作者           : KingFreeDom
-#创建时间         : 2025-10-03 14:14:03
-#最近一次编辑者      : KingFreeDom
-#最近一次编辑时间     : 2025-10-06 14:07:08
-#文件相对于项目的路径   : \AI_env2\app.py
+# 作者           : KingFreeDom
+# 创建时间         : 2025-10-03 14:14:03
+# 最近一次编辑者      : KingFreeDom
+# 最近一次编辑时间     : 2025-10-06 14:11:06
+# 文件相对于项目的路径   : \AI_env2\app.py
 #
-#Copyright (c) 2025 by 中车眉山车辆有限公司/KingFreeDom, All Rights Reserved. 
+# Copyright (c) 2025 by 中车眉山车辆有限公司/KingFreeDom, All Rights Reserved.
 #
 #!/usr/bin/env python
 # -*- coding:utf-8 -*-
@@ -18,14 +18,14 @@
 import logging
 from flask import Flask, render_template, send_from_directory
 from config.app_config import Config
+
 # 修复导入路径 - 从 cors_middleware 导入而不是 cors
 from middleware.cors_middleware import setup_cors
 from modules.runtime_config import load_config
 
 # 配置日志
 logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(levelname)s - %(message)s'
+    level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s'
 )
 
 # 创建Flask应用
@@ -36,14 +36,18 @@ app.config.from_object(Config)
 
 # 从运行时配置加载文件上传大小限制
 runtime_config = load_config()
-app.config['MAX_CONTENT_LENGTH'] = runtime_config.get('max_content_length', 500 * 1024 * 1024)
+app.config['MAX_CONTENT_LENGTH'] = runtime_config.get(
+    'max_content_length', 500 * 1024 * 1024
+)
 
 # 启动资源监控器
 from modules.resource_monitor import start_resource_monitoring
+
 start_resource_monitoring()
 
 # 设置中间件
 setup_cors(app)
+
 
 def register_routes():
     """注册路由"""
@@ -55,7 +59,7 @@ def register_routes():
     from routes.export_routes import router as export_router
     from routes.page_routes import router as page_router
     from routes.settings_routes import router as settings_router
-    
+
     # 注册路由
     app.register_blueprint(file_router)
     app.register_blueprint(project_router)
@@ -65,9 +69,9 @@ def register_routes():
     app.register_blueprint(page_router)
     app.register_blueprint(settings_router)
 
+
 # 注册路由
 register_routes()
-
 
 
 @app.route('/')
@@ -75,10 +79,12 @@ def index():
     """首页"""
     return render_template('index.html')
 
-@app.route('/public/<path:filename>')
+
+@app.route('/static/<path:filename>')
 def static_files(filename):
     """提供静态文件服务"""
-    return send_from_directory('public', filename)
+    return send_from_directory('static', filename)
+
 
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=8000, debug=False)

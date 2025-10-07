@@ -4,7 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>智能评标系统</title>
-    <link rel="stylesheet" href="/public/css/style.css">
+    <link rel="stylesheet" href="/static/css/style.css">
     <style>
         body {
             font-family: Arial, sans-serif;
@@ -271,6 +271,24 @@
                 if (response.ok) {
                     const data = await response.json();
                     updateProgressDisplay(data);
+                    
+                    // 检查项目是否已完成
+                    if (data.project_status === 'completed' || data.project_status === 'completed_with_errors' ||
+                        data.processing_status === 'completed' || data.processing_status === 'completed_with_errors') {
+                        // 项目已完成，尝试获取汇总数据
+                        try {
+                            const summaryResponse = await fetch(`/api/projects/${projectId}/dynamic-summary`);
+                            if (summaryResponse.ok) {
+                                const summaryData = await summaryResponse.json();
+                                displaySummaryResults(summaryData);
+                                return;
+                            }
+                        } catch (summaryError) {
+                            console.warn('获取动态汇总数据失败，回退到分析结果:', summaryError);
+                        }
+                        
+                        // 如果获取动态汇总数据失败，可以在这里添加其他处理逻辑
+                    }
                 }
             } catch (error) {
                 console.error('获取进度失败:', error);
@@ -285,12 +303,120 @@
             const timeDisplay = document.getElementById('timeDisplay');
             const elapsedTimeElement = document.getElementById('elapsedTime');
             
+            // 更新总体进度
             if (data.overall_progress !== undefined) {
                 progressFill.style.width = `${data.overall_progress}%`;
-                progressText.textContent = `${data.overall_progress.toFixed(1)}%`;
+                // 显示更详细的总体进度信息
+                let phaseInfo = '';
+                if (data.document_statuses && data.document_statuses.length > 0) {
+                    const phases = data.document_statuses.map(doc => doc.processing_phase).filter(phase => phase);
+                    if (phases.length > 0) {
+                        // 统计各阶段的文件数量
+                        const phaseCounts = {};
+                        phases.forEach(phase => {
+                            phaseCounts[phase] = (phaseCounts[phase] || 0) + 1;
+                        });
+
+                        // 构建阶段信息字符串
+                        const phaseTexts = Object.entries(phaseCounts).map(([phase, count]) => `${phase}: ${count}个`);
+                        phaseInfo = ` (${phaseTexts.join(', ')})`;
+                    }
+                }
+                progressText.textContent = `总体进度: ${data.processing_status} (${data.completed_files || 0}/${data.total_files || 0} 个文件完成)${phaseInfo}`;
             }
             
-            if (data.detailed_progress) {
+            // 显示每个投标文件的详细进度
+            if (data.document_statuses) {
+                let detailedHtml = '<div class="row mt-4">';
+                
+                data.document_statuses.forEach((bid, index) => {
+                    // 计算单个文件的进度
+                    let bidProgress = 0;
+                    if (bid.progress_total > 0) {
+                        bidProgress = (bid.progress_completed / bid.progress_total) * 100;
+                    } else if (bid.processing_status === 'completed') {
+                        bidProgress = 100;
+                    }
+                    
+                    // 确定状态文本和样式
+                    let statusText = '';
+                    let statusClass = '';
+                    let statusBgClass = '';
+                    
+                    if (bid.processing_phase) {
+                        statusText = bid.processing_phase;
+                    } else {
+                        switch (bid.processing_status) {
+                            case 'completed':
+                                statusText = '分析完成';
+                                statusClass = 'text-success';
+                                statusBgClass = 'bg-success';
+                                break;
+                            case 'error':
+                                statusText = '处理出错';
+                                statusClass = 'text-danger';
+                                statusBgClass = 'bg-danger';
+                                break;
+                            case 'processing':
+                                statusText = bid.current_rule || '处理中';
+                                statusClass = 'text-info';
+                                statusBgClass = 'bg-info';
+                                break;
+                            default:
+                                statusText = '等待处理';
+                                statusClass = 'text-secondary';
+                                statusBgClass = 'bg-secondary';
+                        }
+                    }
+                    
+                    // 获取文件名（用于在投标人名称未解析成功时显示）
+                    let fileName = '未知文件';
+                    if (bid.file_path) {
+                        const pathParts = bid.file_path.split('\\');
+                        fileName = pathParts[pathParts.length - 1].replace('.pdf', '');
+                    }
+                    
+                    // 使用投标人名称或文件名作为标题
+                    const displayTitle = (bid.bidder_name && bid.bidder_name !== '未知投标人' && bid.bidder_name.trim() !== '') 
+                        ? bid.bidder_name 
+                        : fileName;
+                    
+                    // 构建单个文件的进度框架
+                    detailedHtml += `
+                        <div class="col-md-6 col-lg-4 mb-4">
+                            <div class="card h-100">
+                                <div class="card-header bg-primary text-white">
+                                    <h6 class="mb-0">${displayTitle}</h6>
+                                </div>
+                                <div class="card-body">
+                                    <div class="d-flex justify-content-between align-items-center mb-2">
+                                        <span class="fw-bold ${statusClass}">${statusText}</span>
+                                        <span class="fw-bold">${bidProgress.toFixed(1)}%</span>
+                                    </div>
+                                    <div class="progress mb-3" style="height: 20px;">
+                                        <div class="progress-bar ${statusBgClass}" 
+                                             role="progressbar" 
+                                             style="width: ${bidProgress}%;" 
+                                             aria-valuenow="${bidProgress}" 
+                                             aria-valuemin="0" 
+                                             aria-valuemax="100">
+                                        </div>
+                                    </div>
+                                    <div class="small text-muted mb-2">
+                                        规则进度: ${bid.progress_completed || 0}/${bid.progress_total || 0}
+                                    </div>
+                                    ${bid.current_rule ? `<div class="small mb-2"><strong>当前规则:</strong> ${bid.current_rule}</div>` : ''}
+                                    ${bid.error_message ? `<div class="small text-danger"><strong>错误:</strong> ${bid.error_message}</div>` : ''}
+                                </div>
+                            </div>
+                        </div>
+                    `;
+                });
+                
+                detailedHtml += '</div>';
+                detailedProgress.innerHTML = detailedHtml;
+            } else if (data.detailed_progress) {
+                // 保持向后兼容性
                 let html = '<ul>';
                 for (const [filename, progress] of Object.entries(data.detailed_progress)) {
                     html += `<li>${filename}: ${progress}%</li>`;
@@ -313,6 +439,80 @@
                 const seconds = Math.floor(data.elapsed_time % 60);
                 elapsedTimeElement.textContent = `${minutes}分${seconds}秒`;
             }
+        }
+
+        // 显示汇总结果
+        function displaySummaryResults(summaryData) {
+            const resultDiv = document.getElementById('result');
+            const progressSection = document.getElementById('progressSection');
+            
+            // 隐藏进度界面
+            progressSection.style.display = 'none';
+            
+            // 错误检查
+            if (summaryData.error) {
+                resultDiv.className = 'result error';
+                resultDiv.innerHTML = `<h3>汇总失败!</h3><p>${summaryData.error}</p>`;
+                resultDiv.style.display = 'block';
+                return;
+            }
+            
+            // 构建汇总结果显示
+            let html = `
+                <div class="card">
+                    <div class="card-header">
+                        <h3 class="card-title">项目汇总结果 - ${summaryData.project_name || '未知项目'}</h3>
+                    </div>
+                    <div class="card-body">
+                        <div class="table-responsive">
+                            <table class="table table-bordered table-hover">
+                                <thead class="table-light">
+                                    <tr>
+                                        <th>投标人</th>
+                                        <th>投标总价</th>
+                                        <th>评标基准价</th>
+                                        <th>价格得分</th>
+                                        <th>技术得分</th>
+                                        <th>总分</th>
+                                        <th>排名</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+            `;
+            
+            // 处理汇总数据
+            if (summaryData.summary && summaryData.summary.length > 0) {
+                summaryData.summary.forEach((item, index) => {
+                    html += `
+                        <tr>
+                            <td>${item.bidder_name || 'N/A'}</td>
+                            <td>${item.bid_price ? item.bid_price.toFixed(2) : 'N/A'}</td>
+                            <td>${item.benchmark_price ? item.benchmark_price.toFixed(2) : 'N/A'}</td>
+                            <td>${item.price_score ? item.price_score.toFixed(2) : 'N/A'}</td>
+                            <td>${item.technical_score ? item.technical_score.toFixed(2) : 'N/A'}</td>
+                            <td>${item.total_score ? item.total_score.toFixed(2) : 'N/A'}</td>
+                            <td>${item.rank || 'N/A'}</td>
+                        </tr>
+                    `;
+                });
+            } else {
+                html += '<tr><td colspan="7">无汇总数据</td></tr>';
+            }
+            
+            html += `
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+                </div>
+                <div class="mt-3">
+                    <button class="btn btn-primary" onclick="location.reload()">重新开始</button>
+                </div>
+            `;
+            
+            resultDiv.className = 'result success';
+            resultDiv.innerHTML = html;
+            resultDiv.style.display = 'block';
         }
 
         // 开始轮询进度

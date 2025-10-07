@@ -163,6 +163,72 @@ class MinerUProcessor:
         self.output_dir.mkdir(exist_ok=True)
         self.temp_dir.mkdir(exist_ok=True)
 
+    def _assess_conversion_quality(self, md_file_path: Path) -> bool:
+        """
+        评估PDF转换为Markdown的质量
+        
+        Args:
+            md_file_path: Markdown文件路径
+            
+        Returns:
+            bool: 质量是否达标
+        """
+        try:
+            if not md_file_path.exists():
+                logger.warning(f"文件不存在，无法评估质量: {md_file_path}")
+                return False
+
+            with open(md_file_path, 'r', encoding='utf-8') as f:
+                content = f.read()
+
+            # 检查文件是否为空
+            if not content.strip():
+                logger.warning(f"转换后的文件为空: {md_file_path}")
+                return False
+
+            # 检查是否全文都是无意义的同一符号（如全是点、横线等）
+            # 提取文本内容，去除Markdown标记
+            import re
+            text_content = re.sub(r'[\*\_\`\#\-\|\[\]\(\)]', '', content)
+            text_content = re.sub(r'\s+', '', text_content)  # 去除所有空白字符
+            
+            if not text_content:
+                logger.warning(f"转换后的文件无有效文本内容: {md_file_path}")
+                return False
+
+            # 检查是否大部分内容都是相同的字符
+            char_count = {}
+            for char in text_content:
+                char_count[char] = char_count.get(char, 0) + 1
+            
+            # 如果某个字符占比超过80%，认为质量不达标
+            if char_count:
+                most_common_char = max(char_count, key=char_count.get)
+                most_common_ratio = char_count[most_common_char] / len(text_content)
+                if most_common_ratio > 0.8:
+                    logger.warning(f"转换质量差，内容主要由重复字符 '{most_common_char}' 构成，占比 {most_common_ratio:.2%}: {md_file_path}")
+                    return False
+
+            # 检查是否有足够的文本内容（至少100个字符）
+            if len(text_content) < 100:
+                logger.warning(f"转换后的文件文本内容过少 ({len(text_content)} 字符): {md_file_path}")
+                return False
+
+            # 检查是否包含基本的文本结构
+            lines = content.split('\n')
+            non_empty_lines = [line for line in lines if line.strip()]
+            
+            if len(non_empty_lines) < 5:
+                logger.warning(f"转换后的文件有效行数过少 ({len(non_empty_lines)} 行): {md_file_path}")
+                return False
+
+            logger.info(f"转换质量评估通过: {md_file_path}")
+            return True
+
+        except Exception as e:
+            logger.error(f"评估转换质量时出错: {e}")
+            return False
+
     def process_with_mineru(
         self,
         pdf_path: str,
@@ -446,6 +512,14 @@ class MinerUProcessor:
                 if output_file.exists() and keep_ext == '.md':
                     logger.info('开始优化Markdown格式')
                     self._optimize_markdown_format(output_file)
+
+                # 评估转换质量
+                if keep_ext == '.md' and output_file.exists():
+                    if not self._assess_conversion_quality(output_file):
+                        logger.warning(f"MinerU转换质量不达标，删除文件: {output_file}")
+                        # 删除质量不达标的文件
+                        output_file.unlink()
+                        raise RuntimeError("PDF转换质量不达标")
 
                 # 最后清理所有中间文件(包括图片、JSON、PDF等)
                 # 注意:清理操作应该在移动最终文件之后进行

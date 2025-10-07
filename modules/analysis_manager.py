@@ -9,17 +9,6 @@
 #
 # Copyright (c) 2025 by 中车眉山车辆有限公司/KingFreeDom, All Rights Reserved.
 #
-#!/usr/bin/env python
-# -*- coding:utf-8 -*-
-#
-# 作者           : KingFreeDom
-# 创建时间         : 2025-09-26 18:30:00
-# 最近一次编辑者      : KingFreeDom
-# 最近一次编辑时间     : 2025-09-26 18:30:00
-# 文件相对于项目的路径   : \AI_env2\modules\analysis_manager.py
-#
-# Copyright (c) 2025 by 中车眉山车辆有限公司/KingFreeDom, All Rights Reserved.
-#
 """
 分析管理器模块
 统一处理项目分析流程，包括评分规则提取、投标文件分析和价格分计算
@@ -30,17 +19,25 @@ import asyncio
 import traceback
 from typing import List, Dict, Any
 from sqlalchemy.orm import Session
-from concurrent.futures import ProcessPoolExecutor
+from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor
 import os
+import threading
+import glob
 
 from modules.database import TenderProject, BidDocument, AnalysisResult
-from modules.intelligent_scoring_extractor import IntelligentScoringExtractor
+
+# 修正导入错误，使用正确的模块名
+from modules.correct_scoring_extractor import CorrectScoringExtractor
 from modules.scoring_rules_manager import ScoringRulesManager
 from modules.price_score_calculator import PriceScoreCalculator
 from modules.intelligent_bid_analyzer import IntelligentBidAnalyzer
+from modules.runtime_config import load_config, get_bool
 
-# 创建一个进程池
-executor = ProcessPoolExecutor(max_workers=os.cpu_count())
+# 创建一个线程池而不是进程池，避免并行PDF转换导致的问题
+executor = ThreadPoolExecutor(max_workers=4)
+
+# 添加一个锁来防止并行PDF转换
+pdf_conversion_lock = threading.Lock()
 
 
 class AnalysisManager:
@@ -83,10 +80,9 @@ class AnalysisManager:
 
             self.logger.info(f'项目 {project_id} 没有评分规则，开始从招标文件提取...')
 
-            # 使用TenderAnalyzer提取评分规则
-            from modules.tender_analyzer import TenderAnalyzer
-            analyzer = TenderAnalyzer(tender_file_path, self.db, project_id)
-            scoring_rules = analyzer.extract_scoring_rules()
+            # 使用CorrectScoringExtractor提取评分规则
+            extractor = CorrectScoringExtractor(tender_file_path)
+            scoring_rules = extractor.extract_scoring_rules()
 
             if scoring_rules:
                 # 使用统一的评分规则管理器保存评分规则
@@ -152,7 +148,80 @@ class AnalysisManager:
             # 更新状态为正在处理
             bid_document.processing_status = 'processing'  # type: ignore[assignment]
             bid_document.progress_current_rule = '开始分析...'
+            bid_document.processing_phase = 'PDF处理中'  # 添加处理阶段信息
             db.commit()
+
+            # 在MD转换完成后首先解析投标人名称
+            try:
+                from modules.bidder_name_extractor import extract_bidder_name_from_file
+                from modules.pdf_processor import PDFProcessor
+
+                # 使用锁确保PDF转换不会并行执行
+                with pdf_conversion_lock:
+                    # 获取MD文件路径
+                    pdf_processor = PDFProcessor(bid_file_path, file_type='bid')
+                    md_file_path = pdf_processor.get_md_file_path()
+
+                    # 优先从MD文件提取投标人名称
+                    if os.path.exists(md_file_path):
+                        extracted_name = extract_bidder_name_from_file(md_file_path)
+                    else:
+                        # 如果MD文件不存在，则处理PDF文件并提取
+                        pdf_processor.process_pdf_to_md()
+                        md_file_path = pdf_processor.get_md_file_path()
+                        if os.path.exists(md_file_path):
+                            extracted_name = extract_bidder_name_from_file(md_file_path)
+                        else:
+                            # 如果处理后仍然没有MD文件，则直接从PDF文件提取
+                            extracted_name = extract_bidder_name_from_file(
+                                bid_file_path
+                            )
+
+                # 更新投标人名称
+                if (
+                    extracted_name
+                    and extracted_name.strip()
+                    and extracted_name != '未提取'
+                ):
+                    bid_document.bidder_name = extracted_name.strip()
+                    # 同时更新分析结果中的投标人名称
+                    result_record = (
+                        db.query(AnalysisResult)
+                        .filter(AnalysisResult.bid_document_id == bid_document_id)
+                        .first()
+                    )
+                    if result_record:
+                        result_record.bidder_name = extracted_name.strip()
+                    self.logger.info(f'成功提取投标人名称: {extracted_name}')
+                else:
+                    # 如果未提取到名称，使用文件名作为备用
+                    filename = os.path.basename(bid_file_path)
+                    bidder_name = os.path.splitext(filename)[0]
+                    bid_document.bidder_name = bidder_name
+                    if result_record:
+                        result_record.bidder_name = bidder_name
+                    self.logger.warning(
+                        f'未提取到投标人名称，使用文件名作为备用: {bidder_name}'
+                    )
+            except Exception as e:
+                self.logger.warning(f'提取投标人名称时出错: {e}')
+                # 出错时使用文件名作为备用
+                try:
+                    filename = os.path.basename(bid_file_path)
+                    bidder_name = os.path.splitext(filename)[0]
+                    bid_document.bidder_name = bidder_name
+                    result_record = (
+                        db.query(AnalysisResult)
+                        .filter(AnalysisResult.bid_document_id == bid_document_id)
+                        .first()
+                    )
+                    if result_record:
+                        result_record.bidder_name = bidder_name
+                    self.logger.warning(
+                        f'提取投标人名称出错，使用文件名作为备用: {bidder_name}'
+                    )
+                except:
+                    pass
 
             # 创建智能投标分析器
             analyzer = IntelligentBidAnalyzer(
@@ -166,6 +235,7 @@ class AnalysisManager:
             if analysis_result['status'] == 'success':
                 bid_document.processing_status = 'completed'  # type: ignore[assignment]
                 bid_document.progress_current_rule = '分析完成'
+                bid_document.processing_phase = '分析完成'  # 更新处理阶段信息
 
                 # 更新分析结果记录
                 result_record = (
@@ -185,20 +255,37 @@ class AnalysisManager:
                     # 如果AI没有提取到投标人名称，则尝试从文件中提取
                     if not bidder_name_extracted:
                         try:
-                            from modules.bidder_name_extractor import extract_bidder_name_from_file
+                            from modules.bidder_name_extractor import (
+                                extract_bidder_name_from_file,
+                            )
+
                             # 优先从MD文件提取投标人名称
+                            from modules.pdf_processor import PDFProcessor
+
                             pdf_processor = PDFProcessor(bid_document.file_path)
                             md_file_path = pdf_processor.get_md_file_path()
                             if os.path.exists(md_file_path):
-                                extracted_name = extract_bidder_name_from_file(md_file_path)
+                                extracted_name = extract_bidder_name_from_file(
+                                    md_file_path
+                                )
                             else:
-                                extracted_name = extract_bidder_name_from_file(bid_document.file_path)
-                            if extracted_name and extracted_name != '未提取':
-                                bid_document.bidder_name = extracted_name
-                                result_record.bidder_name = extracted_name
+                                extracted_name = extract_bidder_name_from_file(
+                                    bid_document.file_path
+                                )
+                            # 确保提取到的名称不是None或空字符串
+                            if (
+                                extracted_name
+                                and extracted_name.strip()
+                                and extracted_name != '未提取'
+                            ):
+                                bid_document.bidder_name = extracted_name.strip()
+                                result_record.bidder_name = extracted_name.strip()
+                                # 同时更新分析器中的投标人名称
+                                if hasattr(self, 'analyzer') and self.analyzer:
+                                    self.analyzer.bidder_name = extracted_name.strip()
                         except Exception as e:
                             self.logger.warning(f'从文件中提取投标人名称时出错: {e}')
-                    
+
                     # 更新投标总价（如果AI提取到了）
                     if '投标总价' in details and details['投标总价'] != '未提取':
                         try:
@@ -220,6 +307,15 @@ class AnalysisManager:
                                 f'无法解析投标总价: {details["投标总价"]}, 错误: {e}'
                             )
                 self.logger.info(f'投标文件分析完成: {bid_document.bidder_name}')
+            elif analysis_result['status'] == 'warning':
+                # 警告状态，但仍标记为完成
+                bid_document.processing_status = 'completed'  # type: ignore[assignment]
+                bid_document.progress_current_rule = '分析完成（质量警告）'
+                bid_document.processing_phase = '分析完成'  # 更新处理阶段信息
+                bid_document.error_message = analysis_result['message']
+                self.logger.warning(
+                    f'投标文件分析完成但有警告: {analysis_result["message"]}'
+                )
             else:
                 bid_document.processing_status = 'error'  # type: ignore[assignment]
                 bid_document.error_message = analysis_result['message']
@@ -237,6 +333,64 @@ class AnalysisManager:
                 db.commit()
         finally:
             db.close()
+
+    def _cleanup_md_files(self, project_id: int):
+        """
+        清理项目生成的MD文件
+
+        Args:
+            project_id: 项目ID
+        """
+        try:
+            # 加载运行时配置
+            runtime_config = load_config()
+            auto_delete = get_bool(runtime_config, 'auto_delete_md_files', False)
+
+            # 如果没有启用自动删除，则直接返回
+            if not auto_delete:
+                self.logger.info(f'项目 {project_id} 未启用自动删除MD文件功能')
+                return
+
+            # 获取项目信息
+            project = (
+                self.db.query(TenderProject)
+                .filter(TenderProject.id == project_id)
+                .first()
+            )
+            if not project:
+                self.logger.warning(f'项目 {project_id} 未找到，无法清理MD文件')
+                return
+
+            # 删除招标文件对应的MD文件
+            if project.tender_file_path and os.path.exists(project.tender_file_path):
+                tender_md_path = os.path.join(
+                    'temp/md',
+                    f'{os.path.splitext(os.path.basename(project.tender_file_path))[0]}.md',
+                )
+                if os.path.exists(tender_md_path):
+                    os.remove(tender_md_path)
+                    self.logger.info(f'已删除招标文件MD文件: {tender_md_path}')
+
+            # 删除投标文件对应的MD文件
+            bid_documents = (
+                self.db.query(BidDocument)
+                .filter(BidDocument.project_id == project_id)
+                .all()
+            )
+
+            for bid_doc in bid_documents:
+                if bid_doc.file_path and os.path.exists(bid_doc.file_path):
+                    bid_md_path = os.path.join(
+                        'temp/md',
+                        f'{os.path.splitext(os.path.basename(bid_doc.file_path))[0]}.md',
+                    )
+                    if os.path.exists(bid_md_path):
+                        os.remove(bid_md_path)
+                        self.logger.info(f'已删除投标文件MD文件: {bid_md_path}')
+
+            self.logger.info(f'项目 {project_id} 的MD文件清理完成')
+        except Exception as e:
+            self.logger.error(f'清理项目 {project_id} 的MD文件时出错: {e}')
 
     def run_analysis_and_calculate_prices(self, project_id: int, bid_files_info: list):
         """
@@ -262,40 +416,19 @@ class AnalysisManager:
 
         tender_file_path = project.tender_file_path
 
-        # 为每个投标文件创建分析任务
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
-
-        futures = []
+        # 为每个投标文件创建分析任务，但使用串行方式处理PDF转换以避免垃圾信息
         for bid_info in bid_files_info:
             try:
-                future = loop.run_in_executor(
-                    executor,
-                    self.analysis_task,
+                self.analysis_task(
                     project_id,
                     bid_info['id'],
                     tender_file_path,
                     bid_info['bid_file_path'],  # 修复键名
                 )
-                futures.append(future)
             except Exception as e:
                 self.logger.error(
                     f'为投标文件 {bid_info["id"]} 创建分析任务时出错: {e}'
                 )
-
-        # 等待所有分析任务完成
-        if futures:
-            try:
-                loop.run_until_complete(
-                    asyncio.gather(*futures, return_exceptions=True)
-                )
-                self.logger.info(f'项目 {project_id} 的所有分析任务已完成。')
-            except Exception as e:
-                self.logger.error(f'等待项目 {project_id} 的分析任务完成时出错: {e}')
-        else:
-            self.logger.warning(f'项目 {project_id} 没有需要分析的投标文件。')
-
-        loop.close()
 
         # 计算价格分
         try:
@@ -335,11 +468,33 @@ class AnalysisManager:
                 )
 
                 project.status = 'completed_with_errors' if has_errors else 'completed'
+                # 设置分析结束时间
+                from datetime import datetime
+
+                project.analysis_end_time = datetime.utcnow()
                 self.db.commit()
                 self.logger.info(
                     '项目 %s 的状态已更新为 %s。', project_id, project.status
                 )
 
+                # 检查是否需要清理MD文件
+                self._cleanup_md_files(project_id)
+
         except Exception as e:
             self.logger.error(f'为项目 {project_id} 计算价格分时出错: {e}')
             self.logger.error(traceback.format_exc())
+            # 即使价格分计算出错，也要更新项目状态
+            project = (
+                self.db.query(TenderProject)
+                .filter(TenderProject.id == project_id)
+                .first()
+            )
+            if project is not None:
+                project.status = 'completed_with_errors'
+                from datetime import datetime
+
+                project.analysis_end_time = datetime.utcnow()
+                self.db.commit()
+
+                # 检查是否需要清理MD文件
+                self._cleanup_md_files(project_id)
