@@ -22,7 +22,9 @@ from models.database import (
     BidDocument,
     AnalysisResult,
     ScoringRule,
+    get_local_time,  # 导入本地时间函数
 )
+
 
 # 辅助函数：从文件路径提取文件名
 def get_filename_from_path(file_path: str) -> str:
@@ -31,8 +33,10 @@ def get_filename_from_path(file_path: str) -> str:
         return ''
     return Path(file_path).name
 
+
 # 创建蓝图
 router = Blueprint('projects', __name__, url_prefix='/api')
+
 
 # 数据库依赖
 @contextmanager
@@ -41,24 +45,32 @@ def get_db():
     try:
         yield db
     except Exception as e:
-        logging.error(f"数据库连接错误: {e}")
+        logging.error(f'数据库连接错误: {e}')
         raise
     finally:
         try:
             db.close()
         except Exception as e:
-            logging.error(f"关闭数据库连接时出错: {e}")
+            logging.error(f'关闭数据库连接时出错: {e}')
+
 
 # 数据模型（替代Pydantic模型）
 class UpdateBidderNameRequest:
     def __init__(self, bidder_name):
         self.bidder_name = bidder_name
 
+
 class CleanupRequest:
-    def __init__(self, cleanup_temp_uploads=False, cleanup_temp_word=False, cleanup_temp_pdf_cache=False):
+    def __init__(
+        self,
+        cleanup_temp_uploads=False,
+        cleanup_temp_word=False,
+        cleanup_temp_pdf_cache=False,
+    ):
         self.cleanup_temp_uploads = cleanup_temp_uploads
         self.cleanup_temp_word = cleanup_temp_word
         self.cleanup_temp_pdf_cache = cleanup_temp_pdf_cache
+
 
 @router.route('/projects', methods=['GET'])
 def get_all_projects():
@@ -72,7 +84,9 @@ def get_all_projects():
             project_data = []
             for project in projects:
                 bid_docs = (
-                    db.query(BidDocument).filter(BidDocument.project_id == project.id).all()
+                    db.query(BidDocument)
+                    .filter(BidDocument.project_id == project.id)
+                    .all()
                 )
 
                 # 统计分析结果
@@ -90,10 +104,14 @@ def get_all_projects():
                 if project.analysis_start_time:
                     if project.analysis_end_time:
                         # 分析已完成，计算总用时
-                        total_time = (project.analysis_end_time - project.analysis_start_time).total_seconds()
+                        total_time = (
+                            project.analysis_end_time - project.analysis_start_time
+                        ).total_seconds()
                     else:
                         # 分析进行中，计算已用时
-                        elapsed_time = (datetime.utcnow() - project.analysis_start_time).total_seconds()
+                        elapsed_time = (
+                            get_local_time() - project.analysis_start_time
+                        ).total_seconds()
 
                 project_info = {
                     'id': project.id,
@@ -107,10 +125,14 @@ def get_all_projects():
                     'bid_count': len(bid_docs),
                     'result_count': completed_count,
                     'status': project.status,
-                    'analysis_start_time': project.analysis_start_time.isoformat() if project.analysis_start_time else None,
-                    'analysis_end_time': project.analysis_end_time.isoformat() if project.analysis_end_time else None,
+                    'analysis_start_time': project.analysis_start_time.isoformat()
+                    if project.analysis_start_time
+                    else None,
+                    'analysis_end_time': project.analysis_end_time.isoformat()
+                    if project.analysis_end_time
+                    else None,
                     'elapsed_time': elapsed_time,  # 已用时（秒）
-                    'total_time': total_time,      # 总用时（秒）
+                    'total_time': total_time,  # 总用时（秒）
                     'bid_documents': [
                         {
                             'id': doc.id,
@@ -129,13 +151,16 @@ def get_all_projects():
         logging.error(f'获取所有项目列表时出错: {e}')
         return jsonify({'error': f'获取项目列表失败: {str(e)}'}), 500
 
+
 @router.route('/projects/<int:project_id>/bidders', methods=['GET'])
 def list_project_bidders(project_id):
     """列出项目下的投标文件与当前名称，供前端展示和编辑。"""
     try:
         # 使用上下文管理器获取数据库会话
         with get_db() as db:
-            docs = db.query(BidDocument).filter(BidDocument.project_id == project_id).all()
+            docs = (
+                db.query(BidDocument).filter(BidDocument.project_id == project_id).all()
+            )
 
             bidders = []
             for doc in docs:
@@ -154,6 +179,7 @@ def list_project_bidders(project_id):
         logging.error(f'列出项目投标方时出错: {e}')
         return jsonify({'error': f'获取投标方列表失败: {str(e)}'}), 500
 
+
 @router.route('/bids/<int:bid_id>/name', methods=['PATCH'])
 def update_bidder_name(bid_id):
     """更新投标人名称"""
@@ -162,7 +188,7 @@ def update_bidder_name(bid_id):
         with get_db() as db:
             data = request.get_json()
             payload = UpdateBidderNameRequest(data.get('bidder_name', ''))
-            
+
             # 查找投标文件
             bid_doc = db.query(BidDocument).filter(BidDocument.id == bid_id).first()
             if not bid_doc:
@@ -187,15 +213,18 @@ def update_bidder_name(bid_id):
                 f'投标人名称已更新: ID={bid_id}, {old_name} -> {payload.bidder_name}'
             )
 
-            return jsonify({
-                'message': '投标人名称更新成功',
-                'bid_id': bid_id,
-                'old_name': old_name,
-                'new_name': payload.bidder_name,
-            })
+            return jsonify(
+                {
+                    'message': '投标人名称更新成功',
+                    'bid_id': bid_id,
+                    'old_name': old_name,
+                    'new_name': payload.bidder_name,
+                }
+            )
     except Exception as e:
         logging.error(f'更新投标人名称时出错: {e}')
         return jsonify({'error': f'更新失败: {str(e)}'}), 500
+
 
 @router.route('/projects/<int:project_id>/bid-documents/batch', methods=['DELETE'])
 def delete_bid_documents_batch(project_id):
@@ -259,16 +288,22 @@ def delete_bid_documents_batch(project_id):
 
             db.commit()
 
-            return jsonify({
-                'message': f'成功删除 {len(deleted_files)} 个文件',
-                'deleted_files': deleted_files,
-                'failed_files': failed_files,
-            })
+            return jsonify(
+                {
+                    'message': f'成功删除 {len(deleted_files)} 个文件',
+                    'deleted_files': deleted_files,
+                    'failed_files': failed_files,
+                }
+            )
     except Exception as e:
         logging.error(f'批量删除投标文件时出错: {e}')
         return jsonify({'error': f'批量删除失败: {str(e)}'}), 500
 
-@router.route('/projects/<int:project_id>/bid-documents/<int:bid_document_id>/failed-pages', methods=['GET'])
+
+@router.route(
+    '/projects/<int:project_id>/bid-documents/<int:bid_document_id>/failed-pages',
+    methods=['GET'],
+)
 def get_failed_pages_info(project_id, bid_document_id):
     """获取处理失败页面的详细信息"""
     try:
@@ -278,7 +313,8 @@ def get_failed_pages_info(project_id, bid_document_id):
             bid_doc = (
                 db.query(BidDocument)
                 .filter(
-                    BidDocument.id == bid_document_id, BidDocument.project_id == project_id
+                    BidDocument.id == bid_document_id,
+                    BidDocument.project_id == project_id,
                 )
                 .first()
             )
@@ -288,16 +324,19 @@ def get_failed_pages_info(project_id, bid_document_id):
 
             # 这里可以添加获取失败页面信息的逻辑
             # 暂时返回基本信息
-            return jsonify({
-                'bid_document_id': bid_document_id,
-                'filename': get_filename_from_path(bid_doc.file_path or ''),
-                'processing_status': bid_doc.processing_status,
-                'failed_pages': [],  # 实际实现中可以从日志或其他地方获取失败页面信息
-            })
+            return jsonify(
+                {
+                    'bid_document_id': bid_document_id,
+                    'filename': get_filename_from_path(bid_doc.file_path or ''),
+                    'processing_status': bid_doc.processing_status,
+                    'failed_pages': [],  # 实际实现中可以从日志或其他地方获取失败页面信息
+                }
+            )
 
     except Exception as e:
         logging.error(f'获取失败页面信息时出错: {e}')
         return jsonify({'error': f'获取失败页面信息失败: {str(e)}'}), 500
+
 
 @router.route('/projects/<int:project_id>/cleanup', methods=['POST'])
 def cleanup_temp_files(project_id):
@@ -306,7 +345,9 @@ def cleanup_temp_files(project_id):
         # 获取数据库会话
         with get_db() as db:
             # 验证项目存在
-            project = db.query(TenderProject).filter(TenderProject.id == project_id).first()
+            project = (
+                db.query(TenderProject).filter(TenderProject.id == project_id).first()
+            )
             if not project:
                 return jsonify({'error': '项目不存在'}), 404
 
@@ -314,7 +355,7 @@ def cleanup_temp_files(project_id):
             payload = CleanupRequest(
                 cleanup_temp_uploads=data.get('cleanup_temp_uploads', False),
                 cleanup_temp_word=data.get('cleanup_temp_word', False),
-                cleanup_temp_pdf_cache=data.get('cleanup_temp_pdf_cache', False)
+                cleanup_temp_pdf_cache=data.get('cleanup_temp_pdf_cache', False),
             )
 
             cleanup_results = {
@@ -356,7 +397,13 @@ def cleanup_temp_files(project_id):
                 try:
                     temp_word_path = 'temp/md'
                     if os.path.exists(temp_word_path):
-                        file_count = len([f for f in os.listdir(temp_word_path) if f.endswith('.txt')])
+                        file_count = len(
+                            [
+                                f
+                                for f in os.listdir(temp_word_path)
+                                if f.endswith('.txt')
+                            ]
+                        )
                         cleanup_results['temp_word'] = {
                             'cleaned': True,
                             'message': f'temp_word 目录检查完成，发现 {file_count} 个txt文件',
@@ -401,15 +448,18 @@ def cleanup_temp_files(project_id):
 
             logging.info(f'项目 {project_id} 临时文件清理完成: {cleanup_results}')
 
-            return jsonify({
-                'message': '临时文件清理完成',
-                'project_id': project_id,
-                'results': cleanup_results,
-            })
+            return jsonify(
+                {
+                    'message': '临时文件清理完成',
+                    'project_id': project_id,
+                    'results': cleanup_results,
+                }
+            )
 
     except Exception as e:
         logging.error(f'清理临时文件时出错: {e}')
         return jsonify({'error': f'清理临时文件失败: {str(e)}'}), 500
+
 
 @router.route('/projects/<int:project_id>/dynamic-summary', methods=['GET'])
 def get_project_dynamic_summary(project_id):
@@ -417,16 +467,19 @@ def get_project_dynamic_summary(project_id):
     try:
         with get_db() as db:
             from modules.summary_generator import generate_summary_data
+
             summary_data = generate_summary_data(project_id, db)
             if not summary_data:
                 return jsonify({'error': '无法生成汇总数据'}), 500
-            
+
             # 添加项目信息到返回数据
-            project = db.query(TenderProject).filter(TenderProject.id == project_id).first()
+            project = (
+                db.query(TenderProject).filter(TenderProject.id == project_id).first()
+            )
             if project:
                 summary_data['project_id'] = project_id
                 summary_data['project_name'] = project.name
-            
+
             return jsonify(summary_data)
     except Exception as e:
         logging.error(f'生成项目动态汇总时出错: {e}')

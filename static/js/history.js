@@ -2,8 +2,8 @@
  * @作者           : KingFreeDom
  * @创建时间         : 2025-09-04 21:51:35
  * @最近一次编辑者      : KingFreeDom
- * @最近一次编辑时间     : 2025-09-04 21:51:35
- * @文件相对于项目的路径   : \AI_env2\static\js\history.js
+ * @最近一次编辑时间     : 2025-10-08 13:00:22
+ * @文件相对于项目的路径   : \AI_ENV2\static\js\history.js
  * @
  * @Copyright (c) 2025 by 中车眉山车辆有限公司/KingFreeDom, All Rights Reserved. 
  */
@@ -174,7 +174,12 @@ document.addEventListener('DOMContentLoaded', function () {
     }
 
     function simplifyName (name, maxLength = 10) {
-        if (typeof name !== 'string' || name.length <= maxLength) {
+        // 确保名称不为空
+        if (!name || typeof name !== 'string') {
+            name = '未知';
+        }
+
+        if (name.length <= maxLength) {
             return { simplified: name, full: name };
         }
         return {

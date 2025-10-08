@@ -11,12 +11,13 @@
 #
 import json
 from sqlalchemy.orm import Session
-from modules.database import AnalysisResult, ScoringRule
+from models.database import AnalysisResult, ScoringRule
 
 
 def get_score_for_rule(detailed_scores, rule_name):
     """从详细评分中查找特定规则的分数"""
-    if not detailed_scores:
+    # 处理空的详细评分
+    if not detailed_scores or detailed_scores is None:
         return None
 
     # 确保detailed_scores是列表格式
@@ -25,6 +26,13 @@ def get_score_for_rule(detailed_scores, rule_name):
             detailed_scores = json.loads(detailed_scores)
         except json.JSONDecodeError:
             return None
+    elif isinstance(detailed_scores, dict):
+        # 如果是字典格式，尝试获取其中的列表
+        if 'detailed_scores' in detailed_scores:
+            detailed_scores = detailed_scores['detailed_scores']
+        else:
+            # 如果是简单的字典格式，直接使用
+            return detailed_scores.get(rule_name)
 
     # 确保detailed_scores是列表
     if not isinstance(detailed_scores, list):
@@ -57,33 +65,42 @@ def generate_summary_data(project_id: int, db: Session):
         return {'error': '该项目没有找到评分规则。'}
 
     # 2. 处理评分规则，构建父子项关系树
-    # 首先收集所有父项
+    # 首先收集所有父项和子项
     parent_items = {}
     child_items = []
+    price_rules = []
 
     for rule in rules:
-        # 跳过价格评分规则（这些规则会在最后单独处理）
+        # 分离价格评分规则
         if getattr(rule, 'is_price_criteria', False):
+            price_rules.append(rule)
             continue
 
-        # 如果是父项（有Parent_Item_Name但没有Child_Item_Name）
+        # 识别父项和子项
         parent_name_attr = getattr(rule, 'Parent_Item_Name', None)
         child_name_attr = getattr(rule, 'Child_Item_Name', None)
 
-        if parent_name_attr is not None and child_name_attr is None:
+        # 如果是父项（有Parent_Item_Name但Child_Item_Name为None）
+        if parent_name_attr is not None and (
+            child_name_attr is None or child_name_attr == ''
+        ):
             parent_name = str(parent_name_attr) if parent_name_attr else '未知'
             parent_items[parent_name] = {
                 'name': parent_name,
                 'max_score': rule.Parent_max_score or 0,
                 'children': [],
             }
-        # 如果是子项（有Child_Item_Name）
-        elif child_name_attr is not None:
+        # 如果是子项（Parent_Item_Name和Child_Item_Name都不为None且不为空）
+        elif (
+            parent_name_attr is not None
+            and child_name_attr is not None
+            and child_name_attr != ''
+        ):
             parent_name = str(parent_name_attr) if parent_name_attr else '未知'
             child_items.append(
                 {
                     'parent_name': parent_name,
-                    'name': str(child_name_attr),
+                    'name': str(child_name_attr) if child_name_attr else '未知子项',
                     'max_score': rule.Child_max_score or 0,
                 }
             )
@@ -108,9 +125,17 @@ def generate_summary_data(project_id: int, db: Session):
         child_name_attr = getattr(rule, 'Child_Item_Name', None)
 
         parent_name = None
-        if parent_name_attr is not None and child_name_attr is None:
+        # 父项记录
+        if parent_name_attr is not None and (
+            child_name_attr is None or child_name_attr == ''
+        ):
             parent_name = str(parent_name_attr)
-        elif child_name_attr is not None and parent_name_attr is not None:
+        # 子项记录
+        elif (
+            parent_name_attr is not None
+            and child_name_attr is not None
+            and child_name_attr != ''
+        ):
             parent_name = str(parent_name_attr)
 
         if parent_name and len(parent_name) > 0:
@@ -181,15 +206,34 @@ def generate_summary_data(project_id: int, db: Session):
         if children_count > 0:
             header_top.append({'name': parent['name'], 'colspan': children_count})
 
-    # 追加价格分与总分（与数据列对齐）
-    header_top.append({'name': '价格分', 'rowspan': 2})
+    # 处理价格规则
+    price_header_added = False
+    for price_rule in price_rules:
+        if hasattr(price_rule, 'Child_Item_Name') and price_rule.Child_Item_Name:
+            price_name = str(price_rule.Child_Item_Name)
+            if not price_header_added:
+                header_top.append({'name': price_name, 'rowspan': 2})
+                price_header_added = True
+                break
+
+    # 如果没有找到有效的价格规则名称，使用默认名称
+    if not price_header_added:
+        header_top.append({'name': '价格分', 'rowspan': 2})
+
+    # 追加总分
     header_top.append({'name': '总分', 'rowspan': 2})
 
     # 第二行：所有子项（按父项顺序展开）
     header_bottom = []
     for parent in ordered_parents:
         for child in parent['children']:
-            header_bottom.append({'name': child['name']})
+            # 确保子项名称不为空
+            child_name = (
+                child.get('name', '') if isinstance(child, dict) else str(child)
+            )
+            if not child_name:
+                child_name = '未知子项'
+            header_bottom.append({'name': child_name})
 
     header_rows = [header_top, header_bottom]
 

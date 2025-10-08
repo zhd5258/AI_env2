@@ -147,6 +147,7 @@ class PDFRotationHandler:
             logger.warning(f'PDF旋转归一化失败: {e}')
             return pdf_bytes, 0
 
+
 # =============================================================================
 # MinerU处理模块
 # =============================================================================
@@ -162,72 +163,6 @@ class MinerUProcessor:
         # 确保输出目录存在
         self.output_dir.mkdir(exist_ok=True)
         self.temp_dir.mkdir(exist_ok=True)
-
-    def _assess_conversion_quality(self, md_file_path: Path) -> bool:
-        """
-        评估PDF转换为Markdown的质量
-        
-        Args:
-            md_file_path: Markdown文件路径
-            
-        Returns:
-            bool: 质量是否达标
-        """
-        try:
-            if not md_file_path.exists():
-                logger.warning(f"文件不存在，无法评估质量: {md_file_path}")
-                return False
-
-            with open(md_file_path, 'r', encoding='utf-8') as f:
-                content = f.read()
-
-            # 检查文件是否为空
-            if not content.strip():
-                logger.warning(f"转换后的文件为空: {md_file_path}")
-                return False
-
-            # 检查是否全文都是无意义的同一符号（如全是点、横线等）
-            # 提取文本内容，去除Markdown标记
-            import re
-            text_content = re.sub(r'[\*\_\`\#\-\|\[\]\(\)]', '', content)
-            text_content = re.sub(r'\s+', '', text_content)  # 去除所有空白字符
-            
-            if not text_content:
-                logger.warning(f"转换后的文件无有效文本内容: {md_file_path}")
-                return False
-
-            # 检查是否大部分内容都是相同的字符
-            char_count = {}
-            for char in text_content:
-                char_count[char] = char_count.get(char, 0) + 1
-            
-            # 如果某个字符占比超过80%，认为质量不达标
-            if char_count:
-                most_common_char = max(char_count, key=char_count.get)
-                most_common_ratio = char_count[most_common_char] / len(text_content)
-                if most_common_ratio > 0.8:
-                    logger.warning(f"转换质量差，内容主要由重复字符 '{most_common_char}' 构成，占比 {most_common_ratio:.2%}: {md_file_path}")
-                    return False
-
-            # 检查是否有足够的文本内容（至少100个字符）
-            if len(text_content) < 100:
-                logger.warning(f"转换后的文件文本内容过少 ({len(text_content)} 字符): {md_file_path}")
-                return False
-
-            # 检查是否包含基本的文本结构
-            lines = content.split('\n')
-            non_empty_lines = [line for line in lines if line.strip()]
-            
-            if len(non_empty_lines) < 5:
-                logger.warning(f"转换后的文件有效行数过少 ({len(non_empty_lines)} 行): {md_file_path}")
-                return False
-
-            logger.info(f"转换质量评估通过: {md_file_path}")
-            return True
-
-        except Exception as e:
-            logger.error(f"评估转换质量时出错: {e}")
-            return False
 
     def process_with_mineru(
         self,
@@ -276,7 +211,7 @@ class MinerUProcessor:
 
             file_name = Path(pdf_path).stem
             logger.info(f'处理文件: {pdf_path}, 文件名: {file_name}')
-            
+
             # 确保文件名是安全的，移除可能导致问题的特殊字符
             file_name = re.sub(r'[<>:"/\\|?*\x00-\x1F]', '_', file_name)
             file_name = file_name.strip(' .')
@@ -406,7 +341,7 @@ class MinerUProcessor:
                 )
                 for f in related_files:
                     logger.info(f'  相关文件: {f.name} (大小: {f.stat().st_size} 字节)')
-            
+
             # 如果没有找到精确匹配的文件，尝试查找可能的MD文件
             if not related_files:
                 logger.info('未找到与文件名直接相关的文件，尝试查找所有MD文件...')
@@ -418,18 +353,24 @@ class MinerUProcessor:
                     best_score = 0
                     for md_file in md_files:
                         # 计算文件名相似度
-                        name_similarity = self._calculate_filename_similarity(file_name, md_file.stem)
+                        name_similarity = self._calculate_filename_similarity(
+                            file_name, md_file.stem
+                        )
                         if name_similarity > best_score:
                             best_score = name_similarity
                             best_match = md_file
-                    
+
                     if best_match:
-                        logger.info(f'选择最佳匹配文件: {best_match.name} (相似度: {best_score})')
+                        logger.info(
+                            f'选择最佳匹配文件: {best_match.name} (相似度: {best_score})'
+                        )
                         # 重命名文件以确保与原始PDF文件名对应
                         target_path = self.temp_dir / f'{file_name}.md'
                         try:
                             best_match.rename(target_path)
-                            logger.info(f'已重命名文件: {best_match.name} → {target_path.name}')
+                            logger.info(
+                                f'已重命名文件: {best_match.name} → {target_path.name}'
+                            )
                             related_files = [target_path]
                         except Exception as e:
                             logger.warning(f'重命名文件失败: {e}')
@@ -438,7 +379,9 @@ class MinerUProcessor:
                         target_path = self.temp_dir / f'{file_name}.md'
                         try:
                             md_files[0].rename(target_path)
-                            logger.info(f'重命名文件: {md_files[0].name} → {target_path.name}')
+                            logger.info(
+                                f'重命名文件: {md_files[0].name} → {target_path.name}'
+                            )
                             related_files = [target_path]
                         except Exception as e:
                             logger.warning(f'重命名文件失败: {e}')
@@ -512,14 +455,6 @@ class MinerUProcessor:
                 if output_file.exists() and keep_ext == '.md':
                     logger.info('开始优化Markdown格式')
                     self._optimize_markdown_format(output_file)
-
-                # 评估转换质量
-                if keep_ext == '.md' and output_file.exists():
-                    if not self._assess_conversion_quality(output_file):
-                        logger.warning(f"MinerU转换质量不达标，删除文件: {output_file}")
-                        # 删除质量不达标的文件
-                        output_file.unlink()
-                        raise RuntimeError("PDF转换质量不达标")
 
                 # 最后清理所有中间文件(包括图片、JSON、PDF等)
                 # 注意:清理操作应该在移动最终文件之后进行
@@ -602,7 +537,9 @@ class MinerUProcessor:
             logger.warning(f'验证关键信息时出错: {e}')
             return False
 
-    def _calculate_filename_similarity(self, original_name: str, target_name: str) -> float:
+    def _calculate_filename_similarity(
+        self, original_name: str, target_name: str
+    ) -> float:
         """
         计算两个文件名的相似度
 
@@ -615,7 +552,10 @@ class MinerUProcessor:
         """
         # 简单的相似度计算方法
         import difflib
-        return difflib.SequenceMatcher(None, original_name.lower(), target_name.lower()).ratio()
+
+        return difflib.SequenceMatcher(
+            None, original_name.lower(), target_name.lower()
+        ).ratio()
 
     def _move_final_output(self, file_name: str, make_mode) -> bool:
         """
@@ -695,18 +635,26 @@ class MinerUProcessor:
                                 best_score = 0
                                 for md_file in md_files:
                                     # 计算文件名相似度
-                                    name_similarity = self._calculate_filename_similarity(file_name, md_file.stem)
+                                    name_similarity = (
+                                        self._calculate_filename_similarity(
+                                            file_name, md_file.stem
+                                        )
+                                    )
                                     if name_similarity > best_score:
                                         best_score = name_similarity
                                         best_match = md_file
-                                
+
                                 if best_match:
                                     source_file = best_match
-                                    logger.info(f'使用最佳匹配的MD文件作为源文件: {source_file} (相似度: {best_score})')
+                                    logger.info(
+                                        f'使用最佳匹配的MD文件作为源文件: {source_file} (相似度: {best_score})'
+                                    )
                                 else:
                                     # 如果没有找到好的匹配，使用第一个MD文件
                                     source_file = md_files[0]
-                                    logger.info(f'使用第一个MD文件作为源文件: {source_file}')
+                                    logger.info(
+                                        f'使用第一个MD文件作为源文件: {source_file}'
+                                    )
                             else:
                                 logger.warning(
                                     f'在temp目录中未找到任何与 {file_name} 相关的文件'
@@ -1002,8 +950,6 @@ class OtherOCRProcessors:
             raise
 
 
-
-
 # =============================================================================
 # 主处理器类
 # =============================================================================
@@ -1048,7 +994,9 @@ class AdvancedPDFProcessor:
             logger.warning(f'缺少以下依赖库: {", ".join(missing_deps)}')
             logger.info('某些功能可能不可用')
 
-    def _calculate_filename_similarity(self, original_name: str, target_name: str) -> float:
+    def _calculate_filename_similarity(
+        self, original_name: str, target_name: str
+    ) -> float:
         """
         计算两个文件名的相似度
 
@@ -1061,7 +1009,10 @@ class AdvancedPDFProcessor:
         """
         # 简单的相似度计算方法
         import difflib
-        return difflib.SequenceMatcher(None, original_name.lower(), target_name.lower()).ratio()
+
+        return difflib.SequenceMatcher(
+            None, original_name.lower(), target_name.lower()
+        ).ratio()
 
     def _extract_page_range(self, pdf_path: str, start_page: int, end_page: int) -> str:
         """
@@ -1156,7 +1107,9 @@ class AdvancedPDFProcessor:
             提取的文本内容（空字符串，因为OCR功能已移除）
         """
         # OCR功能已移除，直接返回空字符串
-        logger.warning(f'OCR功能已移除，无法从图像页面提取文本: {pdf_path}, 第{page_number}页')
+        logger.warning(
+            f'OCR功能已移除，无法从图像页面提取文本: {pdf_path}, 第{page_number}页'
+        )
         return ''
 
     def process_pdf(

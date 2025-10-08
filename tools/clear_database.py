@@ -4,8 +4,8 @@
 # 作者           : KingFreeDom
 # 创建时间         : 2025-09-11 21:40:09
 #最近一次编辑者      : KingFreeDom
-#最近一次编辑时间     : 2025-10-05 17:01:04
-#文件相对于项目的路径   : \AI_env2\tools\clear_database.py
+#最近一次编辑时间     : 2025-10-08 12:58:24
+#文件相对于项目的路径   : \AI_ENV2\tools\clear_database.py
 #
 # Copyright (c) 2025 by 中车眉山车辆有限公司/KingFreeDom, All Rights Reserved.
 #

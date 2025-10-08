@@ -4,21 +4,21 @@
 # 作者           : KingFreeDom
 # 创建时间         : 2025-09-26 18:09:31
 # 最近一次编辑者      : KingFreeDom
-# 最近一次编辑时间     : 2025-09-26 18:09:34
-# 文件相对于项目的路径   : \AI_env2\modules\scoring_rules_manager.py
+# 最近一次编辑时间     : 2025-10-07 21:03:09
+# 文件相对于项目的路径   : \AI_ENV2\modules\scoring_rules_manager.py
 #
 # Copyright (c) 2025 by 中车眉山车辆有限公司/KingFreeDom, All Rights Reserved.
 #
 import logging
-from typing import List, Dict, Any
+from typing import List, Dict, Any, Optional
 from sqlalchemy.orm import Session
-from modules.database import ScoringRule
+from models.database import ScoringRule
 
 
 class ScoringRulesManager:
     """评分规则管理器，统一处理评分规则的保存和管理"""
 
-    def __init__(self, db_session: Session = None):
+    def __init__(self, db_session: Optional[Session] = None):
         self.db = db_session
         self.logger = logging.getLogger(__name__)
 
@@ -43,60 +43,131 @@ class ScoringRulesManager:
                 ScoringRule.project_id == project_id
             ).delete()
 
+            # 过滤掉无效的规则（名称和描述都为None或空的规则）
+            valid_rules = []
+            for rule in rules:
+                # 检查规则是否有效
+                criteria_name = rule.get('criteria_name')
+                description = rule.get('description', '')
+
+                # 如果是价格规则，允许没有子项
+                is_price_rule = bool(rule.get('is_price_criteria', False))
+
+                # 检查是否有有效的子项
+                children = rule.get('children', [])
+                has_valid_children = any(
+                    child.get('criteria_name')
+                    and str(child.get('criteria_name')).strip()
+                    for child in children
+                )
+
+                # 判断规则是否有效
+                is_valid = (
+                    (criteria_name and str(criteria_name).strip())  # 有有效的名称
+                    or (description and str(description).strip())  # 有有效的描述
+                    or is_price_rule  # 是价格规则
+                    or has_valid_children  # 有有效的子项
+                )
+
+                if is_valid:
+                    valid_rules.append(rule)
+                else:
+                    self.logger.warning(f'过滤掉无效的评分规则: {rule}')
+
             def save_rule_recursive(rule_data, project_id, parent_name=None):
                 """递归保存评分规则（父项填 Parent_Item_Name，子项填 Child_Item_Name）"""
+                # 再次检查规则数据是否有效
+                criteria_name = rule_data.get('criteria_name')
+                description = rule_data.get('description', '')
                 is_price = bool(rule_data.get('is_price_criteria', False))
                 children = rule_data.get('children') or []
+
+                # 如果规则名称和描述都为空且不是价格规则，跳过保存
+                if (
+                    (not criteria_name or not str(criteria_name).strip())
+                    and (not description or not str(description).strip())
+                    and not is_price
+                    and not children
+                ):
+                    self.logger.warning(f'跳过保存无效规则: {rule_data}')
+                    return
 
                 if children or is_price:
                     # 保存父项（或价格父项）
                     db_rule = ScoringRule(
                         project_id=project_id,
-                        Parent_Item_Name=rule_data.get('criteria_name'),
-                        Parent_max_score=rule_data.get('max_score'),
-                        description=rule_data.get('description', ''),
+                        Parent_Item_Name=str(rule_data.get('criteria_name') or ''),
+                        Parent_max_score=int(rule_data.get('max_score') or 0),
+                        description=str(rule_data.get('description') or ''),
                         is_price_criteria=is_price,
                     )
                     if is_price:
-                        db_rule.price_formula = rule_data.get('price_formula')
-                    db_rule.Child_Item_Name = None
-                    db_rule.Child_max_score = None
-
-                    self.db.add(db_rule)
-                    self.db.flush()
-
-                    # 递归保存子项，传递父项名称
-                    for child_rule in children:
-                        save_rule_recursive(
-                            child_rule,
-                            project_id,
-                            parent_name=rule_data.get('criteria_name'),
+                        db_rule.price_formula = str(
+                            rule_data.get('price_formula') or ''
                         )
+                        # 对于价格规则，父项和子项是同一个规则
+                        # 父项的Child_Item_Name和Child_max_score应设置为与父项相同
+                        db_rule.Child_Item_Name = str(
+                            rule_data.get('criteria_name') or ''
+                        )
+                        db_rule.Child_max_score = int(rule_data.get('max_score') or 0)
+                    else:
+                        # 对于非价格规则，父项的Child_Item_Name为空字符串，Child_max_score为0
+                        db_rule.Child_Item_Name = ''  # 父项的Child_Item_Name为空字符串
+                        db_rule.Child_max_score = 0  # 父项的Child_max_score为0
+
+                    if self.db:
+                        self.db.add(db_rule)
+                        self.db.flush()
+
+                    # 特殊处理价格规则：不需要为价格规则创建额外的子项规则
+                    # 因为价格规则的父项和子项是同一个规则
+                    if not is_price:
+                        # 递归保存普通子项，传递父项名称
+                        for child_rule in children:
+                            save_rule_recursive(
+                                child_rule,
+                                project_id,
+                                parent_name=rule_data.get('criteria_name'),
+                            )
                 else:
                     # 保存子项（叶子）
+                    # 检查子项是否有效
+                    child_criteria_name = rule_data.get('criteria_name')
+                    if not child_criteria_name or not str(child_criteria_name).strip():
+                        self.logger.warning(f'跳过保存无效子项规则: {rule_data}')
+                        return
+
                     db_rule = ScoringRule(
                         project_id=project_id,
-                        Parent_Item_Name=parent_name,
-                        Parent_max_score=None,
-                        Child_Item_Name=rule_data.get('criteria_name'),
-                        Child_max_score=rule_data.get('max_score'),
-                        description=rule_data.get('description', ''),
+                        Parent_Item_Name=str(parent_name or ''),
+                        Parent_max_score=0,  # 子项的Parent_max_score为0
+                        Child_Item_Name=str(rule_data.get('criteria_name') or ''),
+                        Child_max_score=int(rule_data.get('max_score') or 0),
+                        description=str(rule_data.get('description') or ''),
                         is_price_criteria=False,
                     )
-                    self.db.add(db_rule)
-                    self.db.flush()
+                    if self.db:
+                        self.db.add(db_rule)
+                        self.db.flush()
 
-            for rule_data in rules:
+            for rule_data in valid_rules:
                 save_rule_recursive(rule_data, project_id)
 
-            self.db.commit()
-            self.logger.info(f'成功保存 {len(rules)} 条评分规则到数据库')
+            if self.db:
+                self.db.commit()
+            self.logger.info(
+                f'成功保存 {len(valid_rules)} 条评分规则到数据库（过滤前共 {len(rules)} 条）'
+            )
             return True
 
         except Exception as e:
             self.logger.error(f'保存评分规则到数据库时出错: {e}', exc_info=True)
             if self.db:
-                self.db.rollback()
+                try:
+                    self.db.rollback()
+                except:
+                    pass
             return False
 
     def get_scoring_rules(self, project_id: int) -> List[ScoringRule]:
@@ -119,7 +190,28 @@ class ScoringRulesManager:
                 .filter(ScoringRule.project_id == project_id)
                 .all()
             )
-            return rules
+            # 过滤掉无效的规则（名称和描述都为None或空的规则）
+            valid_rules = []
+            for rule in rules:
+                # 检查规则是否有效
+                parent_name = rule.Parent_Item_Name
+                child_name = rule.Child_Item_Name
+                description = rule.description
+
+                # 判断规则是否有效
+                is_valid = (
+                    (parent_name and str(parent_name).strip())  # 有有效的父项名称
+                    or (child_name and str(child_name).strip())  # 有有效的子项名称
+                    or (description and str(description).strip())  # 有有效的描述
+                    or rule.is_price_criteria  # 是价格规则
+                )
+
+                if is_valid:
+                    valid_rules.append(rule)
+                else:
+                    self.logger.warning(f'过滤掉无效的数据库评分规则: {rule}')
+
+            return valid_rules
         except Exception as e:
             self.logger.error(f'获取评分规则时出错: {e}', exc_info=True)
             return []

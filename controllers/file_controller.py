@@ -1,5 +1,16 @@
 #!/usr/bin/env python
 # -*- coding:utf-8 -*-
+#
+# 作者           : KingFreeDom
+# 创建时间         : 2025-10-06 08:35:24
+# 最近一次编辑者      : KingFreeDom
+# 最近一次编辑时间     : 2025-10-08 08:48:06
+# 文件相对于项目的路径   : \AI_ENV2\controllers\file_controller.py
+#
+# Copyright (c) 2025 by 中车眉山车辆有限公司/KingFreeDom, All Rights Reserved.
+#
+#!/usr/bin/env python
+# -*- coding:utf-8 -*-
 """
 文件上传相关业务逻辑控制器
 """
@@ -21,10 +32,7 @@ from models.database import (
     AnalysisResult,  # 添加AnalysisResult导入
 )
 from modules.bidder_name_extractor import extract_bidder_name_from_file
-from modules.shared_functions import (
-    extract_bidder_name_from_file_after_analysis,
-    run_analysis_and_calculate_prices,
-)
+from modules.shared_functions import extract_bidder_name_from_file_after_analysis
 from modules.pdf_processor import PDFProcessor  # 添加导入
 from modules.runtime_config import load_config
 
@@ -42,9 +50,7 @@ def safe_makedirs(path):
     Path(path).mkdir(parents=True, exist_ok=True)
 
 
-def save_upload_file(
-    upload_file, destination: str, original_filename: str = None
-) -> str:
+def save_upload_file(upload_file, destination: str, original_filename: str = '') -> str:
     try:
         # 确保目标目录存在
         dest_path = Path(destination)
@@ -104,6 +110,7 @@ def cleanup_upload_directory(project_id: int):
     清理上传文件目录
     在项目完成后（不管成功还是失败）清空上传文件保存目录
     """
+    db = None
     try:
         db = SessionLocal()
         project = db.query(TenderProject).filter(TenderProject.id == project_id).first()
@@ -135,7 +142,7 @@ def cleanup_upload_directory(project_id: int):
         logging.error(f'清理上传目录时出错: {e}')
         raise  # 重新抛出异常以便上层捕获
     finally:
-        if 'db' in locals():
+        if db:
             db.close()
 
 
@@ -170,7 +177,7 @@ def update_project_status(project_id: int, status: str):
             project.status = status
             # 如果项目状态是完成或错误，则记录结束时间
             if status in ['completed', 'completed_with_errors', 'error']:
-                project.analysis_end_time = datetime.datetime.utcnow()
+                project.analysis_end_time = datetime.datetime.now()
                 cleanup_upload_directory(project_id)
             db.commit()
             logging.info(f'更新项目 {project_id} 的状态为: {status}')
@@ -224,7 +231,7 @@ def init_upload_logic(tender_file, bid_files):
             name=f'Project {project_code}',
             description=f'Tender: {tender_original_filename}',
             status='pending',
-            analysis_start_time=datetime.datetime.utcnow(),  # 记录分析开始时间
+            analysis_start_time=datetime.datetime.now(),  # 记录分析开始时间
         )
         db.add(project)
         db.commit()
@@ -267,6 +274,7 @@ def init_upload_logic(tender_file, bid_files):
                 file_path=bid_file_path,
                 bidder_name=bidder_name,  # 设置默认投标人名称为文件名
                 processing_phase='uploaded',
+                processing_status='pending',  # 设置初始处理状态为pending
             )
             db.add(bid_document)
             db.commit()
@@ -302,34 +310,25 @@ def init_upload_logic(tender_file, bid_files):
                 # 更新项目状态为分析中
                 update_project_status(project_id, 'analyzing')
 
-                # 执行分析任务 - 提取评分规则
-                run_analysis_and_calculate_prices(project_id, bid_files_info)
+                # 执行完整的分析任务 - 使用AnalysisManager统一处理
+                from modules.analysis_manager import AnalysisManager
+                from models.database import SessionLocal
 
-                # 执行实际的投标文件分析任务
-                # 使用线程池并行处理所有投标文件
-                from concurrent.futures import ThreadPoolExecutor
-                from modules.shared_functions import analyze_single_bid_document
+                # 创建分析管理器实例并执行完整的分析流程
+                db_local = SessionLocal()
+                analysis_manager = AnalysisManager(db_session=db_local)
+                # 在新线程中运行分析任务，避免阻塞主线程
+                import threading
 
-                # 创建线程池并提交所有分析任务
-                with ThreadPoolExecutor(max_workers=4) as executor:
-                    futures = []
-                    for file_info in bid_files_info:
-                        future = executor.submit(
-                            analyze_single_bid_document,
-                            project_id,
-                            file_info['bid_document_id'],
-                        )
-                        futures.append(future)
+                analysis_thread = threading.Thread(
+                    target=analysis_manager.run_analysis_and_calculate_prices,
+                    args=(project_id, bid_files_info),
+                )
+                analysis_thread.start()
+                db_local.close()
 
-                    # 等待所有任务完成
-                    for future in futures:
-                        try:
-                            future.result(timeout=1800)  # 30分钟超时
-                        except Exception as e:
-                            logging.error(f'分析任务执行失败: {e}')
-
-                # 更新项目状态为完成
-                update_project_status(project_id, 'completed')
+                # 移除手动更新项目状态的代码，让价格计算工作流自己更新项目状态
+                # update_project_status(project_id, 'completed')
             except Exception as e:
                 logging.error(f'后台分析任务执行失败: {e}')
                 traceback.print_exc()
@@ -348,7 +347,7 @@ def init_upload_logic(tender_file, bid_files):
             'message': '文件上传成功，分析任务已自动启动',
         }
     except RequestEntityTooLarge:
-        if db:
+        if 'db' in locals() and db:
             db.close()
         logging.error('文件上传大小超出限制')
         # 从运行时配置获取文件大小限制
@@ -359,7 +358,7 @@ def init_upload_logic(tender_file, bid_files):
         max_mb = single_file_max_size // (1024 * 1024)
         raise RequestEntityTooLarge(f'文件大小超出限制，请上传小于{max_mb}MB的文件')
     except Exception as e:
-        if db:
+        if 'db' in locals() and db:
             db.close()
         logging.error(f'初始化上传业务逻辑失败: {e}')
         raise e

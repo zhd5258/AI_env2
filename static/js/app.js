@@ -673,8 +673,10 @@ document.addEventListener('DOMContentLoaded', function () {
                     });
 
                     // 添加价格分和总分
-                    row += `<td>${result.price_score !== undefined ? result.price_score.toFixed(2) : 'N/A'}</td>`;
-                    row += `<td>${result.total_score !== undefined ? result.total_score.toFixed(2) : 'N/A'}</td>`;
+                    const priceScore = result.price_score !== undefined ? result.price_score.toFixed(2) : 'N/A';
+                    const totalScore = result.total_score !== undefined ? result.total_score.toFixed(2) : 'N/A';
+                    row += `<td>${priceScore}</td>`;
+                    row += `<td>${totalScore}</td>`;
 
                     row += '</tr>';
                     return row;

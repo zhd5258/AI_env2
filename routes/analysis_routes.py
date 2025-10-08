@@ -1,59 +1,57 @@
 #!/usr/bin/env python
 # -*- coding:utf-8 -*-
 #
-# 分析相关路由
-# 处理投标分析、评分计算等功能
+# 分析路由
+# 处理项目分析相关的操作
 #
 
-from flask import Blueprint, request, jsonify, send_file
-from modules.database import (
+from flask import Blueprint, request, jsonify, current_app
+from sqlalchemy.orm import Session
+from contextlib import contextmanager
+import logging
+import os
+import traceback
+from datetime import datetime
+from pathlib import Path
+
+from models.database import (
     SessionLocal,
     TenderProject,
     BidDocument,
     AnalysisResult,
     ScoringRule,
+    get_local_time,  # 导入本地时间函数
 )
-from contextlib import contextmanager
-from modules.price_score_calculator import PriceScoreCalculator
+from modules.analysis_manager import AnalysisManager
 from modules.summary_generator import generate_summary_data
-from modules.result_display import ResultDisplay  # 添加这行导入
-from modules.detailed_score_display import (
-    get_detailed_score_data,
-    get_price_display_data,
-)  # 添加这行导入
-from pathlib import Path
-import logging
-import json
-import pandas as pd
-from datetime import datetime
-from docx import Document
-from docx.enum.text import WD_ALIGN_PARAGRAPH
-
-# 设置url_prefix为/api，保持与其他路由一致
-router = Blueprint('analysis', __name__, url_prefix='/api')
 
 
 # 辅助函数：从文件路径提取文件名
-def get_filename_from_path(file_path) -> str:
+def get_filename_from_path(file_path: str) -> str:
     """从文件路径中提取文件名"""
-    # 处理SQLAlchemy Column类型
-    if hasattr(file_path, 'value'):
-        file_path = file_path.value
-    elif hasattr(file_path, '__str__'):
-        file_path = str(file_path)
-
     if not file_path:
         return ''
     return Path(file_path).name
 
 
+# 创建蓝图
+router = Blueprint('analysis', __name__, url_prefix='/api')
+
+
+# 数据库依赖
 @contextmanager
 def get_db():
     db = SessionLocal()
     try:
         yield db
+    except Exception as e:
+        logging.error(f'数据库连接错误: {e}')
+        raise
     finally:
-        db.close()
+        try:
+            db.close()
+        except Exception as e:
+            logging.error(f'关闭数据库连接时出错: {e}')
 
 
 # 数据模型（简化版，替代Pydantic模型）
@@ -116,7 +114,7 @@ def start_analysis(project_id):
             for doc in updated_documents:
                 bid_files_info.append(
                     {
-                        'id': doc.id,
+                        'bid_document_id': doc.id,
                         'tender_file_path': project.tender_file_path,
                         'bid_file_path': doc.file_path,
                         'bidder_name': doc.bidder_name,
@@ -140,8 +138,7 @@ def start_analysis(project_id):
 
             # 更新项目状态
             setattr(project, 'status', 'processing')
-            # 设置分析开始时间
-            setattr(project, 'analysis_start_time', datetime.utcnow())
+            setattr(project, 'analysis_start_time', get_local_time())
             db.commit()
 
             logging.info(
@@ -205,7 +202,7 @@ def confirm_names_and_start_analysis(project_id):
             for doc in updated_documents:
                 bid_files_info.append(
                     {
-                        'id': doc.id,
+                        'bid_document_id': doc.id,
                         'tender_file_path': project.tender_file_path,
                         'bid_file_path': doc.file_path,
                         'bidder_name': doc.bidder_name,
@@ -229,7 +226,7 @@ def confirm_names_and_start_analysis(project_id):
 
             # 更新项目状态
             setattr(project, 'status', 'processing')
-            setattr(project, 'analysis_start_time', datetime.utcnow())
+            setattr(project, 'analysis_start_time', get_local_time())
             db.commit()
 
             logging.info(
@@ -276,7 +273,7 @@ def get_project_progress(project_id):
                 else:
                     # 分析进行中，计算已用时
                     elapsed_time = (
-                        datetime.utcnow() - analysis_start_time
+                        get_local_time() - analysis_start_time
                     ).total_seconds()
 
             # 构造响应数据
@@ -397,7 +394,7 @@ def get_project_progress(project_id):
             ):
                 # 确保分析结束时间已设置
                 if not analysis_end_time:
-                    setattr(project, 'analysis_end_time', datetime.utcnow())
+                    setattr(project, 'analysis_end_time', get_local_time())
                     db.commit()
 
                 # 添加完成状态信息

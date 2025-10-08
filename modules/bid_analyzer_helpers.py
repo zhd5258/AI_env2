@@ -6,10 +6,10 @@
 import logging
 import json
 import re
-from modules.database import BidDocument, AnalysisResult
+from models.database import BidDocument, AnalysisResult
 
-# 导入统一的价格提取管理器
-from modules.price_extraction_manager import PriceExtractionManager
+# 移除价格管理器的导入，价格提取将在统一流程中处理
+# from modules.price_extraction_manager import PriceExtractionManager
 
 
 class BidAnalyzerHelpers:
@@ -17,8 +17,8 @@ class BidAnalyzerHelpers:
 
     def __init__(self):
         self.logger = logging.getLogger(__name__)
-        # 初始化价格管理器
-        self.price_manager = PriceExtractionManager()
+        # 移除价格管理器初始化，价格提取将在统一流程中处理
+        # self.price_manager = PriceExtractionManager()
 
     def _send_progress_update(
         self, completed, total, current_rule, partial_results=None
@@ -209,18 +209,13 @@ class BidAnalyzerHelpers:
         )
 
     def _handle_price_criteria(self, rule, bid_pages):
-        """处理价格分项，只提取价格信息，不进行评分"""
-        # 从投标文件中提取价格信息
-        prices = self.price_manager.extract_prices_from_content(bid_pages)
-        best_price = self.price_manager.select_best_price(prices, bid_pages)
-
-        # 创建价格分项结果，分数为0，等待后续综合计算
+        """处理价格分项，只记录信息，不进行价格提取"""
+        # 价格提取和计算将在统一流程中处理
         analyzed_rule = {
             'criteria_name': rule['criteria_name'],
             'max_score': rule['max_score'],
             'score': 0,  # 初始分数为0，等待综合计算
-            'reason': f'价格分需要等所有投标方分析完成后综合计算。已提取报价: {best_price}',
-            'extracted_price': best_price,  # 保存提取的价格信息
+            'reason': '价格分需要等所有投标方分析完成后综合计算。',
             'is_price_criteria': True,  # 标记为价格分项
         }
 
@@ -406,24 +401,5 @@ class BidAnalyzerHelpers:
 
     def _save_extracted_price(self, best_price):
         """将提取的价格保存到数据库"""
-        if (
-            hasattr(self, 'db')
-            and hasattr(self, 'bid_document_id')
-            and self.db
-            and self.bid_document_id
-        ):
-            try:
-                # 查找与此投标文档关联的分析结果记录
-                analysis_record = (
-                    self.db.query(AnalysisResult)
-                    .filter(AnalysisResult.bid_document_id == self.bid_document_id)
-                    .first()
-                )
-                if analysis_record:
-                    analysis_record.extracted_price = best_price
-                    self.db.commit()
-                    logging.info(f'成功将提取的价格 {best_price} 保存到数据库')
-            except Exception as e:
-                logging.error(f'保存提取的价格到数据库时出错: {e}')
-                if hasattr(self, 'db'):
-                    self.db.rollback()
+        # 移除价格保存逻辑，价格提取和保存将在统一流程中处理
+        pass

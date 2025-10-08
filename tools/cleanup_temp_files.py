@@ -20,7 +20,7 @@ logger = logging.getLogger(__name__)
 
 # 导入数据库模块
 try:
-    from modules.database import (
+    from models.database import (
         SessionLocal,
         TenderProject,
         BidDocument,

@@ -23,8 +23,16 @@ from sqlalchemy import (
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import sessionmaker, relationship, Mapped, mapped_column
 import datetime
-
 import os
+
+# 获取本地时区
+LOCAL_TZ = datetime.timezone(datetime.timedelta(hours=8))
+
+
+def get_local_time():
+    """获取本地时间"""
+    return datetime.datetime.now(LOCAL_TZ).replace(tzinfo=None)
+
 
 DATABASE_URL = 'sqlite:///' + os.path.abspath(
     os.path.join(os.path.dirname(__file__), '..', 'db', 'tender_evaluation.db')
@@ -44,7 +52,7 @@ class TenderProject(Base):
     tender_file_path: Mapped[str] = mapped_column(String)
     scoring_rules_summary: Mapped[dict] = mapped_column(JSON)
     created_at: Mapped[datetime.datetime] = mapped_column(
-        DateTime, default=datetime.datetime.utcnow
+        DateTime, default=get_local_time
     )
     status: Mapped[str] = mapped_column(String, default='new')
     # 添加评标开始和结束时间字段
@@ -69,7 +77,7 @@ class BidDocument(Base):
     original_filename: Mapped[str] = mapped_column(String)  # 添加原始文件名字段
     file_size: Mapped[int] = mapped_column(Integer)
     upload_time: Mapped[datetime.datetime] = mapped_column(
-        DateTime, default=datetime.datetime.utcnow
+        DateTime, default=get_local_time
     )
     processing_status: Mapped[str] = mapped_column(String, default='pending')
     error_message: Mapped[str] = mapped_column(String, nullable=True)
@@ -115,7 +123,7 @@ class AnalysisResult(Base):
     )  # 存储动态评分项得分，key为评分项简称，value为得分
     analysis_summary: Mapped[str] = mapped_column(String)
     analyzed_at: Mapped[datetime.datetime] = mapped_column(
-        DateTime, default=datetime.datetime.utcnow
+        DateTime, default=get_local_time
     )
     scoring_method: Mapped[str] = mapped_column(String, default='AI')
     ai_model: Mapped[str] = mapped_column(
@@ -140,17 +148,21 @@ class ScoringRule(Base):
     )
     project_id: Mapped[int] = mapped_column(Integer, ForeignKey('tender_project.id'))
     Parent_Item_Name: Mapped[str] = mapped_column(
-        String(100)
+        String(100), nullable=True
     )  # 增加长度以容纳清理后的名称
-    Parent_max_score: Mapped[int] = mapped_column(Integer)
+    Parent_max_score: Mapped[int] = mapped_column(Integer, nullable=True)
     Child_Item_Name: Mapped[str] = mapped_column(
-        String(100)
+        String(100), nullable=True
     )  # 增加长度以容纳清理后的名称
-    Child_max_score: Mapped[int] = mapped_column(Integer)
-    description: Mapped[str] = mapped_column(String(500))  # 增加描述字段长度
-    is_veto: Mapped[bool] = mapped_column(Boolean)
-    is_price_criteria: Mapped[bool] = mapped_column(Boolean)
-    price_formula: Mapped[str] = mapped_column(String(500))  # 增加价格公式字段长度
+    Child_max_score: Mapped[int] = mapped_column(Integer, nullable=True)
+    description: Mapped[str] = mapped_column(
+        String(500), nullable=True
+    )  # 增加描述字段长度
+    is_veto: Mapped[bool] = mapped_column(Boolean, default=False)
+    is_price_criteria: Mapped[bool] = mapped_column(Boolean, default=False)
+    price_formula: Mapped[str] = mapped_column(
+        String(500), nullable=True
+    )  # 增加价格公式字段长度
 
     project = relationship('TenderProject', back_populates='scoring_rules')
 
@@ -169,7 +181,7 @@ class ScoreModificationHistory(Base):
     modification_type: Mapped[str] = mapped_column(String)
     modified_by: Mapped[str] = mapped_column(String)
     modified_at: Mapped[datetime.datetime] = mapped_column(
-        DateTime, default=datetime.datetime.utcnow
+        DateTime, default=get_local_time
     )
     modification_reason: Mapped[str] = mapped_column(String)
     approval_status: Mapped[str] = mapped_column(String, default='approved')
@@ -188,7 +200,7 @@ class ProjectAuditLog(Base):
     operation_details: Mapped[dict] = mapped_column(JSON)
     operator: Mapped[str] = mapped_column(String)
     operation_time: Mapped[datetime.datetime] = mapped_column(
-        DateTime, default=datetime.datetime.utcnow
+        DateTime, default=get_local_time
     )
     ip_address: Mapped[str] = mapped_column(String)
     user_agent: Mapped[str] = mapped_column(String)

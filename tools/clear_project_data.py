@@ -10,7 +10,7 @@ from pathlib import Path
 project_root = Path(__file__).parent.resolve()
 sys.path.insert(0, str(project_root))
 
-from modules.database import (
+from models.database import (
     SessionLocal,
     TenderProject,
     BidDocument,
@@ -55,7 +55,7 @@ def clear_all_data():
             logging.info('数据库中没有项目。')
             return
 
-        logging.info(f"准备清理所有项目数据，共 {len(projects)} 个项目。")
+        logging.info(f'准备清理所有项目数据，共 {len(projects)} 个项目。')
 
         # 2. 用户确认
         confirm = input(
@@ -70,7 +70,7 @@ def clear_all_data():
         # 3. 遍历所有项目并清理
         for project in projects:
             logging.info(f"正在清理项目：'{project.name}' (ID: {project.id})")
-            
+
             # 查找并删除关联的投标文件和缓存
             bid_documents = (
                 db.query(BidDocument).filter(BidDocument.project_id == project.id).all()
@@ -84,7 +84,9 @@ def clear_all_data():
                             os.remove(doc.file_path)
                             logging.info(f'    - 已删除投标文件: {doc.file_path}')
                         except OSError as e:
-                            logging.error(f'    - 删除文件失败: {doc.file_path}, 错误: {e}')
+                            logging.error(
+                                f'    - 删除文件失败: {doc.file_path}, 错误: {e}'
+                            )
 
                     # 删除缓存文件
                     cache_file = get_cache_path(doc.file_path)
@@ -93,7 +95,9 @@ def clear_all_data():
                             os.remove(cache_file)
                             logging.info(f'    - 已删除缓存文件: {cache_file}')
                         except OSError as e:
-                            logging.error(f'    - 删除缓存失败: {cache_file}, 错误: {e}')
+                            logging.error(
+                                f'    - 删除缓存失败: {cache_file}, 错误: {e}'
+                            )
             else:
                 logging.info('  - 未找到关联的投标文件。')
 
@@ -253,7 +257,7 @@ def list_projects():
         print(f'{"ID":<5} | {"项目名称":<30}')
         print('-' * 40)
         for p in projects:
-            name = p.name if p.name is not None else "未命名项目"
+            name = p.name if p.name is not None else '未命名项目'
             print(f'{p.id:<5} | {name:<30}')
         print('-' * 40)
 
@@ -285,6 +289,8 @@ if __name__ == '__main__':
         list_projects()
         print('\n请提供一个项目ID来执行清理操作。')
         print(f'用法: python {os.path.basename(__file__)} <project_id>')
-        print(f'或者使用 --all 参数删除所有数据: python {os.path.basename(__file__)} --all')
+        print(
+            f'或者使用 --all 参数删除所有数据: python {os.path.basename(__file__)} --all'
+        )
     else:
         clear_project_data(args.project_id)

@@ -116,6 +116,7 @@ class PriceScoreCalculator(PriceScoreCalculatorHelpers):
             price_max_score = price_rule.Child_max_score or 40  # 默认40分
 
             # 构造发送给AI大模型的prompt
+            # 恢复投标总价信息，因为价格分计算需要这些信息
             prompt = f"""你是一个专业的评标专家，请根据以下信息计算各投标人的价格分：
 
 【投标人报价信息】
@@ -312,18 +313,22 @@ class PriceScoreCalculator(PriceScoreCalculatorHelpers):
         """
         bidder_prices = {}
         for result in analysis_results:
-            # 使用投标人名称，如果为空则使用"未知投标人_序号"作为备用
-            bidder_name = (
-                result.bidder_name if result.bidder_name else f'未知投标人_{result.id}'
-            )
-            # 确保投标人名称不是None或空字符串
-            if not bidder_name or not str(bidder_name).strip():
-                bidder_name = f'未知投标人_{result.id}'
+            try:
+                # 使用投标人名称，如果为空则使用"未知投标人_序号"作为备用
+                bidder_name = (
+                    result.bidder_name if result.bidder_name else f'未知投标人_{result.id}'
+                )
+                # 确保投标人名称不是None或空字符串
+                if not bidder_name or not str(bidder_name).strip():
+                    bidder_name = f'未知投标人_{result.id}'
 
-            # 提取价格，如果为空则跳过
-            price = result.extracted_price
-            if price is not None:
-                bidder_prices[str(bidder_name)] = float(price)
+                # 提取价格，如果为空则跳过
+                price = result.extracted_price
+                if price is not None:
+                    bidder_prices[str(bidder_name)] = float(price)
+            except Exception as e:
+                self.logger.error(f'提取投标人 {getattr(result, "bidder_name", "未知")} 的报价时出错: {e}')
+                # 继续处理其他投标人
 
         self.logger.info(f'提取到的投标人报价: {bidder_prices}')
         return bidder_prices
