@@ -675,22 +675,20 @@ class PriceCalculationWorkflow:
                     # 保存原始价格分和总分，用于日志记录
                     old_price_score = analysis_result.price_score
                     old_total_score = analysis_result.total_score
-                    
+
                     # 更新价格分
                     analysis_result.price_score = price_score
-                    
-                    # 重新计算总分：子项分数 + 价格分
-                    # 子项分数 = 原总分 - 原价格分
-                    # 新总分 = 子项分数 + 新价格分
-                    item_scores = old_total_score - old_price_score
-                    new_total_score = item_scores + price_score
-                    
+
+                    # 重新计算总分：使用正确的总分计算公式
+                    # 根据规范：新总分 = (原总分 - 原价格分) + 新价格分
+                    new_total_score = (old_total_score - old_price_score) + price_score
+
                     # 确保总分不为负数
                     if new_total_score < 0:
                         new_total_score = price_score
-                        
+
                     analysis_result.total_score = round(new_total_score, 2)
-                    
+
                     saved_count += 1
                     self.logger.info(
                         f'更新投标人 {bidder_name} 的价格分: {old_price_score} -> {price_score}, '

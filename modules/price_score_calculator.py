@@ -255,32 +255,13 @@ class PriceScoreCalculator(PriceScoreCalculatorHelpers):
 
                     # 更新总分
                     old_total_score = result.total_score or 0
+                    old_price_score = result.price_score or 0
 
-                    # 从详细评分中获取除价格分外的其他分数总和
-                    other_scores_total = 0
-                    if result.detailed_scores is not None:
-                        try:
-                            # 解析JSON字符串格式的detailed_scores
-                            if isinstance(result.detailed_scores, str):
-                                detailed_scores = json.loads(result.detailed_scores)
-                            elif isinstance(result.detailed_scores, list):
-                                detailed_scores = result.detailed_scores
-                            else:
-                                detailed_scores = []
-
-                            other_scores_total = self._calculate_other_scores_total(
-                                detailed_scores
-                            )
-                            self.logger.info(
-                                f'投标人 {bidder_name} 的子项得分总和: {other_scores_total}'
-                            )
-                        except Exception as e:
-                            self.logger.error(
-                                f'解析投标人 {bidder_name} 的详细评分时出错: {e}'
-                            )
-
-                    # 新总分 = 其他分数总和 + 新价格分
-                    new_total_score = other_scores_total + new_price_score
+                    # 使用正确的总分计算公式
+                    # 根据规范：新总分 = (原总分 - 原价格分) + 新价格分
+                    new_total_score = (
+                        old_total_score - old_price_score
+                    ) + new_price_score
                     setattr(result, 'total_score', round(new_total_score, 2))
                     self.logger.info(
                         f'  更新总分: {old_total_score} -> {new_total_score}'
@@ -316,7 +297,9 @@ class PriceScoreCalculator(PriceScoreCalculatorHelpers):
             try:
                 # 使用投标人名称，如果为空则使用"未知投标人_序号"作为备用
                 bidder_name = (
-                    result.bidder_name if result.bidder_name else f'未知投标人_{result.id}'
+                    result.bidder_name
+                    if result.bidder_name
+                    else f'未知投标人_{result.id}'
                 )
                 # 确保投标人名称不是None或空字符串
                 if not bidder_name or not str(bidder_name).strip():
@@ -327,7 +310,9 @@ class PriceScoreCalculator(PriceScoreCalculatorHelpers):
                 if price is not None:
                     bidder_prices[str(bidder_name)] = float(price)
             except Exception as e:
-                self.logger.error(f'提取投标人 {getattr(result, "bidder_name", "未知")} 的报价时出错: {e}')
+                self.logger.error(
+                    f'提取投标人 {getattr(result, "bidder_name", "未知")} 的报价时出错: {e}'
+                )
                 # 继续处理其他投标人
 
         self.logger.info(f'提取到的投标人报价: {bidder_prices}')

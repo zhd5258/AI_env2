@@ -4,7 +4,7 @@
 # 作者           : KingFreeDom
 # 创建时间         : 2025-09-26 18:46:24
 # 最近一次编辑者      : KingFreeDom
-# 最近一次编辑时间     : 2025-10-08 10:15:50
+# 最近一次编辑时间     : 2025-10-08 14:27:04
 # 文件相对于项目的路径   : \AI_ENV2\modules\analysis_manager.py
 #
 # Copyright (c) 2025 by 中车眉山车辆有限公司/KingFreeDom, All Rights Reserved.
@@ -491,19 +491,25 @@ class AnalysisManager:
 
                     # 保存分析结果到数据库
                     try:
+                        # 获取AI分析器计算的子项分数总和
+                        other_scores_total = getattr(analyzer, 'other_scores_total', 0)
+
                         # 更新分析结果记录
+                        # 注意：这里不直接使用AI分析器返回的total_score，因为那不包含价格分
+                        # 总分将在价格计算完成后更新，初始设置为0
                         setattr(
                             result_record,
                             'total_score',
-                            float(analysis_result.get('total_score', 0)),
+                            0.0,  # 初始总分设为0，等待价格分计算完成后更新
                         )
-                        # 只有当analysis_result中包含price_score时才更新，否则保持数据库中的现有值
-                        if 'price_score' in analysis_result:
-                            setattr(
-                                result_record,
-                                'price_score',
-                                float(analysis_result.get('price_score', 0)),
-                            )
+                        # 不再更新price_score字段，因为价格分将在价格计算工作流中计算
+                        # 只有当analysis_result中包含price_score且数据库中还没有价格分时才更新
+                        # if 'price_score' in analysis_result:
+                        #     setattr(
+                        #         result_record,
+                        #         'price_score',
+                        #         float(analysis_result.get('price_score', 0)),
+                        #     )
                         # 价格分将在后续计算，此处不再强制设置为0
                         extracted_price = analysis_result.get('extracted_price')
                         if extracted_price is not None:
@@ -564,15 +570,16 @@ class AnalysisManager:
                 else:
                     # 如果没有找到分析结果记录，则创建新的记录
                     try:
+                        # 获取AI分析器计算的子项分数总和
+                        other_scores_total = getattr(analyzer, 'other_scores_total', 0)
+
                         new_result_record = AnalysisResult(
                             project_id=project_id,
                             bid_document_id=bid_document_id,
                             bidder_name=str(bid_document.bidder_name),
-                            total_score=float(analysis_result.get('total_score', 0)),
-                            # 只有当analysis_result中包含price_score时才设置，否则使用默认值0.0
-                            price_score=float(
-                                analysis_result.get('price_score', 0.0)
-                            ),  # 价格分将在后续计算
+                            total_score=0.0,  # 初始总分设为0，等待价格分计算完成后更新
+                            # 不再设置price_score，因为价格分将在价格计算工作流中计算
+                            price_score=0.0,  # 价格分将在后续计算
                             extracted_price=analysis_result.get('extracted_price'),
                             detailed_scores=analysis_result.get('detailed_scores', []),
                             analysis_summary=str(

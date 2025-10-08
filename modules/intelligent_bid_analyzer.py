@@ -430,8 +430,11 @@ class IntelligentBidAnalyzer(BidAnalyzerHelpers):
             # 5. 计算除价格外的总分
             other_scores_total = sum(item['score'] for item in analyzed_scores)
 
-            # 6. 计算总分
-            total_score = other_scores_total  # 价格分将在后续统一计算
+            # 6. 计算总分（不包含价格分，价格分将在后续统一计算）
+            total_score = other_scores_total
+
+            # 记录子项分数总和，用于后续计算总分
+            self.other_scores_total = other_scores_total
             self._update_progress(
                 self.total_rules_to_analyze,
                 self.total_rules_to_analyze,
@@ -454,6 +457,7 @@ class IntelligentBidAnalyzer(BidAnalyzerHelpers):
             analysis_result = {
                 'status': 'success',
                 'total_score': total_score,
+                'other_scores_total': other_scores_total,  # 添加子项分数总和
                 'detailed_scores': analyzed_scores,  # 现在是列表格式
                 'analysis_summary': '分析完成。',
                 'ai_model': self.ai_analyzer.model,
