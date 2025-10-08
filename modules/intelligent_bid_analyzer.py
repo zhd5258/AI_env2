@@ -539,60 +539,68 @@ class IntelligentBidAnalyzer(BidAnalyzerHelpers):
 
         """
 
-    def _parse_ai_score_response(self, response, max_score):
+    def _parse_ai_score_response(self, response: str, max_score: float) -> tuple[float, str]:
+        """
+        更加健壮地解析AI大模型返回的评分响应。
+        优先使用正则表达式提取JSON块，以忽略无关的解释性文本。
+
+        Args:
+            response: AI大模型的原始响应字符串。
+            max_score: 该评分项的最高分。
+
+        Returns:
+            tuple[float, str]: 解析出的分数和理由。如果解析失败，返回(0, "解析失败信息")。
+        """
+        import re
+        import json
+
         try:
-            # 使用正则表达式从响应中提取JSON块，这能抵抗额外的解释性文本
-            json_match = re.search(r'```json\s*(\{.*?\})\s*```', response, re.DOTALL)
+            # 1. 使用正则表达式查找被大括号包围的JSON块
+            # re.DOTALL 使得 '.' 可以匹配包括换行在内的任意字符
+            json_match = re.search(r'\{.*\}', response, re.DOTALL)
+
             if not json_match:
-                json_match = re.search(r'(\{.*?\})', response, re.DOTALL)
-
-            if json_match:
-                json_str = json_match.group(1)
-                # 只在必要时进行转义修复
-                try:
-                    # 首先尝试直接解析
-                    result = json.loads(json_str)
-                except json.JSONDecodeError:
-                    # 如果直接解析失败，再尝试修复转义字符
-                    # 修复JSON中的无效转义字符
-                    json_str = re.sub(
-                        r'\\([^"\\/bfnrtu])', r'\1', json_str
-                    )  # 移除无效的转义
-                    json_str = json_str.replace('\\', '\\\\')  # 将单独的反斜杠转义
-                    # 修复可能存在的其他转义问题
-                    json_str = (
-                        json_str.replace('\n', '\\n')
-                        .replace('\r', '\\r')
-                        .replace('\t', '\\t')
-                    )
-                    result = json.loads(json_str)
-
-                score = result.get('score', 0)
-                reason = result.get('reason', '未提供理由。')
-
-                if not isinstance(score, (int, float)):
-                    score = 0
-                score = max(0, min(float(score), float(max_score)))
-                return score, reason
-            else:
-                # 如果无法找到JSON，作为备用方案，尝试从文本中提取分数
-                score_match = re.search(r'(\d+(?:\.\d+)?)\s*分', response)
-                if score_match:
-                    score = float(score_match.group(1))
-                    score = max(0, min(score, max_score))
-                    return (
-                        score,
-                        f'无法解析JSON，但从文本中提取到分数。原始响应: {response[:200]}...',
-                    )
-
-                return (
-                    0,
-                    f'无法从AI响应中解析出有效的JSON或分数。响应: {response[:200]}...',
+                self.logger.error(
+                    f'解析AI响应失败：未找到有效的JSON块。原始响应: {response}'
                 )
+                return 0, f'解析AI响应失败：未找到有效的JSON块。'
 
-        except (json.JSONDecodeError, TypeError) as e:
-            self.logger.error(f'解析AI响应时出错: {e}\n响应内容: {response}')
-            return 0, f'解析AI响应失败。错误: {e}'
+            json_str = json_match.group(0)
+
+            # 2. 尝试解析提取出的JSON字符串
+            try:
+                data = json.loads(json_str)
+                if not isinstance(data, dict):
+                    self.logger.error(
+                        f'解析AI响应失败：JSON不是一个字典。解析内容: {json_str}'
+                    )
+                    return 0, f'解析AI响应失败：JSON不是一个字典。'
+
+                score = data.get('score', 0)
+                reason = data.get('reason', '未提供理由。')
+
+                # 3. 验证和修正分数
+                if not isinstance(score, (int, float)):
+                    self.logger.warning(f'从AI响应中解析出的分数 "{score}" 不是有效数字，记为0分。')
+                    score = 0
+                
+                # 确保分数在有效范围内
+                score = max(0.0, min(float(score), float(max_score)))
+
+                return score, reason
+
+            except json.JSONDecodeError as e:
+                self.logger.error(
+                    f'解析AI响应中的JSON时出错: {e}。原始JSON字符串: {json_str}'
+                )
+                self.logger.error(f'完整的原始AI响应: {response}')
+                return 0, f'解析AI响应中的JSON失败。'
+
+        except Exception as e:
+            self.logger.error(
+                f'解析AI响应时发生未知错误: {e}。完整的原始AI响应: {response}'
+            )
+            return 0, f'解析AI响应时发生未知错误。'
 
     def _save_failed_pages_info(self, bid_processor):
         """保存PDF处理失败的页面信息"""
