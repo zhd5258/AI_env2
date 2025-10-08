@@ -149,14 +149,6 @@ class PriceCalculationWorkflow:
         try:
             self.logger.info(f'开始执行项目 {project_id} 的价格计算工作流')
 
-            # 检查触发条件
-            # 1. 招标文件解析完成(任务状态标记为"completed")
-            # 2. 价格计算子流程状态标记为"processing"
-            # 3. 项目ID和投标文件信息列表必须提供
-            # 4. 评分规则初始化成功
-            # 5. 项目信息存在且包含招标文件路径
-            # 6. 所有投标文件分析任务尚未开始
-
             # 检查必要参数
             if not project_id:
                 self.logger.error('价格计算工作流触发条件不满足：缺少项目ID')

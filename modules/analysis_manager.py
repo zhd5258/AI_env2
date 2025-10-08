@@ -181,12 +181,6 @@ class AnalysisManager:
         db = SessionLocal()
         bid_document = None  # 初始化bid_document变量
         try:
-            # 检查触发条件
-            # 1. 价格分数计算子流程状态标记为"completed"
-            # 2. 投标文件状态更新为"processing"
-            # 3. 项目ID、投标文件ID、招标文件路径和投标文件路径都必须提供
-            # 4. 投标文件记录必须存在于数据库中
-
             # 检查必要参数
             if (
                 not project_id
@@ -203,31 +197,6 @@ class AnalysisManager:
             )
             if not bid_document:
                 self.logger.error(f'未找到投标文档: {bid_document_id}')
-                return
-
-            # 检查投标文件状态是否为processing
-            if bid_document.processing_status != 'processing':
-                self.logger.error(
-                    f'分析任务触发条件不满足：投标文件状态不是processing，当前状态为{bid_document.processing_status}'
-                )
-                return
-
-            # 检查项目状态是否为"analyzing"或"completed"
-            # 如果项目状态是"analyzing"，说明我们是在run_analysis_and_calculate_prices中调用的
-            # 如果项目状态是"completed"，说明是其他地方调用的
-            project = (
-                db.query(TenderProject).filter(TenderProject.id == project_id).first()
-            )
-            if not project:
-                self.logger.error(f'未找到项目: {project_id}')
-                return
-
-            # 检查项目状态是否为"analyzing"或"completed"
-            # 修复：允许在"analyzing"状态下启动分析任务
-            if project.status not in ['analyzing', 'completed']:
-                self.logger.error(
-                    f'分析任务触发条件不满足：项目状态不是"analyzing"或"completed"，当前状态为{project.status}'
-                )
                 return
 
             # 确保投标人名称不为空，如果为空则使用文件名作为默认值
@@ -492,15 +461,14 @@ class AnalysisManager:
                     # 保存分析结果到数据库
                     try:
                         # 获取AI分析器计算的子项分数总和
-                        other_scores_total = getattr(analyzer, 'other_scores_total', 0)
+                        other_scores_total = analysis_result.get('other_scores_total', 0)
 
                         # 更新分析结果记录
-                        # 注意：这里不直接使用AI分析器返回的total_score，因为那不包含价格分
-                        # 总分将在价格计算完成后更新，初始设置为0
+                        # 初始总分设置为非价格项的总分，这是价格计算的基础
                         setattr(
                             result_record,
                             'total_score',
-                            0.0,  # 初始总分设为0，等待价格分计算完成后更新
+                            other_scores_total,
                         )
                         # 不再更新price_score字段，因为价格分将在价格计算工作流中计算
                         # 只有当analysis_result中包含price_score且数据库中还没有价格分时才更新
@@ -571,13 +539,13 @@ class AnalysisManager:
                     # 如果没有找到分析结果记录，则创建新的记录
                     try:
                         # 获取AI分析器计算的子项分数总和
-                        other_scores_total = getattr(analyzer, 'other_scores_total', 0)
+                        other_scores_total = analysis_result.get('other_scores_total', 0)
 
                         new_result_record = AnalysisResult(
                             project_id=project_id,
                             bid_document_id=bid_document_id,
                             bidder_name=str(bid_document.bidder_name),
-                            total_score=0.0,  # 初始总分设为0，等待价格分计算完成后更新
+                            total_score=other_scores_total,  # 初始总分设为非价格项的总分
                             # 不再设置price_score，因为价格分将在价格计算工作流中计算
                             price_score=0.0,  # 价格分将在后续计算
                             extracted_price=analysis_result.get('extracted_price'),
@@ -778,58 +746,60 @@ class AnalysisManager:
 
         tender_file_path = project.tender_file_path
 
-        # 首先执行价格计算工作流
-        self.logger.info(f'开始执行项目 {project_id} 的价格计算工作流')
-        from modules.price_calculation_workflow import PriceCalculationWorkflow
+        # 步骤1: 初始化状态
+        self.logger.info(f'项目 {project_id}: 初始化分析状态...')
+        project.status = 'analyzing'
+        bid_documents = (
+            self.db.query(BidDocument)
+            .filter(BidDocument.project_id == project_id)
+            .all()
+        )
+        for bid_doc in bid_documents:
+            bid_doc.processing_status = 'processing'
+        self.db.commit()
+        self.logger.info(f'项目 {project_id}: 状态已更新为 "analyzing"，所有投标文件状态已更新为 "processing"。')
 
-        # 确保数据库会话存在
-        if self.db is None:
-            self.logger.error('数据库会话未提供')
+        # 步骤2: 为每个投标文件创建并执行分析任务
+        self.logger.info(f'项目 {project_id}: 开始执行所有投标文件的非价格项分析...')
+        for bid_info in bid_files_info:
+            try:
+                self.analysis_task(
+                    project_id,
+                    bid_info['bid_document_id'],
+                    str(tender_file_path),
+                    bid_info['bid_file_path'],
+                )
+            except Exception as e:
+                self.logger.error(
+                    f'为投标文件 {bid_info["bid_document_id"]} 创建分析任务时出错: {e}'
+                )
+        
+        self.logger.info(f'项目 {project_id}: 所有非价格项分析任务已启动。')
+
+        # 步骤3: 检查并等待所有分析任务完成
+        if not self._check_all_analysis_completed(project_id):
+            self.logger.error(f'项目 {project_id}: 非价格项分析步骤未全部成功完成，无法进行价格计算。')
+            project.status = 'error'
+            self.db.commit()
             return
 
-        # 创建价格计算工作流实例
-        price_workflow = PriceCalculationWorkflow(db_session=self.db)
+        # 步骤4: 所有分析完成后，执行价格计算和总分合成工作流
+        self.logger.info(f'项目 {project_id}: 非价格项分析全部完成，开始执行价格计算与总分合成...')
+        from modules.price_calculation_workflow import PriceCalculationWorkflow
 
-        # 执行价格计算工作流
+        price_workflow = PriceCalculationWorkflow(db_session=self.db)
         success = price_workflow.execute_workflow(project_id)
 
         if success:
-            self.logger.info(f'项目 {project_id} 价格计算工作流执行成功')
-            # 价格计算成功后，更新所有投标文件状态为processing
-            # 因为接下来要启动规则分析流程
-            if self.db is not None:
-                bid_documents = (
-                    self.db.query(BidDocument)
-                    .filter(BidDocument.project_id == project_id)
-                    .all()
-                )
-                for bid_doc in bid_documents:
-                    bid_doc.processing_status = 'processing'
-                self.db.commit()
-                self.logger.info(
-                    f'已将项目 {project_id} 的所有投标文件状态更新为processing'
-                )
-
-            # 再为每个投标文件创建分析任务
-            for bid_info in bid_files_info:
-                try:
-                    self.analysis_task(
-                        project_id,
-                        bid_info['bid_document_id'],
-                        str(tender_file_path),
-                        bid_info['bid_file_path'],
-                    )
-                except Exception as e:
-                    self.logger.error(
-                        f'为投标文件 {bid_info["bid_document_id"]} 创建分析任务时出错: {e}'
-                    )
-
-            # 注意：不要在这里调用 _update_project_status_when_all_completed
-            # 该方法应该在分析任务完成后调用（在analysis_task方法内部已完成）
+            self.logger.info(f'项目 {project_id}: 价格计算与总分合成工作流执行成功。')
+            # 最终更新项目状态
+            self._update_project_status_when_all_completed(project_id)
         else:
-            self.logger.error(f'项目 {project_id} 价格计算工作流执行失败')
+            self.logger.error(f'项目 {project_id}: 价格计算与总分合成工作流执行失败。')
+            project.status = 'error'
+            self.db.commit()
 
-        # 检查是否需要清理MD文件
+        # 步骤5: 清理临时文件
         self._cleanup_md_files(project_id)
 
     def _log_price_calculation_failure_details(self, project_id: int):
