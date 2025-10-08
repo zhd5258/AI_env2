@@ -254,17 +254,29 @@ class PriceScoreCalculator(PriceScoreCalculatorHelpers):
                     )
 
                     # 更新总分
-                    old_total_score = result.total_score or 0
-                    old_price_score = result.price_score or 0
+                    # 重新计算总分，而不是在旧总分上修改
+                    # 1. 计算其他所有项得分之和
+                    detailed_scores_list = []
+                    if isinstance(result.detailed_scores, str):
+                        try:
+                            detailed_scores_list = json.loads(result.detailed_scores)
+                        except json.JSONDecodeError:
+                            self.logger.error(
+                                f'解析投标人 {bidder_name} 的 detailed_scores 失败'
+                            )
+                    elif isinstance(result.detailed_scores, list):
+                        detailed_scores_list = result.detailed_scores
 
-                    # 使用正确的总分计算公式
-                    # 根据规范：新总分 = (原总分 - 原价格分) + 新价格分
-                    new_total_score = (
-                        old_total_score - old_price_score
-                    ) + new_price_score
+                    other_scores_total = self._calculate_other_scores_total(
+                        detailed_scores_list
+                    )
+
+                    # 2. 新总分 = 其他项得分 + 新价格分
+                    new_total_score = other_scores_total + new_price_score
+                    old_total_score = result.total_score or 0
                     setattr(result, 'total_score', round(new_total_score, 2))
                     self.logger.info(
-                        f'  更新总分: {old_total_score} -> {new_total_score}'
+                        f'  更新总分: {old_total_score} -> {new_total_score} (其他项总分: {other_scores_total})'
                     )
 
                     updated_count += 1
@@ -322,111 +334,64 @@ class PriceScoreCalculator(PriceScoreCalculatorHelpers):
         self, ai_response: str
     ) -> Dict[str, float]:
         """
-        解析AI大模型返回的价格分计算结果
+        更加健壮地解析AI大模型返回的价格分计算结果。
+        优先使用正则表达式提取JSON块，以忽略无关的解释性文本。
 
         Args:
-            ai_response: AI大模型的响应
+            ai_response: AI大模型的原始响应字符串。
 
         Returns:
-            Dict[str, float]: 投标人名称到价格分的映射
+            Dict[str, float]: 投标人名称到价格分的映射，如果解析失败则返回空字典。
         """
+        import re
+
         price_scores = {}
-        clean_response = ai_response.strip()
-
         try:
-            # 如果响应包含JSON代码块标记，移除它们
-            if clean_response.startswith('```json'):
-                clean_response = clean_response[7:]
-            if clean_response.startswith('```'):
-                clean_response = clean_response[3:]
-            if clean_response.endswith('```'):
-                clean_response = clean_response[:-3]
-            clean_response = clean_response.strip()
+            # 1. 使用正则表达式查找被大括号包围的JSON块
+            # re.DOTALL 使得 '.' 可以匹配包括换行在内的任意字符
+            json_match = re.search(r'\{.*\}', ai_response, re.DOTALL)
 
-            # 只在必要时进行转义修复
-            json_data = None
-            try:
-                # 首先尝试直接解析
-                json_data = json.loads(clean_response)
-            except json.JSONDecodeError:
-                # 如果直接解析失败，再尝试修复转义字符
-                import re
-
-                # 修复JSON中的无效转义字符
-                clean_response = re.sub(
-                    r'\\([^"\\/bfnrtu])', r'\1', clean_response
-                )  # 移除无效的转义
-                clean_response = clean_response.replace(
-                    '\\', '\\\\'
-                )  # 将单独的反斜杠转义
-                # 修复可能存在的其他转义问题
-                clean_response = (
-                    clean_response.replace('\n', '\\n')
-                    .replace('\r', '\\r')
-                    .replace('\t', '\\t')
+            if not json_match:
+                self.logger.error(
+                    f'解析AI响应失败：未找到有效的JSON块。原始响应: {ai_response}'
                 )
-                try:
-                    json_data = json.loads(clean_response)
-                except json.JSONDecodeError:
-                    self.logger.warning('JSON解析失败，尝试文本解析')
+                return {}
 
-            # 如果成功解析了JSON数据
-            if json_data is not None:
-                if isinstance(json_data, dict):
-                    for name, score in json_data.items():
-                        if isinstance(score, (int, float)):
-                            price_scores[str(name)] = float(score)
-                    self.logger.info(f'JSON解析成功: {price_scores}')
-                    return price_scores
+            json_str = json_match.group(0)
+
+            # 2. 尝试解析提取出的JSON字符串
+            try:
+                data = json.loads(json_str)
+                if not isinstance(data, dict):
+                    self.logger.error(
+                        f'解析AI响应失败：JSON不是一个字典。解析内容: {json_str}'
+                    )
+                    return {}
+
+                # 3. 验证数据格式并转换为所需类型
+                for name, score in data.items():
+                    if isinstance(score, (int, float)):
+                        price_scores[str(name)] = float(score)
+                    else:
+                        self.logger.warning(
+                            f'跳过无效的分数值：投标人 "{name}" 的分数 "{score}" 不是数字。'
+                        )
+                
+                self.logger.info(f'成功从AI响应中解析出价格分: {price_scores}')
+                return price_scores
+
+            except json.JSONDecodeError as e:
+                self.logger.error(
+                    f'解析AI响应中的JSON时出错: {e}。原始JSON字符串: {json_str}'
+                )
+                self.logger.error(f'完整的原始AI响应: {ai_response}')
+                return {}
 
         except Exception as e:
-            self.logger.error(f'解析AI响应时出错: {e}')
-
-        # 文本解析作为备用方案
-        try:
-            # 响应格式应该是："投标人1：价格分1,投标人2：价格分2,投标人3：价格分3,......."
-            bidder_results = clean_response.split(',')
-            for result in bidder_results:
-                # 分割投标人名称和价格分
-                if '：' in result:
-                    parts = result.split('：')
-                    if len(parts) == 2:
-                        bidder_name = parts[0].strip()
-                        score_str = parts[1].strip()
-
-                        # 移除可能的"分"字并转换为数值
-                        score_str = score_str.replace('分', '').strip()
-                        try:
-                            score = float(score_str)
-                            price_scores[bidder_name] = score
-                        except ValueError:
-                            self.logger.warning(
-                                f'无法解析投标人 {bidder_name} 的价格分: {score_str}'
-                            )
-                            continue
-                elif ':' in result:
-                    parts = result.split(':')
-                    if len(parts) == 2:
-                        bidder_name = parts[0].strip()
-                        score_str = parts[1].strip()
-
-                        # 移除可能的"分"字并转换为数值
-                        score_str = score_str.replace('分', '').strip()
-                        try:
-                            score = float(score_str)
-                            price_scores[bidder_name] = score
-                        except ValueError:
-                            self.logger.warning(
-                                f'无法解析投标人 {bidder_name} 的价格分: {score_str}'
-                            )
-                            continue
-
-            self.logger.info(f'文本解析成功: {price_scores}')
-        except Exception as e:
-            self.logger.error(f'文本解析时出错: {e}')
-
-        # 返回结果（可能为空字典）
-        return price_scores
+            self.logger.error(
+                f'解析AI响应时发生未知错误: {e}。完整的原始AI响应: {ai_response}'
+            )
+            return {}
 
     def _calculate_price_scores_default(
         self, bidder_prices: Dict[str, float], price_rule

@@ -201,25 +201,21 @@ class PriceCalculationWorkflow:
                 self.logger.error(f'项目 {project_id} 没有找到价格评分规则')
                 return False
 
-            # 4. 构造发送给AI大模型的prompt
-            self.logger.info('步骤4: 构造发送给AI大模型的prompt')
-            prompt = self._construct_ai_prompt(bidder_price_dict, price_rule)
+            # 4. 调用价格分计算器模块进行计算和保存
+            self.logger.info('步骤4: 调用价格分计算器进行计算和保存')
+            from modules.price_score_calculator import PriceScoreCalculator
 
-            # 5. 调用AI大模型计算价格分数
-            self.logger.info('步骤5: 调用AI大模型计算价格分数')
-            price_scores = self._calculate_price_scores_with_ai(prompt)
-            if not price_scores:
-                self.logger.error(f'项目 {project_id} AI价格分计算失败')
-                # 记录详细信息用于调试
-                self._log_price_calculation_failure_details(project_id)
+            price_calculator = PriceScoreCalculator(db_session=self.db)
+            calculation_success = price_calculator.calculate_project_price_scores(
+                project_id
+            )
+
+            if not calculation_success:
+                self.logger.error(f'项目 {project_id} 的价格分计算和保存失败')
                 return False
 
-            # 6. 将价格分数保存到数据库
-            self.logger.info('步骤6: 将价格分数保存到数据库')
-            self._save_price_scores_to_database(project_id, price_scores)
-
-            # 7. 更新项目状态
-            self.logger.info('步骤7: 更新项目状态')
+            # 5. 更新项目状态
+            self.logger.info('步骤5: 更新项目状态')
             self._update_project_status(project_id)
 
             self.logger.info(f'项目 {project_id} 价格计算工作流执行完成')
@@ -592,122 +588,7 @@ class PriceCalculationWorkflow:
             self.logger.error(f'调用AI大模型计算价格分时出错: {e}', exc_info=True)
             return {}
 
-    def _save_price_scores_to_database(
-        self, project_id: int, price_scores: Dict[str, float]
-    ):
-        """
-        将价格分数保存到数据库
 
-        Args:
-            project_id: 项目ID
-            price_scores: 投标人价格分数字典
-        """
-        try:
-            self.logger.info(f'开始保存项目 {project_id} 的价格分到数据库')
-
-            # 验证和修正价格分
-            scoring_rules = (
-                self.db.query(ScoringRule)
-                .filter(ScoringRule.project_id == project_id)
-                .all()
-            )
-
-            # 查找价格评分规则
-            price_rule = None
-            for rule in scoring_rules:
-                if getattr(rule, 'is_price_criteria', False):
-                    price_rule = rule
-                    break
-
-            # 获取价格评分规则的最高分，确保不为None
-            price_max_score = (
-                getattr(price_rule, 'Child_max_score', None) if price_rule else None
-            )
-            # 如果Child_max_score为None、0或不是数字，使用默认值40
-            if (
-                price_max_score is None
-                or price_max_score == 0
-                or not isinstance(price_max_score, (int, float))
-            ):
-                price_max_score = 40
-            else:
-                price_max_score = float(price_max_score)
-
-            # 验证和修正价格分，确保不超过最高分
-            validated_scores = {}
-            for bidder_name, score in price_scores.items():
-                if not isinstance(score, (int, float)):
-                    self.logger.warning(
-                        f'投标人 {bidder_name} 的价格分 {score} 不是数字类型，跳过'
-                    )
-                    continue
-
-                if score > price_max_score:
-                    self.logger.warning(
-                        f'投标人 {bidder_name} 的AI计算价格分 {score} 超过最高分 {price_max_score}，自动修正为最高分'
-                    )
-                    validated_scores[bidder_name] = float(price_max_score)
-                elif score < 0:
-                    self.logger.warning(
-                        f'投标人 {bidder_name} 的AI计算价格分 {score} 小于0，自动修正为0'
-                    )
-                    validated_scores[bidder_name] = 0.0
-                else:
-                    validated_scores[bidder_name] = round(float(score), 2)
-
-            price_scores = validated_scores
-
-            # 将价格分保存到数据库
-            saved_count = 0
-            self.logger.info('=== 保存到数据库的价格分 ===')
-            for bidder_name, price_score in price_scores.items():
-                # 查找对应的分析结果记录
-                analysis_result = (
-                    self.db.query(AnalysisResult)
-                    .filter(
-                        AnalysisResult.project_id == project_id,
-                        AnalysisResult.bidder_name == bidder_name,
-                    )
-                    .first()
-                )
-
-                if analysis_result:
-                    # 保存原始价格分和总分，用于日志记录
-                    old_price_score = analysis_result.price_score
-                    old_total_score = analysis_result.total_score
-
-                    # 更新价格分
-                    analysis_result.price_score = price_score
-
-                    # 重新计算总分：使用正确的总分计算公式
-                    # 根据规范：新总分 = (原总分 - 原价格分) + 新价格分
-                    new_total_score = (old_total_score - old_price_score) + price_score
-
-                    # 确保总分不为负数
-                    if new_total_score < 0:
-                        new_total_score = price_score
-
-                    analysis_result.total_score = round(new_total_score, 2)
-
-                    saved_count += 1
-                    self.logger.info(
-                        f'更新投标人 {bidder_name} 的价格分: {old_price_score} -> {price_score}, '
-                        f'总分: {old_total_score} -> {new_total_score}'
-                    )
-                else:
-                    self.logger.warning(f'未找到投标人 {bidder_name} 的分析结果记录')
-
-            # 提交数据库更改
-            self.db.commit()
-
-            self.logger.info(
-                f'成功将 {saved_count} 个价格分保存到数据库: {price_scores}'
-            )
-            self.logger.info('=== 保存到数据库的价格分结束 ===')
-
-        except Exception as e:
-            self.logger.error(f'保存价格分到数据库时出错: {e}', exc_info=True)
-            self.db.rollback()
 
     def _update_project_status(self, project_id: int):
         """
