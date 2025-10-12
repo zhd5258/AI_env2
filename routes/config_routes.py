@@ -1,8 +1,13 @@
 #!/usr/bin/env python
 # -*- coding:utf-8 -*-
 #
-# 配置相关路由
-# 包括运行时配置和OCR配置
+# 作者           : KingFreeDom
+# 创建时间         : 2025-10-03 14:14:03
+# 最近一次编辑者      : KingFreeDom
+# 最近一次编辑时间     : 2025-10-12 13:53:42
+# 文件相对于项目的路径   : \AI_ENV2\routes\config_routes.py
+#
+# Copyright (c) 2025 by 中车眉山车辆有限公司/KingFreeDom, All Rights Reserved.
 #
 
 from flask import Blueprint, request, jsonify
