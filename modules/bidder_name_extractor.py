@@ -510,7 +510,7 @@ def _load_from_temp_word(file_path: str) -> str:
         # 生成基于文件路径的唯一文件名
         file_key = _get_cache_key(file_path)
         temp_word_filename = f'{file_key}.txt'
-        temp_word_dir = 'temp/md'
+        temp_word_dir = 'output'
         temp_word_path = os.path.join(temp_word_dir, temp_word_filename)
 
         if os.path.exists(temp_word_path):

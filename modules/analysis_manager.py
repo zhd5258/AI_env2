@@ -461,7 +461,9 @@ class AnalysisManager:
                     # 保存分析结果到数据库
                     try:
                         # 获取AI分析器计算的子项分数总和
-                        other_scores_total = analysis_result.get('other_scores_total', 0)
+                        other_scores_total = analysis_result.get(
+                            'other_scores_total', 0
+                        )
 
                         # 更新分析结果记录
                         # 初始总分设置为非价格项的总分，这是价格计算的基础
@@ -539,7 +541,9 @@ class AnalysisManager:
                     # 如果没有找到分析结果记录，则创建新的记录
                     try:
                         # 获取AI分析器计算的子项分数总和
-                        other_scores_total = analysis_result.get('other_scores_total', 0)
+                        other_scores_total = analysis_result.get(
+                            'other_scores_total', 0
+                        )
 
                         new_result_record = AnalysisResult(
                             project_id=project_id,
@@ -672,7 +676,7 @@ class AnalysisManager:
                 str(project.tender_file_path)
             ):
                 tender_md_path = os.path.join(
-                    'temp/md',
+                    'output',
                     f'{os.path.splitext(os.path.basename(str(project.tender_file_path)))[0]}.md',
                 )
                 if os.path.exists(tender_md_path):
@@ -693,7 +697,7 @@ class AnalysisManager:
                     str(bid_doc.file_path)
                 ):
                     bid_md_path = os.path.join(
-                        'temp/md',
+                        'output',
                         f'{os.path.splitext(os.path.basename(str(bid_doc.file_path)))[0]}.md',
                     )
                     if os.path.exists(bid_md_path):
@@ -757,7 +761,9 @@ class AnalysisManager:
         for bid_doc in bid_documents:
             bid_doc.processing_status = 'processing'
         self.db.commit()
-        self.logger.info(f'项目 {project_id}: 状态已更新为 "analyzing"，所有投标文件状态已更新为 "processing"。')
+        self.logger.info(
+            f'项目 {project_id}: 状态已更新为 "analyzing"，所有投标文件状态已更新为 "processing"。'
+        )
 
         # 步骤2: 为每个投标文件创建并执行分析任务
         self.logger.info(f'项目 {project_id}: 开始执行所有投标文件的非价格项分析...')
@@ -773,18 +779,22 @@ class AnalysisManager:
                 self.logger.error(
                     f'为投标文件 {bid_info["bid_document_id"]} 创建分析任务时出错: {e}'
                 )
-        
+
         self.logger.info(f'项目 {project_id}: 所有非价格项分析任务已启动。')
 
         # 步骤3: 检查并等待所有分析任务完成
         if not self._check_all_analysis_completed(project_id):
-            self.logger.error(f'项目 {project_id}: 非价格项分析步骤未全部成功完成，无法进行价格计算。')
+            self.logger.error(
+                f'项目 {project_id}: 非价格项分析步骤未全部成功完成，无法进行价格计算。'
+            )
             project.status = 'error'
             self.db.commit()
             return
 
         # 步骤4: 所有分析完成后，执行价格计算和总分合成工作流
-        self.logger.info(f'项目 {project_id}: 非价格项分析全部完成，开始执行价格计算与总分合成...')
+        self.logger.info(
+            f'项目 {project_id}: 非价格项分析全部完成，开始执行价格计算与总分合成...'
+        )
         from modules.price_calculation_workflow import PriceCalculationWorkflow
 
         price_workflow = PriceCalculationWorkflow(db_session=self.db)

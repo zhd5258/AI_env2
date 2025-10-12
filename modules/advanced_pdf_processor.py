@@ -16,6 +16,13 @@ import io
 from pathlib import Path
 from typing import List, Optional, Tuple
 import logging
+import warnings
+
+# 忽略pynvml弃用警告
+warnings.filterwarnings(
+    'ignore',
+    message='The pynvml package is deprecated. Please install nvidia-ml-py instead.',
+)
 
 # 设置日志
 logging.basicConfig(
@@ -97,55 +104,97 @@ class PDFRotationHandler:
         归一化PDF旋转(内容级旋转矫正)
 
         Args:
-            pdf_bytes: PDF文件的字节内容
+            pdf_bytes: PDF文件字节
 
         Returns:
-            (处理后的PDF字节内容, 矫正的页面数)
+            (矫正后的PDF字节, 旋转角度)
         """
-        if PdfReader is None or PdfWriter is None or Transformation is None:
+        if not PYPDF_AVAILABLE or PdfReader is None or PdfWriter is None:
+            logger.warning('pypdf未安装,跳过旋转归一化')
             return pdf_bytes, 0
 
         try:
-            reader = PdfReader(io.BytesIO(pdf_bytes))
-            writer = PdfWriter()
-            rotated = 0
+            # 读取PDF
+            pdf_reader = PdfReader(io.BytesIO(pdf_bytes))
 
-            # 创建临时文件来避免直接修改原始内容
-            temp_pdf = io.BytesIO()
-            temp_writer = PdfWriter()
+            # 检查第一页是否有旋转
+            first_page = pdf_reader.pages[0]
+            rotation = first_page.get('/Rotate', 0)
 
-            for page in reader.pages:
-                temp_writer.add_page(page)
-
-            temp_writer.write(temp_pdf)
-            temp_pdf.seek(0)
-
-            # 重新读取临时PDF以避免引用问题
-            temp_reader = PdfReader(temp_pdf)
-
-            for page_idx, page in enumerate(temp_reader.pages):
-                try:
-                    rotation = getattr(page, 'rotation', 0) or 0
-                except Exception:
-                    rotation = 0
-
-                # 如果页面有旋转标记,则添加到writer
-                if rotation % 360 != 0:
-                    logger.info(f'检测到第{page_idx + 1}页旋转: {rotation}度')
-                    rotated += 1
-
-                # 始终添加页面
-                writer.add_page(page)
-
-            if rotated == 0:
+            # 如果没有旋转或旋转角度为0，则无需处理
+            if not rotation:
                 return pdf_bytes, 0
 
-            buf = io.BytesIO()
-            writer.write(buf)
-            return buf.getvalue(), rotated
+            logger.info(f'检测到PDF旋转角度: {rotation}度')
+
+            # 创建新的PDF写入器
+            pdf_writer = PdfWriter()
+
+            # 处理每一页
+            for page in pdf_reader.pages:
+                # 获取页面旋转角度
+                page_rotation = page.get('/Rotate', 0)
+                if page_rotation:
+                    # 应用反向旋转
+                    page.transfer_rotation_to_content()
+                    page.rotate(-page_rotation)  # 反向旋转
+
+                pdf_writer.add_page(page)
+
+            # 将矫正后的PDF写入字节流
+            output_stream = io.BytesIO()
+            pdf_writer.write(output_stream)
+            normalized_pdf_bytes = output_stream.getvalue()
+
+            logger.info('PDF旋转归一化完成')
+            return normalized_pdf_bytes, rotation
+
         except Exception as e:
-            logger.warning(f'PDF旋转归一化失败: {e}')
+            logger.error(f'PDF旋转归一化失败: {e}')
             return pdf_bytes, 0
+
+    def rotate_pdf_pages(self, pdf_path: str, angle: int) -> str:
+        """
+        旋转PDF页面
+
+        Args:
+            pdf_path: PDF文件路径
+            angle: 旋转角度 (90, 180, 270)
+
+        Returns:
+            旋转后的PDF文件路径
+        """
+        if not PYPDF_AVAILABLE or PdfReader is None or PdfWriter is None:
+            raise RuntimeError('pypdf未安装,无法旋转PDF')
+
+        if angle not in [90, 180, 270]:
+            raise ValueError('旋转角度必须是90、180或270度')
+
+        try:
+            # 打开原始PDF
+            reader = PdfReader(pdf_path)
+            writer = PdfWriter()
+
+            # 旋转每一页
+            for page in reader.pages:
+                page.rotate(angle)
+                writer.add_page(page)
+
+            # 保存旋转后的PDF
+            original_name = Path(pdf_path).stem
+            rotated_pdf_path = (
+                Path(pdf_path).parent / f'{original_name}_rotated_{angle}.pdf'
+            )
+
+            with open(rotated_pdf_path, 'wb') as f:
+                writer.write(f)
+
+            logger.info(f'PDF旋转完成: {pdf_path} → {rotated_pdf_path}')
+            return str(rotated_pdf_path)
+
+        except Exception as e:
+            logger.error(f'PDF旋转失败: {e}')
+            raise
 
 
 # =============================================================================
@@ -171,16 +220,22 @@ class MinerUProcessor:
         enable_formula: bool = True,
         enable_table: bool = True,
         language: str = 'ch',
+        dpi: int = 300,
+        start_page: Optional[int] = None,
+        end_page: Optional[int] = None,
     ) -> str:
         """
-        使用MinerU处理PDF
+        使用MinerU处理PDF文件
 
         Args:
             pdf_path: PDF文件路径
             output_format: 输出格式 ('markdown' 或 'json')
             enable_formula: 是否启用公式识别
             enable_table: 是否启用表格识别
-            language: 语言
+            language: 语言 ('ch' 中文, 'en' 英文)
+            dpi: 渲染图像用于OCR的分辨率 (默认: 300)
+            start_page: 开始页码(从1开始,可选)
+            end_page: 结束页码(包含,可选)
 
         Returns:
             输出文件路径
@@ -240,86 +295,36 @@ class MinerUProcessor:
             # 确保temp目录干净,删除可能存在的旧文件
             self._cleanup_temp_dir_for_file(file_name)
 
-            # 增强表格识别参数,确保关键表格被正确识别
-            # 尝试解决PyTorch模型加载问题 - 添加错误处理和重试机制
-            try:
-                do_parse(  # type: ignore
-                    output_dir=str(self.temp_dir),  # 固定使用temp目录进行处理
-                    pdf_file_names=[file_name],
-                    pdf_bytes_list=[pdf_bytes],
-                    formula_enable=enable_formula,
-                    table_enable=enable_table,
-                    p_lang_list=[language],
-                    f_make_md_mode=make_mode,
-                    backend='pipeline',  # 使用pipeline后端
-                    ocr=True,  # 启用OCR
-                    # 使用'ocr'模式以确保提取所有内容,包括页面上的文本和表格
-                    parse_method='ocr',  # 强制使用OCR模式处理所有页面
-                    # 精简后的关键参数
-                    f_dump_md=True,
-                    single_page_process=True,
-                    smart_layout=True,
-                    table_recognition=True,
-                    formula_recognition=True,
-                    image_only_pdf=True,
-                    force_ocr=True,
-                    table_cell_merge=True,
-                    rotation_detection=True,
-                    auto_rotate=True,
-                )
-                logger.info('MinerU处理完成')
-            except NotImplementedError as nie:
-                # 处理PyTorch模型加载问题 - 添加更详细的错误处理
-                logger.warning(f'PyTorch模型加载问题: {nie}')
-                logger.info('尝试使用简化参数重新处理...')
-
-                # 使用简化参数重新尝试
-                do_parse(  # type: ignore
-                    output_dir=str(self.temp_dir),
-                    pdf_file_names=[file_name],
-                    pdf_bytes_list=[pdf_bytes],
-                    formula_enable=enable_formula,
-                    table_enable=enable_table,
-                    p_lang_list=[language],
-                    f_make_md_mode=make_mode,
-                    backend='pipeline',
-                    ocr=True,
-                    parse_method='ocr',
-                    f_dump_md=True,
-                    # 精简参数以避免模型加载问题
-                    single_page_process=True,
-                    smart_layout=True,
-                    table_recognition=enable_table,
-                    formula_recognition=enable_formula,
-                    force_ocr=True,
-                    table_cell_merge=True,
-                    rotation_detection=True,
-                    auto_rotate=True,
-                )
-                logger.info('MinerU简化参数处理完成')
-            except Exception as inner_e:
-                # 如果简化参数也失败，尝试最基本的参数
-                logger.warning(f'简化参数处理也失败: {inner_e}')
-                logger.info('尝试使用最基本参数重新处理...')
-
-                do_parse(  # type: ignore
-                    output_dir=str(self.temp_dir),
-                    pdf_file_names=[file_name],
-                    pdf_bytes_list=[pdf_bytes],
-                    formula_enable=False,  # 禁用公式识别以减少复杂性
-                    table_enable=enable_table,
-                    p_lang_list=[language],
-                    f_make_md_mode=make_mode,
-                    backend='pipeline',
-                    ocr=True,
-                    parse_method='ocr',
-                    f_dump_md=True,
-                    single_page_process=True,
-                )
-                logger.info('MinerU基本参数处理完成')
-            except BaseException as e:
-                logger.error(f'MinerU处理过程中出现错误: {e}')
-                raise
+            # 使用MinerU处理PDF，让其自动判断是否需要OCR
+            logger.info('使用MinerU处理PDF（自动判断OCR需求）')
+            do_parse(  # type: ignore
+                output_dir=str(self.temp_dir),
+                pdf_file_names=[file_name],
+                pdf_bytes_list=[pdf_bytes],
+                formula_enable=enable_formula,
+                table_enable=enable_table,
+                p_lang_list=[language],
+                f_make_md_mode=make_mode,
+                backend='pipeline',
+                ocr=True,  # 启用OCR功能
+                parse_method='auto',  # 自动判断处理方式
+                f_dump_md=True,
+                f_dump_content_list=True,
+                ocr_post_process=True,
+                txt_keep_one_line=False,
+                smart_layout=True,
+                table_recognition=True,
+                formula_recognition=enable_formula,
+                force_ocr=False,  # 不强制OCR，让MinerU自动判断
+                table_cell_merge=True,
+                table_line_recognition=True,
+                rotation_detection=True,
+                auto_rotate=True,
+                dpi=dpi,  # 设置渲染DPI
+                start_page=start_page,  # 传递起始页码
+                end_page=end_page,  # 传递结束页码
+            )
+            logger.info('MinerU处理完成')
 
             # 添加更详细的调试信息：检查temp目录中生成的文件
             if self.temp_dir.exists():
@@ -626,40 +631,10 @@ class MinerUProcessor:
                             source_file = fuzzy_matches[0]
                             logger.info(f'使用模糊匹配的文件作为源文件: {source_file}')
                         else:
-                            # 尝试查找所有MD文件并选择最佳匹配
-                            logger.info('未找到直接匹配的文件，尝试查找所有MD文件...')
-                            md_files = list(self.temp_dir.rglob('*.md'))
-                            if md_files:
-                                # 选择文件名最接近的MD文件
-                                best_match = None
-                                best_score = 0
-                                for md_file in md_files:
-                                    # 计算文件名相似度
-                                    name_similarity = (
-                                        self._calculate_filename_similarity(
-                                            file_name, md_file.stem
-                                        )
-                                    )
-                                    if name_similarity > best_score:
-                                        best_score = name_similarity
-                                        best_match = md_file
-
-                                if best_match:
-                                    source_file = best_match
-                                    logger.info(
-                                        f'使用最佳匹配的MD文件作为源文件: {source_file} (相似度: {best_score})'
-                                    )
-                                else:
-                                    # 如果没有找到好的匹配，使用第一个MD文件
-                                    source_file = md_files[0]
-                                    logger.info(
-                                        f'使用第一个MD文件作为源文件: {source_file}'
-                                    )
-                            else:
-                                logger.warning(
-                                    f'在temp目录中未找到任何与 {file_name} 相关的文件'
-                                )
-                                return False
+                            logger.warning(
+                                f'在temp目录中未找到任何与 {file_name} 相关的文件'
+                            )
+                            return False
 
             # 构建目标文件路径(output目录中)
             target_file = self.output_dir / f'{file_name}{ext}'
@@ -686,29 +661,81 @@ class MinerUProcessor:
                 logger.info(f'源是目录，查找其中的MD文件: {source_file}')
                 # 如果是目录，查找其中的.md文件
                 # 根据MinerU的输出结构，MD文件在ocr子目录中
-                md_file_path = source_file / 'ocr' / f'{source_file.name}.md'
+                md_file_path = source_file / 'auto' / f'{file_name}{ext}'
+                if not md_file_path.exists():
+                    md_file_path = source_file / 'ocr' / f'{file_name}{ext}'
+
                 if md_file_path.exists():
                     logger.info(f'找到MD文件: {md_file_path}')
-                    # 移动MD文件到目标位置
-                    shutil.move(str(md_file_path), str(target_file))
-                    logger.info(f'已移动MD文件: {md_file_path} → {target_file}')
+                    # 读取文件内容并修复编码问题
+                    try:
+                        # 先尝试以UTF-8编码读取
+                        with open(md_file_path, 'r', encoding='utf-8') as f:
+                            content = f.read()
+                    except UnicodeDecodeError:
+                        # 如果UTF-8失败，尝试以GBK编码读取
+                        with open(md_file_path, 'r', encoding='gbk') as f:
+                            content = f.read()
+
+                    # 修复可能的编码问题
+                    if '\u0000' in content:  # 检查是否有空字符
+                        content = content.replace('\u0000', '')
+
+                    # 写入目标文件
+                    with open(target_file, 'w', encoding='utf-8') as f:
+                        f.write(content)
+                    logger.info(
+                        f'已复制并修复编码的MD文件: {md_file_path} → {target_file}'
+                    )
                 else:
                     # 如果特定路径不存在，查找所有.md文件
-                    md_files = list(source_file.rglob('*.md'))
+                    md_files = list(source_file.rglob(f'*{ext}'))
                     if md_files:
                         logger.info(f'找到MD文件: {md_files[0]}')
-                        # 移动第一个MD文件到目标位置
-                        shutil.move(str(md_files[0]), str(target_file))
-                        logger.info(f'已移动MD文件: {md_files[0]} → {target_file}')
+                        # 读取文件内容并修复编码问题
+                        try:
+                            # 先尝试以UTF-8编码读取
+                            with open(md_files[0], 'r', encoding='utf-8') as f:
+                                content = f.read()
+                        except UnicodeDecodeError:
+                            # 如果UTF-8失败，尝试以GBK编码读取
+                            with open(md_files[0], 'r', encoding='gbk') as f:
+                                content = f.read()
+
+                        # 修复可能的编码问题
+                        if '\u0000' in content:  # 检查是否有空字符
+                            content = content.replace('\u0000', '')
+
+                        # 写入目标文件
+                        with open(target_file, 'w', encoding='utf-8') as f:
+                            f.write(content)
+                        logger.info(
+                            f'已复制并修复编码的MD文件: {md_files[0]} → {target_file}'
+                        )
                     else:
                         # 如果没有找到MD文件，移动整个目录
                         logger.warning(f'未找到MD文件，移动整个目录: {source_file}')
                         shutil.move(str(source_file), str(target_file))
                         logger.info(f'已移动目录: {source_file} → {target_file}')
             else:
-                # 源是文件，直接移动
-                shutil.move(str(source_file), str(target_file))
-                logger.info(f'已移动文件: {source_file} → {target_file}')
+                # 源是文件，读取内容并修复编码问题
+                try:
+                    # 先尝试以UTF-8编码读取
+                    with open(source_file, 'r', encoding='utf-8') as f:
+                        content = f.read()
+                except UnicodeDecodeError:
+                    # 如果UTF-8失败，尝试以GBK编码读取
+                    with open(source_file, 'r', encoding='gbk') as f:
+                        content = f.read()
+
+                # 修复可能的编码问题
+                if '\u0000' in content:  # 检查是否有空字符
+                    content = content.replace('\u0000', '')
+
+                # 写入目标文件
+                with open(target_file, 'w', encoding='utf-8') as f:
+                    f.write(content)
+                logger.info(f'已复制并修复编码的文件: {source_file} → {target_file}')
 
             return True
 
@@ -820,76 +847,70 @@ class OtherOCRProcessors:
             输出文件路径
         """
         if not PymuPDF_AVAILABLE or fitz is None:
-            raise RuntimeError('PyMuPDF未安装,无法使用此方法')
+            raise RuntimeError('PyMuPDF (fitz) 未安装')
+
+        logger.info(f'开始使用PyMuPDF处理PDF: {pdf_path}')
+        start_time = time.time()
 
         try:
+            # 打开PDF文件
             doc = fitz.open(pdf_path)  # type: ignore
+
+            # 生成输出文件名 - 使用临时名称，主处理器会重命名
             file_name = Path(pdf_path).stem
+            output_file = self.output_dir / f'{file_name}_pymupdf_temp.md'
 
-            # 使用temp目录存储临时图像文件
-            temp_img_dir = self.temp_dir / f'{file_name}_pymupdf_images'
-            temp_img_dir.mkdir(exist_ok=True)
-
-            output_file = self.output_dir / f'{file_name}_pymupdf.md'
-
+            # 提取文本内容
             with open(output_file, 'w', encoding='utf-8') as f:
-                f.write(f'# {file_name}\n\n')
-
                 for page_num in range(len(doc)):
-                    page = doc.load_page(page_num)  # type: ignore
+                    # 获取页面
+                    page = doc[page_num]  # type: ignore
 
                     # 提取文本
                     text = page.get_text()  # type: ignore
+
+                    # 写入页面标题
+                    f.write(f'## 第{page_num + 1}页\n\n')
+
+                    # 写入文本内容
                     if text.strip():
-                        f.write(f'## 第{page_num + 1}页\n\n')
                         f.write(text)
-                        f.write('\n\n')
+                    else:
+                        # 如果没有文本，尝试OCR
+                        try:
+                            # 对页面进行OCR处理
+                            pix = page.get_pixmap(dpi=300)  # type: ignore
+                            img_data = pix.tobytes('ppm')
+                            temp_img_path = (
+                                self.temp_dir / f'temp_page_{page_num + 1}.png'
+                            )
+                            with open(temp_img_path, 'wb') as img_f:
+                                img_f.write(img_data)
 
-                    # 提取图像
-                    image_list = page.get_images()  # type: ignore
-                    if image_list:
-                        f.write(f'### 第{page_num + 1}页的图像内容\n\n')
-                        for img_index, img in enumerate(image_list):
-                            try:
-                                xref = img[0]
-                                pix = fitz.Pixmap(doc, xref)  # type: ignore
-                                if pix.n < 5:  # this is GRAY or RGB
-                                    img_data = pix.tobytes('png')
-                                else:  # CMYK: convert to RGB first
-                                    pix = fitz.Pixmap(fitz.csRGB, pix)  # type: ignore
-                                    img_data = pix.tobytes('png')
+                            # 使用PyMuPDF的OCR功能
+                            # 注意：这需要安装额外的OCR引擎
+                            ocr_text = page.get_text_ocr(dpi=300)  # type: ignore
+                            if ocr_text.strip():
+                                f.write(ocr_text)
+                            else:
+                                f.write('> 此页面内容无法识别\n\n')
 
-                                # 保存图像到temp目录以便OCR
-                                img_path = (
-                                    temp_img_dir
-                                    / f'{file_name}_page{page_num + 1}_img{img_index + 1}.png'
-                                )
-                                with open(img_path, 'wb') as img_file:
-                                    img_file.write(img_data)
+                            # 清理临时图像文件
+                            if temp_img_path.exists():
+                                temp_img_path.unlink()
 
-                                # OCR功能已移除，不进行OCR处理
-                                # 如果OCR可用,对图像进行OCR
-                                # ocr_text = ''
+                        except Exception as ocr_e:
+                            logger.warning(f'第{page_num + 1}页OCR处理失败: {ocr_e}')
+                            f.write('> 此页面内容无法识别\n\n')
 
-                                # if ocr_text.strip():
-                                #     f.write(f'#### 图像OCR结果 {img_index + 1}:\n\n')
-                                #     f.write(ocr_text)
-                                #     f.write('\n\n')
+                    f.write('\n---\n\n')
 
-                                pix = None  # free memory
-                            except Exception as e:
-                                logger.warning(f'处理图像时出错: {e}')
+            doc.close()  # type: ignore
 
-            doc.close()
-
-            # 清理临时图像目录
-            if temp_img_dir.exists():
-                import shutil
-
-                shutil.rmtree(temp_img_dir, ignore_errors=True)
-                logger.info(f'已清理PyMuPDF临时图像目录: {temp_img_dir}')
-
-            logger.info(f'PyMuPDF处理完成: {pdf_path} → {output_file}')
+            elapsed_time = time.time() - start_time
+            logger.info(
+                f'PyMuPDF处理完成: {pdf_path} → {output_file} (耗时: {elapsed_time:.2f}秒)'
+            )
             return str(output_file)
 
         except Exception as e:
@@ -907,39 +928,59 @@ class OtherOCRProcessors:
             输出文件路径
         """
         if not PDFPLUMBER_AVAILABLE or pdfplumber is None:
-            raise RuntimeError('pdfplumber未安装,无法使用此方法')
+            raise RuntimeError('pdfplumber 未安装')
+
+        logger.info(f'开始使用pdfplumber处理PDF: {pdf_path}')
+        start_time = time.time()
 
         try:
+            # 生成输出文件名 - 使用临时名称，主处理器会重命名
             file_name = Path(pdf_path).stem
-            output_file = self.output_dir / f'{file_name}_pdfplumber.md'
+            output_file = self.output_dir / f'{file_name}_pdfplumber_temp.md'
 
             with open(output_file, 'w', encoding='utf-8') as f:
-                f.write(f'# {file_name}\n\n')
-
-                with pdfplumber.open(pdf_path) as pdf:  # type: ignore
+                with pdfplumber.open(pdf_path) as pdf:
                     for page_num, page in enumerate(pdf.pages):
+                        # 写入页面标题
                         f.write(f'## 第{page_num + 1}页\n\n')
 
                         # 提取文本
                         text = page.extract_text()
                         if text:
                             f.write(text)
-                            f.write('\n\n')
+                        else:
+                            f.write('> 此页面内容无法识别\n\n')
 
                         # 提取表格
                         tables = page.extract_tables()
                         if tables:
-                            f.write('### 表格内容:\n\n')
-                            for table_index, table in enumerate(tables):
-                                f.write(f'#### 表格 {table_index + 1}:\n\n')
-                                for row in table:
+                            for i, table in enumerate(tables):
+                                f.write(f'\n### 表格 {i + 1}\n\n')
+                                # 转换为Markdown表格
+                                for row_num, row in enumerate(table):
+                                    # 过滤掉空行
+                                    if not any(
+                                        cell is not None and str(cell).strip()
+                                        for cell in row
+                                    ):
+                                        continue
+
+                                    # 写入表格行
                                     f.write(
                                         '| '
                                         + ' | '.join(
-                                            str(cell) if cell else '' for cell in row
+                                            str(cell) if cell is not None else ''
+                                            for cell in row
                                         )
                                         + ' |\n'
                                     )
+                                    # 写入表头分隔行
+                                    if row_num == 0:
+                                        f.write(
+                                            '|'
+                                            + '|'.join([' --- ' for _ in row])
+                                            + '|\n'
+                                        )
                                 f.write('\n')
 
             logger.info(f'pdfplumber处理完成: {pdf_path} → {output_file}')
@@ -993,6 +1034,33 @@ class AdvancedPDFProcessor:
         if missing_deps:
             logger.warning(f'缺少以下依赖库: {", ".join(missing_deps)}')
             logger.info('某些功能可能不可用')
+
+    def cleanup_temp_directory(self):
+        """
+        清理临时目录及其所有子目录和文件
+        项目完成后调用此方法清空temp目录，但保留temp目录本身
+        """
+        try:
+            if self.temp_dir.exists() and self.temp_dir.is_dir():
+                # 删除temp目录下的所有文件和子目录，但保留temp目录本身
+                for item in self.temp_dir.iterdir():
+                    try:
+                        if item.is_file():
+                            item.unlink()
+                            logger.info(f'已删除临时文件: {item}')
+                        elif item.is_dir():
+                            import shutil
+
+                            shutil.rmtree(item)
+                            logger.info(f'已删除临时目录: {item}')
+                    except Exception as e:
+                        logger.warning(f'删除临时文件/目录失败 {item}: {e}')
+
+                logger.info(f'已清空临时目录内容: {self.temp_dir}')
+            else:
+                logger.info(f'临时目录不存在: {self.temp_dir}')
+        except Exception as e:
+            logger.error(f'清理临时目录时出错: {e}')
 
     def _calculate_filename_similarity(
         self, original_name: str, target_name: str
@@ -1097,20 +1165,157 @@ class AdvancedPDFProcessor:
 
     def _extract_text_from_image_page(self, pdf_path: str, page_number: int) -> str:
         """
-        从图像页面提取文本内容（已简化，因为OCR功能已移除）
+        从图像页面提取文本内容
+        使用MinerU处理图像型PDF页面
 
         Args:
             pdf_path: PDF文件路径
             page_number: 页码（从1开始）
 
         Returns:
-            提取的文本内容（空字符串，因为OCR功能已移除）
+            提取的文本内容
         """
-        # OCR功能已移除，直接返回空字符串
-        logger.warning(
-            f'OCR功能已移除，无法从图像页面提取文本: {pdf_path}, 第{page_number}页'
-        )
-        return ''
+        if not MINERU_AVAILABLE:
+            return ''
+
+        if not PymuPDF_AVAILABLE or fitz is None:
+            return ''
+
+        try:
+            # 打开PDF文件
+            doc = fitz.open(pdf_path)
+
+            # 验证页码
+            if page_number < 1 or page_number > len(doc):
+                doc.close()
+                return ''
+
+            # 获取页面
+            page = doc[page_number - 1]
+
+            # 检查是否有图像
+            image_list = page.get_images()
+            if not image_list:
+                doc.close()
+                return ''
+
+            # 提取图像数据
+            img_index = image_list[0][0]
+            pix = fitz.Pixmap(doc, img_index)
+
+            # 转换图像数据
+            if pix.n < 5:
+                img_data = pix.tobytes('ppm')
+            else:
+                pix = fitz.Pixmap(fitz.csRGB, pix)
+                img_data = pix.tobytes('ppm')
+
+            # 保存到临时文件
+            temp_img_path = self.temp_dir / f'temp_page_{page_number}.png'
+            temp_img_path.write_bytes(img_data)
+
+            # 处理图像
+            if (
+                not MINERU_AVAILABLE
+                or read_fn is None
+                or do_parse is None
+                or MakeMode is None
+            ):
+                doc.close()
+                return ''
+
+            pdf_bytes = read_fn(str(temp_img_path))
+            file_name = f'page_{page_number}_image'
+
+            do_parse(
+                output_dir=str(self.temp_dir),
+                pdf_file_names=[file_name],
+                pdf_bytes_list=[pdf_bytes],
+                formula_enable=False,
+                table_enable=True,
+                p_lang_list=['ch'],
+                f_make_md_mode=MakeMode.MM_MD,
+                backend='pipeline',
+                ocr=True,
+                parse_method='auto',
+                f_dump_md=True,
+                f_dump_content_list=True,
+                ocr_post_process=True,
+                single_page_process=True,
+                txt_keep_one_line=False,
+                smart_layout=True,
+                table_recognition=True,
+                formula_recognition=False,
+                image_only_pdf=True,
+                force_ocr=False,
+                table_cell_merge=True,
+                table_line_recognition=True,
+                rotation_detection=True,
+                auto_rotate=True,
+                dpi=300,
+            )
+
+            # 查找并读取结果
+            output_dir = self.temp_dir / file_name
+            output_file = output_dir / 'ocr' / f'{file_name}.md'
+
+            # 如果主文件不存在，尝试查找其他可能的MD文件
+            if not output_file.exists():
+                possible_files = list(self.temp_dir.rglob(f'{file_name}*.md'))
+                output_file = possible_files[0] if possible_files else None
+
+            # 读取文本内容
+            result_text = ''
+            if output_file and output_file.exists():
+                result_text = output_file.read_text(encoding='utf-8')
+
+            # 清理资源
+            doc.close()
+            if temp_img_path.exists():
+                temp_img_path.unlink()
+
+            if output_dir.exists():
+                import shutil
+
+                shutil.rmtree(output_dir, ignore_errors=True)
+
+            # 清理相关临时文件
+            for file in self.temp_dir.glob(f'{file_name}*'):
+                if file.is_file():
+                    file.unlink(missing_ok=True)
+
+            # 返回提取的文本
+            if result_text.strip():
+                return result_text
+
+            # 如果没有MD内容，尝试从content_list.json提取
+            content_list_files = list(output_dir.rglob('*content_list*.json'))
+            if content_list_files:
+                try:
+                    with open(content_list_files[0], 'r', encoding='utf-8') as f:
+                        content_list_data = json.load(f)
+
+                    extracted_text = ''
+                    for item in content_list_data:
+                        if isinstance(item, dict):
+                            if 'text' in item and item['text']:
+                                extracted_text += item['text'] + '\n'
+                            elif 'type' in item and item['type'] == 'table':
+                                if 'html' in item and item['html']:
+                                    extracted_text += item['html'] + '\n'
+                                elif 'latex' in item and item['latex']:
+                                    extracted_text += item['latex'] + '\n'
+
+                    if extracted_text:
+                        return extracted_text
+
+                except Exception:
+                    pass
+
+            return ''
+
+        except Exception:
+            return ''
 
     def process_pdf(
         self,
@@ -1121,6 +1326,7 @@ class AdvancedPDFProcessor:
         language: str = 'ch',
         start_page: Optional[int] = None,
         end_page: Optional[int] = None,
+        dpi: int = 300,
     ) -> str:
         """
         处理PDF文件
@@ -1133,11 +1339,12 @@ class AdvancedPDFProcessor:
             language: 语言(仅MinerU)
             start_page: 开始页码(从1开始,可选)
             end_page: 结束页码(包含,可选)
+            dpi: 渲染图像用于OCR的分辨率 (默认: 300)
 
         Returns:
             输出文件路径
         """
-        logger.info(f'开始处理PDF: {pdf_path} (方法: {method})')
+        logger.info(f'开始处理PDF: {pdf_path} (方法: {method}, DPI: {dpi})')
         start_time = time.time()
 
         # 保存原始PDF路径，用于OCR处理
@@ -1160,6 +1367,14 @@ class AdvancedPDFProcessor:
 
         try:
             output_file = ''
+            file_name = Path(original_pdf_path).stem
+
+            # 根据是否有页码范围确定基础文件名
+            if start_page is not None and end_page is not None:
+                base_name = f'{file_name}_pages_{start_page:04d}_{end_page:04d}'
+            else:
+                base_name = file_name
+
             if method.lower() == 'mineru':
                 try:
                     output_file = self.mineru_processor.process_with_mineru(
@@ -1168,6 +1383,9 @@ class AdvancedPDFProcessor:
                         enable_formula,
                         enable_table,
                         language,
+                        dpi,
+                        start_page,  # 传递start_page参数
+                        end_page,  # 传递end_page参数
                     )
                     # 检查MinerU处理结果是否为空，如果为空则尝试OCR
                     if output_file and Path(output_file).exists():
@@ -1176,46 +1394,75 @@ class AdvancedPDFProcessor:
                             logger.warning(
                                 f'MinerU处理结果为空文件: {output_file}，尝试OCR处理'
                             )
+                            # 删除空文件
+                            Path(output_file).unlink()
                             raise RuntimeError('MinerU处理结果为空')
                 except Exception as e:
                     logger.warning(f'MinerU处理失败: {e}')
-                    # 如果MinerU处理失败且是单页处理，尝试OCR方法
-                    if (
-                        start_page is not None
-                        and end_page is not None
-                        and start_page == end_page
-                    ):
-                        logger.info(f'尝试使用OCR处理第{start_page}页')
-                        # 使用原始PDF路径进行OCR处理
-                        ocr_text = self._extract_text_from_image_page(
-                            original_pdf_path, start_page
-                        )
-                        if ocr_text and ocr_text.strip():
-                            # 创建OCR结果文件
-                            file_name = Path(original_pdf_path).stem
-                            ocr_output_path = (
-                                self.output_dir
-                                / f'{file_name}_pages_{start_page:04d}_{end_page:04d}_ocr.md'
+                    # 如果MinerU处理失败且指定了页面范围，尝试OCR方法
+                    if start_page is not None and end_page is not None:
+                        # 对于单页或多页处理，都尝试OCR方法
+                        logger.info(f'尝试使用OCR处理页面范围: {start_page}-{end_page}')
+
+                        # 创建OCR结果文件，使用统一的命名规则
+                        ocr_output_path = self.output_dir / f'{base_name}_ocr.md'
+
+                        # 逐页OCR处理
+                        all_ocr_text = ''
+                        for page_num in range(start_page, end_page + 1):
+                            ocr_text = self._extract_text_from_image_page(
+                                original_pdf_path, page_num
                             )
+                            if ocr_text and ocr_text.strip():
+                                all_ocr_text += f'\n\n{ocr_text}\n'
+                            else:
+                                all_ocr_text += f'\n\n#### 第{page_num}页\n\n未能从该页面提取到有效内容。\n'
+
+                        if all_ocr_text and all_ocr_text.strip():
                             with open(ocr_output_path, 'w', encoding='utf-8') as f:
-                                f.write(f'# 第{start_page}页OCR识别结果\n\n')
-                                f.write(ocr_text)
+                                f.write(all_ocr_text)
                             output_file = str(ocr_output_path)
                             logger.info(f'OCR处理完成: {output_file}')
                         else:
-                            raise RuntimeError(
-                                f'无法处理第{start_page}页，OCR也未能提取到内容'
+                            # 如果OCR也失败，创建一个占位文件
+                            file_name = Path(original_pdf_path).stem
+                            placeholder_output_path = (
+                                self.output_dir
+                                / f'{file_name}_pages_{start_page:04d}_{end_page:04d}_placeholder.md'
                             )
+                            with open(
+                                placeholder_output_path, 'w', encoding='utf-8'
+                            ) as f:
+                                f.write('> 注意: 此页面内容无法识别\n\n')
+                                f.write('未能从指定页面范围提取到有效内容。\n')
+                            output_file = str(placeholder_output_path)
+                            logger.info(f'创建占位文件: {output_file}')
                     else:
                         raise e
             elif method.lower() == 'pymupdf':
-                output_file = self.other_ocr_processors.process_with_pymupdf(
+                # 使用统一的命名规则
+                output_filename = f'{base_name}_pymupdf.md'
+                output_file = str(self.output_dir / output_filename)
+                temp_output = self.other_ocr_processors.process_with_pymupdf(
                     processed_pdf_path
                 )
+                # 如果处理器返回了不同的路径，将其移动到统一命名的路径
+                if temp_output != output_file:
+                    import shutil
+
+                    shutil.move(temp_output, output_file)
             elif method.lower() == 'pdfplumber':
-                output_file = self.other_ocr_processors.process_with_pdfplumber(
+                # 使用统一的命名规则
+                output_filename = f'{base_name}_pdfplumber.md'
+                output_file = str(self.output_dir / output_filename)
+                temp_output = self.other_ocr_processors.process_with_pdfplumber(
                     processed_pdf_path
                 )
+                # 如果处理器返回了不同的路径，将其移动到统一命名的路径
+                if temp_output != output_file:
+                    import shutil
+
+                    shutil.move(temp_output, output_file)
             else:
                 raise ValueError(f'不支持的处理方法: {method}')
 
@@ -1253,6 +1500,7 @@ class AdvancedPDFProcessor:
         enable_formula: bool = True,
         enable_table: bool = True,
         language: str = 'ch',
+        dpi: int = 300,
     ) -> List[Tuple[str, str]]:
         """
         批量处理PDF文件
@@ -1263,6 +1511,7 @@ class AdvancedPDFProcessor:
             enable_formula: 是否启用公式识别(仅MinerU)
             enable_table: 是否启用表格识别(仅MinerU)
             language: 语言(仅MinerU)
+            dpi: 渲染图像用于OCR的分辨率 (默认: 300)
 
         Returns:
             处理结果列表 [(输入文件路径, 输出文件路径)]
@@ -1271,7 +1520,7 @@ class AdvancedPDFProcessor:
         for pdf_path in pdf_paths:
             try:
                 output_file = self.process_pdf(
-                    pdf_path, method, enable_formula, enable_table, language
+                    pdf_path, method, enable_formula, enable_table, language, dpi=dpi
                 )
                 results.append((pdf_path, output_file))
             except Exception as e:
@@ -1306,6 +1555,9 @@ def main():
     )
     parser.add_argument('--start-page', type=int, help='开始页码(从1开始)')
     parser.add_argument('--end-page', type=int, help='结束页码(包含)')
+    parser.add_argument(
+        '--dpi', type=int, default=300, help='OCR渲染图像的分辨率 (默认: 300)'
+    )
 
     args = parser.parse_args()
 
@@ -1322,6 +1574,7 @@ def main():
             args.language,
             args.start_page,
             args.end_page,
+            args.dpi,
         )
 
         print(f'处理完成，输出文件: {output_file}')

@@ -436,7 +436,7 @@ class PDFProcessor:
     """PDF处理器，根据PDF文档类型选择合适的处理引擎"""
 
     def __init__(
-        self, file_path: str, file_type: str = 'bid', output_dir: str = 'temp/md'
+        self, file_path: str, file_type: str = 'bid', output_dir: str = 'output'
     ):
         """
         初始化PDF处理器
@@ -444,7 +444,7 @@ class PDFProcessor:
         Args:
             file_path: PDF文件路径
             file_type: 文件类型，"tender"表示招标文件，"bid"表示投标文件
-            output_dir: MD文件输出目录，默认为temp/md
+            output_dir: MD文件输出目录，默认为output
         """
         self.file_path = file_path
         self.file_type = file_type  # "tender" or "bid"
@@ -632,7 +632,7 @@ class PDFProcessor:
 
             file_key = hashlib.md5(self.file_path.encode('utf-8')).hexdigest()
             temp_word_filename = f'{file_key}.txt'
-            temp_word_dir = 'temp/md'
+            temp_word_dir = 'output'
             temp_word_path = os.path.join(temp_word_dir, temp_word_filename)
 
             # 确保目录存在

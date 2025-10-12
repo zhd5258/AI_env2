@@ -35,6 +35,7 @@ from modules.bidder_name_extractor import extract_bidder_name_from_file
 from modules.shared_functions import extract_bidder_name_from_file_after_analysis
 from modules.pdf_processor import PDFProcessor  # 添加导入
 from modules.runtime_config import load_config
+from modules.advanced_pdf_processor import AdvancedPDFProcessor
 
 
 # 跨平台路径处理
@@ -179,6 +180,13 @@ def update_project_status(project_id: int, status: str):
             if status in ['completed', 'completed_with_errors', 'error']:
                 project.analysis_end_time = datetime.datetime.now()
                 cleanup_upload_directory(project_id)
+
+                # 清理临时目录
+                try:
+                    processor = AdvancedPDFProcessor()
+                    processor.cleanup_temp_directory()
+                except Exception as e:
+                    logging.error(f'清理临时目录时出错: {e}')
             db.commit()
             logging.info(f'更新项目 {project_id} 的状态为: {status}')
     except Exception as e:

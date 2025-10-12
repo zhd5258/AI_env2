@@ -1,0 +1,51 @@
+# 项目依赖清单
+
+# Web框架
+Flask==2.3.3
+Flask-CORS==4.0.0
+
+# 数据库
+SQLAlchemy==2.0.21
+
+# PDF处理
+pypdf==3.16.2
+PyMuPDF==1.23.8  # fitz
+pdfplumber==0.10.2
+
+# AI和OCR
+# MinerU (需要单独安装，因为它不是标准PyPI包)
+# 安装MinerU请参考: https://github.com/opendatalab/MinerU
+
+# 图像处理
+Pillow==10.0.0
+
+# 并行处理
+concurrent-log-handler==0.9.24
+
+# 系统监控
+psutil==5.9.5
+
+# 数据处理
+pandas==2.1.1
+numpy==1.25.2
+
+# 工具库
+Werkzeug==2.3.7
+requests==2.31.0
+
+# 日志处理
+# logging==0.4.9.6  # 移除此行，因为Python 3内置了logging模块，此版本不兼容Python 3
+
+# JSON处理
+json5==0.9.14
+
+# 时间处理
+python-dateutil==2.8.2
+
+# 开发工具
+black==23.9.1
+flake8==6.1.0
+pytest==7.4.2
+
+# 其他依赖
+typing_extensions==4.8.0

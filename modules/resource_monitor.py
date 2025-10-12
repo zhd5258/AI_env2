@@ -17,6 +17,7 @@ from typing import List, Dict, Any
 # 尝试导入GPU监控库
 try:
     import pynvml
+
     GPU_MONITOR_AVAILABLE = True
 except ImportError:
     GPU_MONITOR_AVAILABLE = False
@@ -52,7 +53,9 @@ class ResourceMonitor:
             try:
                 pynvml.nvmlInit()
                 self.gpu_monitor_initialized = True
-                self.logger.info(f'GPU监控已初始化，发现 {pynvml.nvmlDeviceGetCount()} 个GPU设备')
+                self.logger.info(
+                    f'GPU监控已初始化，发现 {pynvml.nvmlDeviceGetCount()} 个GPU设备'
+                )
             except Exception as e:
                 self.logger.warning(f'GPU监控初始化失败: {e}')
                 self.gpu_monitor_initialized = False
@@ -114,7 +117,7 @@ class ResourceMonitor:
                 # 检查GPU使用率
                 if gpu_info:
                     for gpu in gpu_info:
-                        if gpu["memory_percent"] > self.gpu_threshold:
+                        if gpu['memory_percent'] > self.gpu_threshold:
                             should_cleanup = True
                             self.logger.warning(
                                 f'GPU {gpu["id"]} 内存使用率过高: {gpu["memory_percent"]:.1f}%'
@@ -146,14 +149,18 @@ class ResourceMonitor:
             for i in range(device_count):
                 handle = pynvml.nvmlDeviceGetHandleByIndex(i)
                 memory_info = pynvml.nvmlDeviceGetMemoryInfo(handle)
-                
-                gpu_info.append({
-                    "id": i,
-                    "memory_total": memory_info.total / 1024 / 1024,  # MB
-                    "memory_used": memory_info.used / 1024 / 1024,    # MB
-                    "memory_free": memory_info.free / 1024 / 1024,    # MB
-                    "memory_percent": (memory_info.used / memory_info.total) * 100 if memory_info.total > 0 else 0
-                })
+
+                gpu_info.append(
+                    {
+                        'id': i,
+                        'memory_total': memory_info.total / 1024 / 1024,  # MB
+                        'memory_used': memory_info.used / 1024 / 1024,  # MB
+                        'memory_free': memory_info.free / 1024 / 1024,  # MB
+                        'memory_percent': (memory_info.used / memory_info.total) * 100
+                        if memory_info.total > 0
+                        else 0,
+                    }
+                )
 
             return gpu_info
         except Exception as e:
@@ -268,9 +275,11 @@ class ResourceMonitor:
                                 proc_parent = proc_parent.parent()
                         except:
                             pass
-                        
-                        if (time.time() - create_time > 3600 and  # 1小时
-                            (is_child or 'python' not in name)):  # 只杀死子进程或非python进程
+
+                        if (
+                            time.time() - create_time > 3600  # 1小时
+                            and (is_child or 'python' not in name)
+                        ):  # 只杀死子进程或非python进程
                             self.logger.warning(
                                 f'杀死长时间运行的paddle进程: PID {proc.info["pid"]}, '
                                 f'名称 {proc.info["name"]}'
@@ -303,11 +312,15 @@ class ResourceMonitor:
                     create_time = child.create_time()
                     # 检查子进程是否为python.exe且不是当前主进程
                     # 添加额外的安全检查，确保不杀死主进程或关键进程
-                    if (time.time() - create_time > 1800 and  # 30分钟
-                        child.pid != current_pid and  # 不是当前进程
-                        'python' in child.name().lower() and  # 是python进程
-                        not child.name().lower().endswith('app.py') and  # 不是主应用进程
-                        'flask' not in child.name().lower()):  # 不是Flask相关进程
+                    if (
+                        time.time() - create_time > 1800  # 30分钟
+                        and child.pid != current_pid  # 不是当前进程
+                        and 'python' in child.name().lower()  # 是python进程
+                        and not child.name()
+                        .lower()
+                        .endswith('app.py')  # 不是主应用进程
+                        and 'flask' not in child.name().lower()
+                    ):  # 不是Flask相关进程
                         self.logger.warning(
                             f'杀死长时间运行的Python子进程: PID {child.pid}, '
                             f'名称 {child.name()}'
@@ -355,7 +368,7 @@ class ResourceMonitor:
     def _cleanup_temp_files(self):
         """清理临时文件"""
         try:
-            temp_dirs = ['temp/uploads', 'temp/md', 'temp/mineru']
+            temp_dirs = ['temp/uploads', 'output', 'temp/mineru']
             cleaned_count = 0
 
             for temp_dir in temp_dirs:
@@ -393,20 +406,20 @@ class ResourceMonitor:
             # 尝试强制清理GPU内存
             # 注意：Python中无法直接释放GPU内存，这里主要是记录信息
             gpu_info = self._get_gpu_info()
-            
+
             if gpu_info:
-                self.logger.info("GPU资源状态:")
+                self.logger.info('GPU资源状态:')
                 for gpu in gpu_info:
                     self.logger.info(
-                        f"  GPU {gpu['id']}: {gpu['memory_used']:.1f}/{gpu['memory_total']:.1f} MB "
-                        f"({gpu['memory_percent']:.1f}%)"
+                        f'  GPU {gpu["id"]}: {gpu["memory_used"]:.1f}/{gpu["memory_total"]:.1f} MB '
+                        f'({gpu["memory_percent"]:.1f}%)'
                     )
-                    
+
             # 触发Python垃圾回收，可能有助于释放GPU资源
             gc.collect()
-            
-            self.logger.info("已触发GPU资源清理")
-            
+
+            self.logger.info('已触发GPU资源清理')
+
         except Exception as e:
             self.logger.error(f'GPU资源清理失败: {e}')
 

@@ -156,7 +156,7 @@ class PriceCalculationWorkflow:
 
             self.logger.info('=== 开始联合提取器工作 ===')
 
-            # 1. 遍历temp/md下的md文件，提取投标人信息
+            # 1. 遍历output目录下的md文件，提取投标人信息
             self.logger.info(f'步骤1: 提取项目 {project_id} 的所有投标人信息')
             bidders_info = self._extract_all_bidders_info(project_id)
             if not bidders_info:
@@ -219,7 +219,7 @@ class PriceCalculationWorkflow:
 
     def _extract_all_bidders_info(self, project_id: int) -> List[Dict[str, Any]]:
         """
-        遍历temp/md下的md文件，提取所有投标人的信息
+        遍历output目录下的md文件，提取所有投标人的信息
 
         Args:
             project_id: 项目ID
@@ -579,8 +579,6 @@ class PriceCalculationWorkflow:
         except Exception as e:
             self.logger.error(f'调用AI大模型计算价格分时出错: {e}', exc_info=True)
             return {}
-
-
 
     def _update_project_status(self, project_id: int):
         """

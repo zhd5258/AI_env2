@@ -65,7 +65,7 @@ def clean_directory(directory_path, remove_empty_dir=True, retry_count=3):
 
     logger.info(f'开始清理目录: {directory_path}')
 
-    # 删除目录下的所有文件和子目录
+    # 删除目录下的所有文件和子目录，但保留根目录本身
     for item in directory.iterdir():
         for attempt in range(retry_count):
             try:
@@ -86,13 +86,8 @@ def clean_directory(directory_path, remove_empty_dir=True, retry_count=3):
                 else:
                     logger.error(f'无法删除 {item}，可能正在被其他程序使用')
 
-    # 如果目录为空且设置为删除空目录，则删除目录本身
-    if remove_empty_dir and not any(directory.iterdir()):
-        try:
-            directory.rmdir()
-            logger.info(f'已删除空目录: {directory_path}')
-        except Exception as e:
-            logger.error(f'删除空目录 {directory_path} 时出错: {e}')
+    # 不删除根目录本身，只清空其内容
+    logger.info(f'已清空目录内容: {directory_path}')
 
 
 def is_root_json_file(file_path):
@@ -169,10 +164,8 @@ def main(clear_database=False):
 
     # 定义需要清理的目录
     directories_to_clean = [
-        'temp/uploads',
-        'temp/md',
+        'temp',  # 清理整个temp目录的内容，但保留temp目录本身
         'uploads',
-        'temp/mineru',  # 添加对temp/mineru目录的清理
         # 如果有其他临时目录也可以添加到这里
     ]
 

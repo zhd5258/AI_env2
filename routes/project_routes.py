@@ -395,7 +395,7 @@ def cleanup_temp_files(project_id):
             # 清理 temp_word
             if payload.cleanup_temp_word:
                 try:
-                    temp_word_path = 'temp/md'
+                    temp_word_path = 'output'
                     if os.path.exists(temp_word_path):
                         file_count = len(
                             [

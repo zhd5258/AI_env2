@@ -179,8 +179,8 @@ class IntelligentBidAnalyzer(BidAnalyzerHelpers):
         file_key = os.path.splitext(pdf_filename)[0]
         md_filename = f'{file_key}.md'
 
-        # MD文件存放在temp/md目录下
-        md_file_path = os.path.join('temp/md', md_filename)
+        # MD文件存放在output目录下
+        md_file_path = os.path.join('output', md_filename)
 
         # 检查文件是否存在
         if os.path.exists(md_file_path):
@@ -539,7 +539,9 @@ class IntelligentBidAnalyzer(BidAnalyzerHelpers):
 
         """
 
-    def _parse_ai_score_response(self, response: str, max_score: float) -> tuple[float, str]:
+    def _parse_ai_score_response(
+        self, response: str, max_score: float
+    ) -> tuple[float, str]:
         """
         更加健壮地解析AI大模型返回的评分响应。
         优先使用正则表达式提取JSON块，以忽略无关的解释性文本。
@@ -563,7 +565,7 @@ class IntelligentBidAnalyzer(BidAnalyzerHelpers):
                 self.logger.error(
                     f'解析AI响应失败：未找到有效的JSON块。原始响应: {response}'
                 )
-                return 0, f'解析AI响应失败：未找到有效的JSON块。'
+                return 0, '解析AI响应失败：未找到有效的JSON块。'
 
             json_str = json_match.group(0)
 
@@ -574,16 +576,18 @@ class IntelligentBidAnalyzer(BidAnalyzerHelpers):
                     self.logger.error(
                         f'解析AI响应失败：JSON不是一个字典。解析内容: {json_str}'
                     )
-                    return 0, f'解析AI响应失败：JSON不是一个字典。'
+                    return 0, '解析AI响应失败：JSON不是一个字典。'
 
                 score = data.get('score', 0)
                 reason = data.get('reason', '未提供理由。')
 
                 # 3. 验证和修正分数
                 if not isinstance(score, (int, float)):
-                    self.logger.warning(f'从AI响应中解析出的分数 "{score}" 不是有效数字，记为0分。')
+                    self.logger.warning(
+                        f'从AI响应中解析出的分数 "{score}" 不是有效数字，记为0分。'
+                    )
                     score = 0
-                
+
                 # 确保分数在有效范围内
                 score = max(0.0, min(float(score), float(max_score)))
 
@@ -594,13 +598,13 @@ class IntelligentBidAnalyzer(BidAnalyzerHelpers):
                     f'解析AI响应中的JSON时出错: {e}。原始JSON字符串: {json_str}'
                 )
                 self.logger.error(f'完整的原始AI响应: {response}')
-                return 0, f'解析AI响应中的JSON失败。'
+                return 0, '解析AI响应中的JSON失败。'
 
         except Exception as e:
             self.logger.error(
                 f'解析AI响应时发生未知错误: {e}。完整的原始AI响应: {response}'
             )
-            return 0, f'解析AI响应时发生未知错误。'
+            return 0, '解析AI响应时发生未知错误。'
 
     def _save_failed_pages_info(self, bid_processor):
         """保存PDF处理失败的页面信息"""
@@ -711,7 +715,7 @@ class IntelligentBidAnalyzer(BidAnalyzerHelpers):
 
             # 创建临时目录
             temp_dir = 'temp/retry_ocr'
-            output_dir = 'temp/md'
+            output_dir = 'output'
             os.makedirs(temp_dir, exist_ok=True)
             os.makedirs(output_dir, exist_ok=True)
 

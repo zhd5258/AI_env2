@@ -1,0 +1,47 @@
+# 忽略版本控制目录
+.git
+.gitignore
+
+# 忽略Python缓存和编译文件
+__pycache__
+*.pyc
+*.pyo
+*.pyd
+.Python
+*.so
+.coverage
+.coverage.*
+.cache
+
+# 忽略虚拟环境目录
+venv/
+env/
+.venv/
+.env/
+
+# 忽略日志文件
+logs/
+*.log
+
+# 忽略上传文件和临时文件
+uploads/
+temp/
+output/
+
+# 忽略数据库文件
+*.db
+*.sqlite
+
+# 忽略系统文件
+.DS_Store
+Thumbs.db
+
+# 忽略IDE配置文件
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# 忽略测试文件
+test/
+tests/
