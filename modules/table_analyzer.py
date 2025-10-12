@@ -25,7 +25,7 @@ except ImportError:
     except ImportError:
         PDFProcessor = None
 
-import fitz  # PyMuPDF
+import pdfplumber
 
 
 class TableAnalyzer:
@@ -35,7 +35,17 @@ class TableAnalyzer:
         self.pdf_path = pdf_path
         self.logger = logging.getLogger(__name__)
         # 定义需要保留的表头关键词
-        self.target_headers = ['评价项目', '评价标准']
+        self.target_headers = [
+            '评价项目',
+            '评价标准',
+            '投标人',
+            '投标报价',
+            '总价',
+            '总报价',
+            '评分',
+            '分值',
+            '得分',
+        ]
 
     def extract_and_merge_tables(self) -> List[Dict[str, Any]]:
         """
@@ -69,8 +79,8 @@ class TableAnalyzer:
         tables_info = []
 
         try:
-            with fitz.open(self.pdf_path) as doc:
-                for page_num, page in enumerate(doc, 1):
+            with pdfplumber.open(self.pdf_path) as doc:
+                for page_num, page in enumerate(doc.pages, 1):
                     try:
                         tables = page.find_tables()
                         for table_index, table in enumerate(tables):
@@ -93,13 +103,16 @@ class TableAnalyzer:
                                         'cols': cols,
                                         'headers': headers,
                                         'data': extracted_table,
+                                        'engine': 'pdfplumber',
                                     }
                                 )
                     except Exception as page_e:
-                        self.logger.warning(f'处理第{page_num}页表格时出错: {page_e}')
+                        self.logger.warning(
+                            '处理第%s页表格时出错: %s', page_num, page_e
+                        )
                         continue
         except Exception as e:
-            self.logger.error(f'使用PyMuPDF提取表格时出错: {e}')
+            self.logger.error('使用pdfplumber提取表格时出错: %s', e)
 
         return tables_info
 
@@ -174,8 +187,43 @@ class TableAnalyzer:
             table1['data'], table2['data']
         )
 
+        # 5. 特殊处理投标一览表：如果两个表格都包含价格相关关键词，则更可能是连续的
+        is_price_table1 = self._contains_price_keywords(table1)
+        is_price_table2 = self._contains_price_keywords(table2)
+
+        if is_price_table1 and is_price_table2:
+            # 对于投标一览表，稍微降低相似度要求
+            return header_similarity > 0.5 or content_similarity > 0.6
+
         # 如果表头相似度高或者内容结构相似度高，则认为是连续表格
         return header_similarity > 0.6 or content_similarity > 0.7
+
+    def _contains_price_keywords(self, table: Dict) -> bool:
+        """
+        检查表格是否包含价格相关关键词
+
+        Args:
+            table: 表格数据
+
+        Returns:
+            bool: 是否包含价格关键词
+        """
+        price_keywords = ['投标', '报价', '总价', '金额', '人民币']
+
+        # 检查表头
+        headers = table.get('headers', [])
+        for header in headers:
+            if header and any(keyword in str(header) for keyword in price_keywords):
+                return True
+
+        # 检查数据行
+        data = table.get('data', [])
+        for row in data:
+            for cell in row:
+                if cell and any(keyword in str(cell) for keyword in price_keywords):
+                    return True
+
+        return False
 
     def _calculate_content_similarity(
         self, table1_data: List[List], table2_data: List[List]
@@ -430,7 +478,7 @@ class TableAnalyzer:
 
     def _clean_text_and_spaces(self, text: str) -> str:
         """
-        清理文本中的换行符并去除所有空格以提高可读性
+        清理文本中的换行符并保留必要空格以保持可读性
 
         Args:
             text: 需要清理的文本
@@ -462,11 +510,10 @@ class TableAnalyzer:
             text,
         )
 
-        # 去除所有空格
-        text = text.replace(' ', '')
+        # 保留单个空格，去除首尾空格
+        text = re.sub(r'\s+', ' ', text).strip()
 
-        # 去除首尾空格（虽然已经没有空格了，但为了保险起见）
-        return text.strip()
+        return text
 
     def _clean_text(self, text: str) -> str:
         """
@@ -494,6 +541,3 @@ class TableAnalyzer:
             self.logger.info(f'表格已保存到 {output_path}')
         except Exception as e:
             self.logger.error(f'保存表格到 {output_path} 时出错: {e}')
-
-
-# 使用示例已移除，避免部署环境误运行脚本

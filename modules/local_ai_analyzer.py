@@ -10,7 +10,6 @@
 # Copyright (c) 2025 by 中车眉山车辆有限公司/KingFreeDom, All Rights Reserved.
 #
 import requests
-import json
 import logging
 import time
 

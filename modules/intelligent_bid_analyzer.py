@@ -1,22 +1,31 @@
+#!/usr/bin/env python
+# -*- coding:utf-8 -*-
+"""
+智能投标分析器模块
+负责分析投标文件并生成评分
+"""
+
 import json
 import re
 import logging
 import traceback
+import os
+from typing import List, Dict, Any, Optional
 from modules.local_ai_analyzer import LocalAIAnalyzer
 from modules.pdf_processor import PDFProcessor
-from modules.price_manager import PriceManager
-from modules.database import BidDocument, ScoringRule, AnalysisResult
+from models.database import BidDocument, ScoringRule, AnalysisResult
 from modules.bid_analyzer_helpers import BidAnalyzerHelpers
+
 
 class IntelligentBidAnalyzer(BidAnalyzerHelpers):
     def __init__(
         self,
-        tender_file_path,
-        bid_file_path,
+        tender_file_path: str,
+        bid_file_path: str,
         db_session=None,
         bid_document_id=None,
         project_id=None,
-        extracted_text: list = None,
+        extracted_text: Optional[List[str]] = None,
     ):
         super().__init__()
         self.tender_file_path = tender_file_path
@@ -25,64 +34,111 @@ class IntelligentBidAnalyzer(BidAnalyzerHelpers):
         self.bid_document_id = bid_document_id
         self.project_id = project_id
         self.ai_analyzer = LocalAIAnalyzer()
-        self.price_manager = PriceManager()
+        # 移除价格管理器，价格提取将在统一流程中处理
+        # self.price_manager = PriceManager()
         self.logger = logging.getLogger(__name__)
+        self.total_rules_to_analyze = 0  # 初始化实例变量
 
-        if self.db and self.bid_document_id:
-            bid_doc = self.db.query(BidDocument).filter(BidDocument.id == self.bid_document_id).first()
-            self.bidder_name = bid_doc.bidder_name if bid_doc else '未知投标方'
+        if self.db is not None and self.bid_document_id is not None:
+            try:
+                bid_doc = (
+                    self.db.query(BidDocument)
+                    .filter(BidDocument.id == self.bid_document_id)
+                    .first()
+                )
+                # 修复：确保即使数据库中没有投标人名称，也使用文件名作为默认值
+                if bid_doc and bid_doc.bidder_name and bid_doc.bidder_name.strip():
+                    self.bidder_name = bid_doc.bidder_name
+                else:
+                    # 使用文件名作为默认投标人名称
+                    filename = os.path.basename(self.bid_file_path)
+                    self.bidder_name = os.path.splitext(filename)[0]
+            except Exception as e:
+                self.logger.warning(f'初始化时获取投标人名称出错: {e}')
+                # 出错时使用文件名作为默认投标人名称
+                filename = os.path.basename(self.bid_file_path)
+                self.bidder_name = os.path.splitext(filename)[0]
         else:
-            self.bidder_name = '未知投标方'
+            # 没有数据库会话时也使用文件名作为默认投标人名称
+            filename = os.path.basename(self.bid_file_path)
+            self.bidder_name = os.path.splitext(filename)[0]
 
         # 优化：如果已提供提取好的文本，则直接使用
         if extracted_text is not None:
             self.bid_pages = extracted_text
             self.bid_processor = None  # 不需要再创建PDF处理器
-            self.logger.info(f'IntelligentBidAnalyzer initialized with pre-extracted text for {self.bid_file_path}.')
+            self.logger.info(
+                f'IntelligentBidAnalyzer initialized with pre-extracted text for {self.bid_file_path}.'
+            )
         else:
             # 保持旧的兼容性，如果未提供文本，则初始化处理器以便后续提取
-            self.logger.warning(f'No pre-extracted text provided for {self.bid_file_path}. PDFProcessor will be used.')
-            self.bid_processor = PDFProcessor(self.bid_file_path)
+            self.logger.warning(
+                f'No pre-extracted text provided for {self.bid_file_path}. PDFProcessor will be used.'
+            )
+            self.bid_processor = PDFProcessor(
+                self.bid_file_path, file_type='bid'
+            )  # 使用新的PDF处理器，指定为投标文件类型
             self.bid_pages = None
 
     def _update_progress(self, completed, total, current_rule, partial_results=None):
-        if not (self.db and self.bid_document_id):
+        if not (self.db is not None and self.bid_document_id is not None):
             return
         try:
-            bid_doc = self.db.query(BidDocument).filter(BidDocument.id == self.bid_document_id).first()
+            bid_doc = (
+                self.db.query(BidDocument)
+                .filter(BidDocument.id == self.bid_document_id)
+                .first()
+            )
             if bid_doc:
                 bid_doc.progress_total_rules = total
                 bid_doc.progress_completed_rules = completed
-                progress_info = f"{self.bidder_name} - {current_rule}"
+                # 修复：确保投标人名称不为空时才使用，否则使用文件名
+                if self.bidder_name and self.bidder_name.strip():
+                    progress_info = f'{self.bidder_name} - {current_rule}'
+                else:
+                    # 从文件路径提取文件名作为备用
+                    filename = os.path.basename(self.bid_file_path)
+                    bidder_name = os.path.splitext(filename)[0]
+                    progress_info = f'{bidder_name} - {current_rule}'
                 bid_doc.progress_current_rule = progress_info[:100]
                 bid_doc.detailed_progress_info = progress_info
                 if partial_results is not None:
-                    bid_doc.partial_analysis_results = json.dumps(partial_results[:5], ensure_ascii=False)
+                    bid_doc.partial_analysis_results = json.dumps(
+                        partial_results[:5], ensure_ascii=False
+                    )
+                # 更新处理阶段为"AI分析中"
+                bid_doc.processing_phase = 'AI分析中'
                 self.db.commit()
                 self.logger.info(f'进度更新: {completed}/{total} - {progress_info}')
         except Exception as e:
             self.logger.error(f'更新进度时出错: {e}')
             self.db.rollback()
 
-    def _build_rules_tree_from_db(self, rules_from_db: list) -> list:
+    def _build_rules_tree_from_db(
+        self, rules_from_db: List[Any]
+    ) -> List[Dict[str, Any]]:
         """将从数据库获取的扁平化评分规则列表转换为树形结构。"""
-        rule_map = {rule.id: {
-            "id": rule.id,
-            "criteria_name": rule.Child_Item_Name,
-            "max_score": rule.Child_max_score,
-            "description": rule.description,
-            "is_price_criteria": rule.is_price_criteria,
-            "is_veto": rule.is_veto,
-            "parent_id": None,  # 简化处理
-            "children": []
-        } for rule in rules_from_db if rule.Child_Item_Name is not None}
+        rule_map = {
+            rule.id: {
+                'id': rule.id,
+                'criteria_name': rule.Child_Item_Name,
+                'max_score': rule.Child_max_score,
+                'description': rule.description,
+                'is_price_criteria': rule.is_price_criteria,
+                'is_veto': rule.is_veto,
+                'parent_id': None,  # 简化处理
+                'children': [],
+            }
+            for rule in rules_from_db
+            if rule.Child_Item_Name is not None
+        }
 
         tree = []
         for rule_id, rule_node in rule_map.items():
             tree.append(rule_node)
         return tree
 
-    def _get_bid_pages(self):
+    def _get_bid_pages(self) -> List[str]:
         """获取投标文件页面内容，优先使用已加载的文本。"""
         # 如果文本已在初始化时提供，直接返回
         if self.bid_pages is not None:
@@ -90,127 +146,334 @@ class IntelligentBidAnalyzer(BidAnalyzerHelpers):
 
         # 作为后备方案，如果文本未提供，则调用PDF处理器
         if self.bid_processor:
-            self.logger.info(f"No pre-extracted text found, processing PDF for {self.bid_file_path} on demand.")
-            self.bid_pages = self.bid_processor.process_pdf_per_page()
+            self.logger.info(
+                f'No pre-extracted text found, processing PDF for {self.bid_file_path} on demand.'
+            )
+            # 不再在这里处理PDF，因为已经在analysis_manager中处理过了
+            # 直接从PDF处理器加载内容
+            pages_content = self.bid_processor.load_content_from_md_file()
+            if pages_content is not None:
+                self.bid_pages = pages_content
+            else:
+                # 如果从MD文件加载失败，则使用extract_text_per_page方法
+                self.bid_pages = self.bid_processor.extract_text_per_page()
             self._save_failed_pages_info(self.bid_processor)
             return self.bid_pages
-        
+
         # 如果既没有预提取的文本，也没有处理器，则返回错误
-        self.logger.error(f"Cannot get bid pages: No pre-extracted text and no PDF processor available for {self.bid_file_path}.")
+        self.logger.error(
+            f'Cannot get bid pages: No pre-extracted text and no PDF processor available for {self.bid_file_path}.'
+        )
         return []
 
-    def analyze(self):
+    def _get_md_file_path(self) -> Optional[str]:
+        """
+        获取投标文件对应的MD文件路径
+        MD文件存放在temp_md目录下，文件名基于PDF文件名生成
+        """
+        if not self.bid_file_path:
+            return None
+
+        # 生成MD文件路径
+        pdf_filename = os.path.basename(self.bid_file_path)
+        file_key = os.path.splitext(pdf_filename)[0]
+        md_filename = f'{file_key}.md'
+
+        # MD文件存放在output目录下
+        md_file_path = os.path.join('output', md_filename)
+
+        # 检查文件是否存在
+        if os.path.exists(md_file_path):
+            return md_file_path
+        else:
+            self.logger.warning(f'MD文件不存在: {md_file_path}')
+            return None
+
+    def _load_content_from_md_file(self, md_file_path: str) -> Optional[List[str]]:
+        """
+        从MD文件中加载内容并转换为页面列表格式
+        """
         try:
+            if not md_file_path or not os.path.exists(md_file_path):
+                self.logger.warning(f'MD文件不存在或路径无效: {md_file_path}')
+                return None
+
+            with open(md_file_path, 'r', encoding='utf-8') as f:
+                content = f.read()
+
+            # 按页面分隔符分割内容
+            pages = content.split('\n\n---\n\n')
+            self.logger.info(f'从MD文件 {md_file_path} 加载了 {len(pages)} 页内容')
+            return pages
+        except Exception as e:
+            self.logger.error(f'从MD文件加载内容时出错: {e}')
+            return None
+
+    def analyze_rule_parallel(self, rule, bid_pages):
+        """并行分析单个评分规则"""
+        try:
+            self.logger.info(
+                f'正在为投标人 {self.bidder_name} 分析子项规则: {rule.Child_Item_Name}'
+            )
+
+            # 查找相关上下文（使用从MD文件读取的内容）
+            relevant_context = self._find_relevant_context_for_child_rule(
+                rule, bid_pages
+            )
+
+            # 创建prompt
+            prompt = self._create_prompt_for_child_rule(rule, relevant_context)
+
+            # 提交AI分析
+            ai_response = self.ai_analyzer.analyze_text(prompt)
+            if 'Error:' in ai_response:
+                score, reason = 0, f'AI分析失败: {ai_response}'
+            else:
+                score, reason = self._parse_ai_score_response(
+                    ai_response, rule.Child_max_score
+                )
+
+            # 返回分析结果
+            return {
+                'Child_Item_Name': rule.Child_Item_Name,
+                'max_score': rule.Child_max_score,
+                'score': score,
+                'reason': reason,
+                'Parent_Item_Name': rule.Parent_Item_Name,
+            }
+        except Exception as e:
+            self.logger.error(f'分析规则 {rule.Child_Item_Name} 时出错: {e}')
+            return {
+                'Child_Item_Name': rule.Child_Item_Name,
+                'max_score': rule.Child_max_score,
+                'score': 0,
+                'reason': f'分析失败: {str(e)}',
+                'Parent_Item_Name': rule.Parent_Item_Name,
+            }
+
+    def analyze_bidding_document(self):
+        """
+        分析投标文件并生成评分，包含质量评估和重新转换逻辑
+        """
+        try:
+            self.logger.info(f'开始分析投标文件: {self.bid_file_path}')
+
+            # 初始化变量
+            analyzed_scores = []  # 存储分析结果
+            analyzed_scores_for_progress = []  # 为进度更新创建一个单独的列表
+
+            # 记录投标人名称信息
+            bidder_name_display = (
+                self.bidder_name
+                if self.bidder_name and self.bidder_name.strip()
+                else os.path.splitext(os.path.basename(self.bid_file_path))[0]
+            )
+            self.logger.info(f'当前投标人名称: {self.bidder_name}')
+
+            # 获取投标文档记录
+            bid_document = None
+            if self.db is not None and self.bid_document_id is not None:
+                try:
+                    bid_document = (
+                        self.db.query(BidDocument)
+                        .filter(BidDocument.id == self.bid_document_id)
+                        .first()
+                    )
+                    if bid_document:
+                        # 检查OCR重试次数
+                        # 确保投标人名称不为空时才使用，否则使用文件名
+                        bidder_name_display = (
+                            self.bidder_name
+                            if self.bidder_name and self.bidder_name.strip()
+                            else os.path.splitext(os.path.basename(self.bid_file_path))[
+                                0
+                            ]
+                        )
+                        if bid_document.ocr_retry_count >= 3:
+                            self.logger.warning(
+                                f'投标人 {bidder_name_display} OCR重试次数已达上限(3次)'
+                            )
+                            return {
+                                'status': 'error',
+                                'message': f'投标人 {bidder_name_display} 的PDF文件经过3次OCR重试仍无法满足质量要求',
+                            }
+                except Exception as e:
+                    self.logger.warning(f'获取投标文档记录时出错: {e}')
+                    bid_document = None
+            else:
+                bid_document = None
+
             # 1. 从数据库加载评分规则
-            self.logger.info(f"正在为项目 {self.project_id} 从数据库加载评分规则...")
+            self.logger.info(f'正在为项目 {self.project_id} 从数据库加载评分规则...')
             if not self.db or not self.project_id:
                 return {'error': '数据库会话或项目ID未提供，无法加载评分规则。'}
-            
-            rules_from_db = self.db.query(ScoringRule).filter(ScoringRule.project_id == self.project_id).all()
+
+            try:
+                rules_from_db = (
+                    self.db.query(ScoringRule)
+                    .filter(ScoringRule.project_id == self.project_id)
+                    .all()
+                )
+            except Exception as e:
+                self.logger.error(f'从数据库加载评分规则时出错: {e}')
+                return {'error': f'从数据库加载评分规则时出错: {str(e)}'}
+
             if not rules_from_db:
                 return {'error': f'项目 {self.project_id} 在数据库中没有找到评分规则。'}
-            
-            scoring_rules_tree = self._build_rules_tree_from_db(rules_from_db)
-            self.logger.info(f"成功从数据库加载并构建了 {len(rules_from_db)} 条评分规则的树形结构。")
 
-            # 2. 提取投标文件内容（使用缓存）
-            bid_pages = self._get_bid_pages()
+            scoring_rules_tree = self._build_rules_tree_from_db(rules_from_db)
+            self.logger.info(
+                f'成功从数据库加载并构建了 {len(rules_from_db)} 条评分规则的树形结构。'
+            )
+
+            # 2. 提取投标文件内容（优先从MD文件读取）
+            bid_pages = None
+
+            # 首先尝试从MD文件读取内容
+            md_file_path = self._get_md_file_path()
+            if md_file_path:
+                bid_pages = self._load_content_from_md_file(md_file_path)
+
+            # 如果MD文件读取失败，则从PDF处理结果获取
+            if not bid_pages or not any(bid_pages):
+                self.logger.info('从MD文件读取内容失败，回退到PDF处理结果')
+                # 更新处理阶段为"PDF处理中"
+                if self.db and self.bid_document_id:
+                    bid_doc = (
+                        self.db.query(BidDocument)
+                        .filter(BidDocument.id == self.bid_document_id)
+                        .first()
+                    )
+                    if bid_doc:
+                        bid_doc.processing_phase = 'PDF处理中'
+                        self.db.commit()
+                # 不再在这里处理PDF，因为已经在analysis_manager中处理过了
+                # 直接从PDF处理器加载内容
+                bid_pages = self._get_bid_pages()
+
             if not bid_pages or not any(bid_pages):
                 return {'error': '从投标文件中提取有效文本失败。'}
 
-            # 3. 提取价格
-            prices = self.price_manager.extract_prices_from_content(bid_pages)
-            self.logger.info(f"投标人 {self.bidder_name} 提取到的所有价格: {prices}")
-            best_price = self.price_manager.select_best_price(prices, bid_pages)
-            self.logger.info(f"投标人 {self.bidder_name} 选择的最佳价格: {best_price}")
+            # 3. 确保投标人名称已正确设置
+            # 从数据库中获取最新的投标人名称
+            if self.db and self.bid_document_id:
+                bid_doc = (
+                    self.db.query(BidDocument)
+                    .filter(BidDocument.id == self.bid_document_id)
+                    .first()
+                )
+                if bid_doc and bid_doc.bidder_name:
+                    self.bidder_name = bid_doc.bidder_name
+                    bidder_name_display = bid_doc.bidder_name
+                    self.logger.info(f'使用数据库中的投标人名称: {self.bidder_name}')
 
             # 4. 执行AI分析 - 首先分析子项规则
             # 获取所有子项规则（非价格规则且有Child_Item_Name的规则）
-            child_rules = [rule for rule in rules_from_db 
-                          if not rule.is_price_criteria and rule.Child_Item_Name is not None]
-            
+            child_rules = [
+                rule
+                for rule in rules_from_db
+                if not rule.is_price_criteria and rule.Child_Item_Name is not None
+            ]
+
             self.progress_counter = 0
             self.total_rules_to_analyze = len(child_rules)
-            self._update_progress(0, self.total_rules_to_analyze, f'[{self.bidder_name}] 初始化分析...', [])
-            
-            # 分析每个子项规则
-            analyzed_scores = []  # 改为列表格式以匹配数据库期望的格式
-            analyzed_scores_for_progress = []
+            self._update_progress(
+                0,
+                self.total_rules_to_analyze,
+                f'[{bidder_name_display}] 初始化分析...',
+                [],
+            )
+
+            # 改为串行处理规则分析
+            completed_count = 0
             for rule in child_rules:
-                self.progress_counter += 1
-                current_rule_name = f'分析规则 {self.progress_counter}/{self.total_rules_to_analyze}: {rule.Child_Item_Name}'
-                self.logger.info(f'正在为投标人 {self.bidder_name} 分析子项规则: {rule.Child_Item_Name}')
-                
-                # 查找相关上下文（复用已提取的文本）
-                relevant_context = self._find_relevant_context_for_child_rule(rule, bid_pages)
-                
-                # 创建prompt
-                prompt = self._create_prompt_for_child_rule(rule, relevant_context)
-                
-                # 提交AI分析
-                ai_response = self.ai_analyzer.analyze_text(prompt)
-                if 'Error:' in ai_response:
-                    score, reason = 0, f'AI分析失败: {ai_response}'
-                else:
-                    score, reason = self._parse_ai_score_response(ai_response, rule.Child_max_score)
-                
-                # 保存分析结果到列表
-                analyzed_rule = {
-                    'Child_Item_Name': rule.Child_Item_Name,
-                    'max_score': rule.Child_max_score,
-                    'score': score,
-                    'reason': reason,
-                    'Parent_Item_Name': rule.Parent_Item_Name
-                }
-                analyzed_scores.append(analyzed_rule)
-                
-                # 为进度更新创建一个单独的列表
-                analyzed_rule_for_progress = {
-                    'Child_Item_Name': rule.Child_Item_Name,
-                    'max_score': rule.Child_max_score,
-                    'score': score,
-                    'reason': reason,
-                    'Parent_Item_Name': rule.Parent_Item_Name
-                }
-                analyzed_scores_for_progress.append(analyzed_rule_for_progress)
-                
-                # 更新进度
-                self._update_progress(self.progress_counter, self.total_rules_to_analyze, current_rule_name, analyzed_scores_for_progress)
-            
-            # 5. 计算价格分（注意：价格分应该在所有投标人都分析完成后统一计算，这里仅保存提取的价格）
-            price_score = 0
-            price_rule = next((rule for rule in rules_from_db if rule.is_price_criteria), None)
-            if price_rule:
-                self.logger.info(f'投标人 {self.bidder_name} 提取到价格: {best_price}')
-                # 价格分将在所有投标人分析完成后统一计算，这里仅保存提取的价格
-                self._save_extracted_price(best_price)
-            else:
-                # 没有价格规则也保存提取的价格
-                self._save_extracted_price(best_price)
-            
-            # 6. 计算总分
-            total_score = sum(item['score'] for item in analyzed_scores)
-            self._update_progress(self.total_rules_to_analyze, self.total_rules_to_analyze, '分析完成', analyzed_scores_for_progress)
+                try:
+                    result = self.analyze_rule_parallel(rule, bid_pages)
+                    analyzed_scores.append(result)
+                    analyzed_scores_for_progress.append(result)
+
+                    # 更新进度
+                    completed_count += 1
+                    current_rule_name = f'分析规则 {completed_count}/{self.total_rules_to_analyze}: {rule.Child_Item_Name}'
+                    self._update_progress(
+                        completed_count,
+                        self.total_rules_to_analyze,
+                        current_rule_name,
+                        analyzed_scores_for_progress,
+                    )
+
+                except Exception as e:
+                    self.logger.error(
+                        f'分析规则 {rule.Child_Item_Name} 时发生异常: {e}'
+                    )
+                    # 添加一个默认的失败结果
+                    failed_result = {
+                        'Child_Item_Name': rule.Child_Item_Name,
+                        'max_score': rule.Child_max_score,
+                        'score': 0,
+                        'reason': f'分析失败: {str(e)}',
+                        'Parent_Item_Name': rule.Parent_Item_Name,
+                    }
+                    analyzed_scores.append(failed_result)
+                    analyzed_scores_for_progress.append(failed_result)
+
+                    # 更新进度
+                    completed_count += 1
+                    current_rule_name = f'分析规则 {completed_count}/{self.total_rules_to_analyze}: {rule.Child_Item_Name} (失败)'
+                    self._update_progress(
+                        completed_count,
+                        self.total_rules_to_analyze,
+                        current_rule_name,
+                        analyzed_scores_for_progress,
+                    )
+
+            # 5. 计算除价格外的总分
+            other_scores_total = sum(item['score'] for item in analyzed_scores)
+
+            # 6. 计算总分（不包含价格分，价格分将在后续统一计算）
+            total_score = other_scores_total
+
+            # 记录子项分数总和，用于后续计算总分
+            self.other_scores_total = other_scores_total
+            self._update_progress(
+                self.total_rules_to_analyze,
+                self.total_rules_to_analyze,
+                '分析完成',
+                analyzed_scores_for_progress,
+            )
+
+            # 更新处理阶段为"分析完成"
+            if self.db and self.bid_document_id:
+                bid_document = (
+                    self.db.query(BidDocument)
+                    .filter(BidDocument.id == self.bid_document_id)
+                    .first()
+                )
+                if bid_document:
+                    bid_document.processing_phase = '分析完成'
+                    self.db.commit()
 
             # 7. 准备并返回结果
             analysis_result = {
+                'status': 'success',
                 'total_score': total_score,
+                'other_scores_total': other_scores_total,  # 添加子项分数总和
                 'detailed_scores': analyzed_scores,  # 现在是列表格式
-                'extracted_price': best_price,
                 'analysis_summary': '分析完成。',
                 'ai_model': self.ai_analyzer.model,
             }
-            self._save_extracted_price(best_price)
             return analysis_result
 
         except Exception as e:
             self.logger.error(f'分析过程中发生意外错误: {e}')
             self.logger.error(traceback.format_exc())
-            return {'error': f'分析过程中发生意外错误: {str(e)}'}
+            return {'status': 'error', 'message': f'分析过程中发生意外错误: {str(e)}'}
 
     def _find_relevant_context_for_child_rule(self, rule, pages, context_window=2):
         """为子项规则查找相关上下文"""
-        keywords = set(re.split(r'\s|，|。', rule.Child_Item_Name + ' ' + (rule.description or '')))
+        keywords = set(
+            re.split(r'\s|，|。', rule.Child_Item_Name + ' ' + (rule.description or ''))
+        )
         keywords = {k for k in keywords if k and len(k) > 1}
         relevant_pages_indices = set()
         for i, page_text in enumerate(pages):
@@ -221,7 +484,8 @@ class IntelligentBidAnalyzer(BidAnalyzerHelpers):
             return '\n'.join(pages[:3])
         sorted_indices = sorted(list(relevant_pages_indices))
         grouped_pages = []
-        if not sorted_indices: return ''
+        if not sorted_indices:
+            return ''
         start = end = sorted_indices[0]
         for i in range(1, len(sorted_indices)):
             if sorted_indices[i] == end + 1:
@@ -230,13 +494,18 @@ class IntelligentBidAnalyzer(BidAnalyzerHelpers):
                 grouped_pages.append((start, end))
                 start = end = sorted_indices[i]
         grouped_pages.append((start, end))
-        context_parts = [f'--- Pages {s+1}-{e+1} ---\n' + '\n'.join(pages[s:e+1]) for s, e in grouped_pages]
+        context_parts = [
+            f'--- Pages {s + 1}-{e + 1} ---\n' + '\n'.join(pages[s : e + 1])
+            for s, e in grouped_pages
+        ]
         return '\n\n'.join(context_parts)
 
     def _create_prompt_for_child_rule(self, rule, context_text):
         """为子项规则创建prompt"""
         max_context_len = 8000
-        context_text = context_text[:max_context_len] + ('\n... (内容已截断)' if len(context_text) > max_context_len else '')
+        context_text = context_text[:max_context_len] + (
+            '\n... (内容已截断)' if len(context_text) > max_context_len else ''
+        )
         return f"""
         **角色:** 专业的评标专家
         **任务:** 根据具体的评分标准，评估一份投标文件。
@@ -267,94 +536,109 @@ class IntelligentBidAnalyzer(BidAnalyzerHelpers):
           "reason": "<你的理由>"
         }}
         ```
+
         """
 
-    def _calculate_price_score(self, price_rule, best_price):
-        """计算价格分"""
-        # 获取项目中所有投标文件的价格
-        all_bids = self.db.query(BidDocument).filter(BidDocument.project_id == self.project_id).all()
-        project_prices = {}
-        
-        # 添加当前投标文件的价格
-        if best_price is not None:
-            project_prices[self.bidder_name] = best_price
-        
-        # 获取其他投标文件的价格
-        for bid in all_bids:
-            if bid.id != self.bid_document_id:
-                if bid.analysis_result and bid.analysis_result.extracted_price is not None:
-                    project_prices[bid.bidder_name] = bid.analysis_result.extracted_price
-        
-        # 只有当至少有两个有效报价时才计算价格分
-        if len(project_prices) >= 2 and best_price is not None:
-            # 使用价格管理器计算价格分
-            price_scores = self.price_manager.calculate_project_price_scores(project_prices, [price_rule])
-            
-            # 获取当前投标人的价格分
-            current_bidder_score = price_scores.get(self.bidder_name, 0)
-        else:
-            # 如果没有足够的报价，给予0分
-            current_bidder_score = 0
-        
-        return {
-            'criteria_name': price_rule.Parent_Item_Name,
-            'max_score': price_rule.Parent_max_score,
-            'score': current_bidder_score,
-            'reason': f'根据价格评分规则计算得出。提取到的报价为: {best_price}' if best_price is not None else '未提取到有效报价，价格分设为0',
-            'is_price_criteria': True,
-            'extracted_price': best_price
-        }
+    def _parse_ai_score_response(
+        self, response: str, max_score: float
+    ) -> tuple[float, str]:
+        """
+        更加健壮地解析AI大模型返回的评分响应。
+        优先使用正则表达式提取JSON块，以忽略无关的解释性文本。
 
-    def _parse_ai_score_response(self, response, max_score):
+        Args:
+            response: AI大模型的原始响应字符串。
+            max_score: 该评分项的最高分。
+
+        Returns:
+            tuple[float, str]: 解析出的分数和理由。如果解析失败，返回(0, "解析失败信息")。
+        """
+        import re
+        import json
+
         try:
-            # 使用正则表达式从响应中提取JSON块，这能抵抗额外的解释性文本
-            json_match = re.search(r'```json\s*(\{.*?\})\s*```', response, re.DOTALL)
+            # 1. 使用正则表达式查找被大括号包围的JSON块
+            # re.DOTALL 使得 '.' 可以匹配包括换行在内的任意字符
+            json_match = re.search(r'\{.*\}', response, re.DOTALL)
+
             if not json_match:
-                json_match = re.search(r'(\{.*?\})', response, re.DOTALL)
+                self.logger.error(
+                    f'解析AI响应失败：未找到有效的JSON块。原始响应: {response}'
+                )
+                return 0, '解析AI响应失败：未找到有效的JSON块。'
 
-            if json_match:
-                json_str = json_match.group(1)
-                result = json.loads(json_str)
-                score = result.get('score', 0)
-                reason = result.get('reason', '未提供理由。')
+            json_str = json_match.group(0)
 
+            # 2. 尝试解析提取出的JSON字符串
+            try:
+                data = json.loads(json_str)
+                if not isinstance(data, dict):
+                    self.logger.error(
+                        f'解析AI响应失败：JSON不是一个字典。解析内容: {json_str}'
+                    )
+                    return 0, '解析AI响应失败：JSON不是一个字典。'
+
+                score = data.get('score', 0)
+                reason = data.get('reason', '未提供理由。')
+
+                # 3. 验证和修正分数
                 if not isinstance(score, (int, float)):
+                    self.logger.warning(
+                        f'从AI响应中解析出的分数 "{score}" 不是有效数字，记为0分。'
+                    )
                     score = 0
-                score = max(0, min(float(score), float(max_score)))
+
+                # 确保分数在有效范围内
+                score = max(0.0, min(float(score), float(max_score)))
+
                 return score, reason
-            else:
-                # 如果无法找到JSON，作为备用方案，尝试从文本中提取分数
-                score_match = re.search(r'(\d+(?:\.\d+)?)\s*分', response)
-                if score_match:
-                    score = float(score_match.group(1))
-                    score = max(0, min(score, max_score))
-                    return score, f'无法解析JSON，但从文本中提取到分数。原始响应: {response[:200]}...'
-                
-                return 0, f'无法从AI响应中解析出有效的JSON或分数。响应: {response[:200]}...'
 
-        except (json.JSONDecodeError, TypeError) as e:
-            self.logger.error(f"解析AI响应时出错: {e}\n响应内容: {response}")
-            return 0, f'解析AI响应失败。错误: {e}'
+            except json.JSONDecodeError as e:
+                self.logger.error(
+                    f'解析AI响应中的JSON时出错: {e}。原始JSON字符串: {json_str}'
+                )
+                self.logger.error(f'完整的原始AI响应: {response}')
+                return 0, '解析AI响应中的JSON失败。'
 
-    def _save_failed_pages_info(self, pdf_processor):
+        except Exception as e:
+            self.logger.error(
+                f'解析AI响应时发生未知错误: {e}。完整的原始AI响应: {response}'
+            )
+            return 0, '解析AI响应时发生未知错误。'
+
+    def _save_failed_pages_info(self, bid_processor):
         """保存PDF处理失败的页面信息"""
         if not (self.db and self.bid_document_id):
             return
         try:
-            bid_doc = self.db.query(BidDocument).filter(BidDocument.id == self.bid_document_id).first()
-            if bid_doc and hasattr(pdf_processor, 'failed_pages') and pdf_processor.failed_pages:
-                bid_doc.failed_pages_info = json.dumps(pdf_processor.failed_pages, ensure_ascii=False)
+            bid_doc = (
+                self.db.query(BidDocument)
+                .filter(BidDocument.id == self.bid_document_id)
+                .first()
+            )
+            if (
+                bid_doc
+                and hasattr(bid_processor, 'failed_pages')
+                and bid_processor.failed_pages
+            ):
+                bid_doc.failed_pages_info = json.dumps(
+                    bid_processor.failed_pages, ensure_ascii=False
+                )
                 self.db.commit()
         except Exception as e:
             self.logger.error(f'保存失败页面信息时出错: {e}')
             self.db.rollback()
 
-    def _save_extracted_price(self, price):
+    def _save_extracted_price(self, best_price):
         """保存提取到的价格"""
         if not (self.db and self.bid_document_id):
             return
         try:
-            bid_doc = self.db.query(BidDocument).filter(BidDocument.id == self.bid_document_id).first()
+            bid_doc = (
+                self.db.query(BidDocument)
+                .filter(BidDocument.id == self.bid_document_id)
+                .first()
+            )
             if bid_doc:
                 # 确保分析结果存在
                 if not bid_doc.analysis_result:
@@ -362,25 +646,211 @@ class IntelligentBidAnalyzer(BidAnalyzerHelpers):
                         project_id=self.project_id,
                         bid_document_id=self.bid_document_id,
                         bidder_name=self.bidder_name,
-                        extracted_price=float(price) if price is not None else None
                     )
                     self.db.add(analysis_result)
-                else:
-                    bid_doc.analysis_result.extracted_price = float(price) if price is not None else None
-                
+                # else:
+                #     bid_doc.analysis_result.extracted_price = (
+                #         float(best_price) if best_price is not None else None
+                #     )
+
                 # 同时更新投标文档中的价格状态
-                bid_doc.price_extracted = price is not None
-                bid_doc.price_extraction_attempts += 1
-                
+                # bid_doc.price_extracted = best_price is not None
+                # bid_doc.price_extraction_attempts += 1
+
                 self.db.commit()
         except Exception as e:
             self.logger.error(f'保存提取价格时出错: {e}')
             self.db.rollback()
             # 可选：将错误信息保存到数据库
-            if bid_doc:
-                bid_doc.price_extraction_error = str(e)[:500]
-                self.db.commit()
+            try:
+                bid_doc = (
+                    self.db.query(BidDocument)
+                    .filter(BidDocument.id == self.bid_document_id)
+                    .first()
+                )
+                if bid_doc:
+                    bid_doc.price_extraction_error = str(e)[:500]
+                    self.db.commit()
+            except Exception as inner_e:
+                self.logger.error(f'保存错误信息时出错: {inner_e}')
 
     def clear_pdf_cache(self):
         """清理PDF文本缓存"""
-        self.bid_processor.clear_cache()
+        if self.bid_processor:
+            # PDFProcessor类中没有clear_cache方法，所以这里不执行任何操作
+            pass
+
+    def _retry_pdf_conversion(self):
+        """
+        重新转换PDF文件，增强OCR质量
+
+        Returns:
+            dict: 转换结果
+        """
+        try:
+            self.logger.info(f'开始重新转换PDF文件: {self.bid_file_path}')
+
+            # 更新数据库状态为"重新转换PDF中"
+            if self.db and self.bid_document_id:
+                try:
+                    bid_doc = (
+                        self.db.query(BidDocument)
+                        .filter(BidDocument.id == self.bid_document_id)
+                        .first()
+                    )
+                    if bid_doc:
+                        bid_doc.processing_phase = '重新转换PDF中'
+                        # 重置处理状态以便重新分析
+                        bid_doc.processing_status = 'processing'
+                        bid_doc.progress_current_rule = '重新转换PDF...'
+                        self.db.commit()
+                        self.logger.info(
+                            f'已更新数据库状态为重新转换PDF中: {self.bidder_name}'
+                        )
+                except Exception as e:
+                    self.logger.warning(f'更新数据库状态时出错: {e}')
+
+            # 使用高级PDF处理器重新转换
+            from modules.advanced_pdf_processor import AdvancedPDFProcessor
+
+            # 创建临时目录
+            temp_dir = 'temp/retry_ocr'
+            output_dir = 'output'
+            os.makedirs(temp_dir, exist_ok=True)
+            os.makedirs(output_dir, exist_ok=True)
+
+            # 创建高级PDF处理器实例
+            processor = AdvancedPDFProcessor(output_dir=output_dir, temp_dir=temp_dir)
+
+            # 尝试使用不同的方法重新转换
+            methods = ['mineru', 'pymupdf', 'pdfplumber']
+            for method in methods:
+                try:
+                    self.logger.info(f'尝试使用 {method} 方法重新转换PDF')
+                    output_file = processor.process_pdf(
+                        self.bid_file_path,
+                        method=method,
+                        enable_formula=True,
+                        enable_table=True,
+                        language='ch',
+                    )
+
+                    # 检查转换后的文件是否存在且非空
+                    if os.path.exists(output_file) and os.path.getsize(output_file) > 0:
+                        self.logger.info(
+                            f'使用 {method} 方法重新转换PDF成功: {output_file}'
+                        )
+
+                        # 更新数据库状态为"重新转换PDF完成"
+                        if self.db and self.bid_document_id:
+                            try:
+                                bid_doc = (
+                                    self.db.query(BidDocument)
+                                    .filter(BidDocument.id == self.bid_document_id)
+                                    .first()
+                                )
+                                if bid_doc:
+                                    bid_doc.processing_phase = 'PDF处理完成'
+                                    bid_doc.progress_current_rule = (
+                                        'PDF处理完成，准备分析...'
+                                    )
+                                    self.db.commit()
+                                    self.logger.info(
+                                        f'已更新数据库状态为PDF处理完成: {self.bidder_name}'
+                                    )
+                            except Exception as e:
+                                self.logger.warning(f'更新数据库状态时出错: {e}')
+
+                        return {
+                            'status': 'success',
+                            'message': '重新转换PDF成功',
+                            'output_file': output_file,
+                        }
+                    else:
+                        self.logger.warning(
+                            f'使用 {method} 方法转换后的文件为空或不存在'
+                        )
+                except Exception as e:
+                    self.logger.warning(f'使用 {method} 方法转换PDF时出错: {e}')
+                    continue
+
+            # 如果所有方法都失败了
+            self.logger.error(f'所有重新转换方法都失败了: {self.bid_file_path}')
+
+            # 更新数据库状态为"重新转换PDF失败"
+            if self.db and self.bid_document_id:
+                try:
+                    bid_doc = (
+                        self.db.query(BidDocument)
+                        .filter(BidDocument.id == self.bid_document_id)
+                        .first()
+                    )
+                    if bid_doc:
+                        bid_doc.processing_phase = 'PDF处理失败'
+                        bid_doc.progress_current_rule = 'PDF处理失败'
+                        self.db.commit()
+                        self.logger.info(
+                            f'已更新数据库状态为PDF处理失败: {self.bidder_name}'
+                        )
+                except Exception as e:
+                    self.logger.warning(f'更新数据库状态时出错: {e}')
+
+            return {'status': 'error', 'message': '所有重新转换方法都失败了'}
+
+        except Exception as outer_e:
+            self.logger.error(f'重新转换PDF时发生意外错误: {outer_e}')
+
+            # 更新数据库状态为"重新转换PDF失败"
+            if self.db and self.bid_document_id:
+                try:
+                    bid_doc = (
+                        self.db.query(BidDocument)
+                        .filter(BidDocument.id == self.bid_document_id)
+                        .first()
+                    )
+                    if bid_doc:
+                        bid_doc.processing_phase = 'PDF处理失败'
+                        bid_doc.progress_current_rule = 'PDF处理失败'
+                        self.db.commit()
+                        self.logger.info(
+                            f'已更新数据库状态为PDF处理失败: {self.bidder_name}'
+                        )
+                except Exception as e:
+                    self.logger.warning(f'更新数据库状态时出错: {e}')
+
+            return {
+                'status': 'error',
+                'message': f'重新转换PDF时发生意外错误: {str(outer_e)}',
+            }
+
+    def analyze(self):
+        """
+        分析投标文件的公共接口方法
+        """
+        return self.analyze_bidding_document()
+
+
+if __name__ == '__main__':
+    import argparse
+
+    parser = argparse.ArgumentParser(description='智能投标分析器')
+    parser.add_argument('tender_file_path', help='招标文件路径')
+    parser.add_argument('bid_file_path', help='投标文件路径')
+    parser.add_argument('--db_session', help='数据库会话对象')
+    parser.add_argument('--bid_document_id', help='投标文件ID')
+    parser.add_argument('--project_id', help='项目ID')
+    parser.add_argument('--extracted_text', help='预提取的文本内容')
+
+    args = parser.parse_args()
+
+    analyzer = IntelligentBidAnalyzer(
+        tender_file_path=args.tender_file_path,
+        bid_file_path=args.bid_file_path,
+        db_session=args.db_session,
+        bid_document_id=args.bid_document_id,
+        project_id=args.project_id,
+        extracted_text=args.extracted_text,
+    )
+
+    result = analyzer.analyze()
+    print(result)

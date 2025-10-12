@@ -1,0 +1,496 @@
+<!--
+ * @作者           : KingFreeDom
+ * @创建时间         : 2025-10-04 10:47:21
+ * @最近一次编辑者      : KingFreeDom
+ * @最近一次编辑时间     : 2025-10-04 10:50:53
+ * @文件相对于项目的路径   : \AI_env2\templates\settings.html
+ * @
+ * @Copyright (c) 2025 by 中车眉山车辆有限公司/KingFreeDom, All Rights Reserved. 
+-->
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>系统设置 - 智能评标系统</title>
+    <link rel="stylesheet" href="/static/css/style.css">
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            max-width: 800px;
+            margin: 0 auto;
+            padding: 20px;
+        }
+        .navbar {
+            background-color: #007bff;
+            padding: 10px 0;
+            margin-bottom: 20px;
+        }
+        .navbar ul {
+            list-style-type: none;
+            margin: 0;
+            padding: 0;
+            display: flex;
+        }
+        .navbar li {
+            margin-right: 20px;
+        }
+        .navbar a {
+            color: white;
+            text-decoration: none;
+            padding: 10px 15px;
+            border-radius: 3px;
+        }
+        .navbar a:hover, .navbar a.active {
+            background-color: #0056b3;
+        }
+        .settings-section {
+            border: 1px solid #ddd;
+            padding: 20px;
+            border-radius: 5px;
+            margin-bottom: 20px;
+        }
+        .form-group {
+            margin-bottom: 15px;
+        }
+        label {
+            display: block;
+            margin-bottom: 5px;
+            font-weight: bold;
+        }
+        input[type="number"], select {
+            width: 100%;
+            padding: 10px;
+            border: 1px solid #ddd;
+            border-radius: 3px;
+            box-sizing: border-box;
+        }
+        button {
+            background-color: #007bff;
+            color: white;
+            padding: 10px 20px;
+            border: none;
+            border-radius: 3px;
+            cursor: pointer;
+        }
+        button:hover {
+            background-color: #0056b3;
+        }
+        .result {
+            margin-top: 20px;
+            padding: 15px;
+            border-radius: 3px;
+            display: none;
+        }
+        .result.success {
+            background-color: #d4edda;
+            border: 1px solid #c3e6cb;
+            color: #155724;
+        }
+        .result.error {
+            background-color: #f8d7da;
+            border: 1px solid #f5c6cb;
+            color: #721c24;
+        }
+        /* 响应式设计 */
+        @media (max-width: 768px) {
+            .navbar ul {
+                flex-direction: column;
+            }
+            .navbar li {
+                margin-right: 0;
+                margin-bottom: 5px;
+            }
+        }
+    </style>
+</head>
+<body>
+    <!-- 导航栏 -->
+    <div class="navbar">
+        <ul>
+            <li><a href="/">首页</a></li>
+            <li><a href="/history">历史项目</a></li>
+            <li><a href="/settings" class="active">系统设置</a></li>
+        </ul>
+    </div>
+    
+    <h1>系统参数设置</h1>
+    
+    <div class="settings-section">
+        <h2>文件上传设置</h2>
+        <form id="uploadConfigForm">
+            <div class="form-group">
+                <label for="max_content_length">文件上传大小限制(MB):</label>
+                <input type="number" id="max_content_length" name="max_content_length" min="1" max="1000" required>
+                <small>单个文件上传大小限制（1-1000MB）</small>
+            </div>
+            
+            <div class="form-group">
+                <label for="single_file_max_size">单个文件大小限制(MB):</label>
+                <input type="number" id="single_file_max_size" name="single_file_max_size" min="1" max="500" required>
+                <small>单个文件的最大大小限制（1-500MB）</small>
+            </div>
+            
+            <button type="submit" id="uploadConfigSubmitBtn">保存设置</button>
+        </form>
+    </div>
+    
+    <div class="settings-section">
+        <h2>运行参数配置</h2>
+        <form id="runtimeConfigForm">
+            <div class="form-group">
+                <label for="pdf_page_max_workers">PDF页面并行处理数:</label>
+                <input type="number" id="pdf_page_max_workers" name="pdf_page_max_workers" min="1" max="10" required>
+                <small>单个PDF文件同时处理的页面数量（1-10）</small>
+            </div>
+            
+            <div class="form-group">
+                <label for="pdf_page_timeout_sec">单页处理超时时间(秒):</label>
+                <input type="number" id="pdf_page_timeout_sec" name="pdf_page_timeout_sec" min="10" max="120" required>
+                <small>单个PDF页面的最大处理时间（10-120秒）</small>
+            </div>
+            
+            <div class="form-group">
+                <label for="pdf_overall_min_timeout_sec">文件最小总超时时间(秒):</label>
+                <input type="number" id="pdf_overall_min_timeout_sec" name="pdf_overall_min_timeout_sec" min="30" max="600" required>
+                <small>单个PDF文件的最小总处理时间（30-600秒）</small>
+            </div>
+            
+            <div class="form-group">
+                <label for="auto_delete_md_files">
+                    <input type="checkbox" id="auto_delete_md_files" name="auto_delete_md_files">
+                    分析完成后自动删除MD文件
+                </label>
+                <small>启用后，分析完成后将自动删除生成的MD文件以节省磁盘空间</small>
+            </div>
+            
+            <div class="form-group">
+                <label for="enable_retry_on_quality_issue">
+                    <input type="checkbox" id="enable_retry_on_quality_issue" name="enable_retry_on_quality_issue">
+                    质量不达标时重新分析
+                </label>
+                <small>当生成的MD文件质量不达标时，是否启用重新转换和分析功能</small>
+            </div>
+            
+            <button type="submit" id="runtimeConfigSubmitBtn">保存设置</button>
+        </form>
+    </div>
+    
+    <div class="settings-section">
+        <h2>OCR参数配置</h2>
+        <form id="ocrConfigForm">
+            <div class="form-group">
+                <label for="ocr_engine">OCR引擎:</label>
+                <select id="ocr_engine" name="ocr_engine">
+                    <option value="smart">智能选择</option>
+                    <option value="rapid">快速OCR</option>
+                    <option value="pp_ocrv5">PaddleOCR V5</option>
+                    <option value="hybrid">混合OCR</option>
+                    <option value="optimized">优化OCR</option>
+                    <option value="v3_2">V3.2版本</option>
+                    <option value="3_2_final">3.2最终版</option>
+                </select>
+            </div>
+            
+            <div class="form-group">
+                <label for="dpi">图像DPI:</label>
+                <input type="number" id="dpi" name="dpi" min="150" max="600" value="300">
+            </div>
+            
+            <div class="form-group">
+                <label for="lang">识别语言:</label>
+                <select id="lang" name="lang">
+                    <option value="ch">中文</option>
+                    <option value="en">英文</option>
+                    <option value="mix">中英文混合</option>
+                </select>
+            </div>
+            
+            <button type="submit" id="ocrConfigSubmitBtn">保存OCR设置</button>
+        </form>
+    </div>
+    
+    <div class="settings-section">
+        <h2>系统维护</h2>
+        <p>警告：以下操作不可逆，请谨慎使用。</p>
+        
+        <div class="form-group">
+            <button id="clearDatabaseBtn" type="button" style="background-color: #dc3545; margin-right: 10px;">清空数据库</button>
+            <button id="cleanupUploadsBtn" type="button" style="background-color: #ffc107; margin-right: 10px;">清理上传文件夹</button>
+            <button id="cleanupTempBtn" type="button" style="background-color: #17a2b8;">清理临时文件夹</button>
+        </div>
+    </div>
+    
+    <div id="result" class="result"></div>
+
+    <script>
+        // 显示结果消息的函数
+        function showResult(message, isSuccess = true, autoHide = true) {
+            const resultDiv = document.getElementById('result');
+            resultDiv.className = 'result ' + (isSuccess ? 'success' : 'error');
+            resultDiv.innerHTML = `<h3>${isSuccess ? '成功' : '错误'}!</h3><p>${message}</p>`;
+            resultDiv.style.display = 'block';
+            
+            // 3秒后自动隐藏结果提示
+            if (autoHide) {
+                setTimeout(() => {
+                    resultDiv.style.display = 'none';
+                }, 3000);
+            }
+        }
+
+        // 设置按钮加载状态
+        function setButtonLoading(button, loading) {
+            if (loading) {
+                button.disabled = true;
+                button.innerHTML = '保存中...';
+            } else {
+                button.disabled = false;
+                button.innerHTML = button.id === 'ocrConfigSubmitBtn' ? '保存OCR设置' : '保存设置';
+            }
+        }
+
+        // 页面加载时获取当前配置
+        document.addEventListener('DOMContentLoaded', async function() {
+            // 确保不在设置页面进行轮询
+            if (typeof stopProgressPolling === 'function' && window.stopProgressPolling !== stopProgressPolling) {
+                stopProgressPolling();
+            }
+            
+            // 获取文件上传配置
+            try {
+                const uploadResponse = await fetch('/api/runtime-config');
+                if (uploadResponse.ok) {
+                    const uploadConfig = await uploadResponse.json();
+                    // 将字节转换为MB显示
+                    const maxContentLengthMB = Math.round((uploadConfig.max_content_length || 500 * 1024 * 1024) / (1024 * 1024));
+                    document.getElementById('max_content_length').value = maxContentLengthMB;
+                    
+                    // 单个文件大小限制
+                    const singleFileMaxSizeMB = Math.round((uploadConfig.single_file_max_size || 100 * 1024 * 1024) / (1024 * 1024));
+                    document.getElementById('single_file_max_size').value = singleFileMaxSizeMB;
+                }
+            } catch (error) {
+                console.error('获取文件上传配置失败:', error);
+                showResult('获取文件上传配置失败: ' + error.message, false);
+            }
+            
+            // 获取运行时配置
+            try {
+                const runtimeResponse = await fetch('/api/runtime-config');
+                if (runtimeResponse.ok) {
+                    const runtimeConfig = await runtimeResponse.json();
+                    document.getElementById('pdf_page_max_workers').value = runtimeConfig.pdf_page_max_workers || 4;
+                    document.getElementById('pdf_page_timeout_sec').value = runtimeConfig.pdf_page_timeout_sec || 20;
+                    document.getElementById('pdf_overall_min_timeout_sec').value = runtimeConfig.pdf_overall_min_timeout_sec || 60;
+                    // 设置自动删除MD文件的复选框状态
+                    document.getElementById('auto_delete_md_files').checked = runtimeConfig.auto_delete_md_files || false;
+                    // 设置质量不达标时重新分析的复选框状态
+                    document.getElementById('enable_retry_on_quality_issue').checked = runtimeConfig.enable_retry_on_quality_issue !== false; // 默认为true
+                }
+            } catch (error) {
+                console.error('获取运行时配置失败:', error);
+                showResult('获取运行时配置失败: ' + error.message, false);
+            }
+            
+            // 获取OCR配置
+            try {
+                const ocrResponse = await fetch('/api/ocr-config');
+                if (ocrResponse.ok) {
+                    const ocrData = await ocrResponse.json();
+                    const ocrConfig = ocrData.data;
+                    document.getElementById('ocr_engine').value = ocrConfig.ocr_engine || 'smart';
+                    document.getElementById('dpi').value = ocrConfig.dpi || 300;
+                    document.getElementById('lang').value = ocrConfig.lang || 'ch';
+                }
+            } catch (error) {
+                console.error('获取OCR配置失败:', error);
+                showResult('获取OCR配置失败: ' + error.message, false);
+            }
+        });
+        
+        // 保存文件上传配置
+        document.getElementById('uploadConfigForm').addEventListener('submit', async function(e) {
+            e.preventDefault();
+            
+            const submitBtn = document.getElementById('uploadConfigSubmitBtn');
+            setButtonLoading(submitBtn, true);
+            
+            const formData = new FormData(this);
+            const config = Object.fromEntries(formData.entries());
+            
+            // 转换为字节
+            config.max_content_length = parseInt(config.max_content_length) * 1024 * 1024;
+            config.single_file_max_size = parseInt(config.single_file_max_size) * 1024 * 1024;
+            
+            try {
+                const response = await fetch('/api/runtime-config', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify(config)
+                });
+                
+                const data = await response.json();
+                
+                if (response.ok) {
+                    showResult('文件上传设置保存成功！');
+                } else {
+                    showResult('保存失败: ' + (data.error || '未知错误'), false);
+                }
+            } catch (error) {
+                showResult('请求失败: ' + error.message, false);
+            } finally {
+                setButtonLoading(submitBtn, false);
+            }
+        });
+        
+        // 保存运行时配置
+        document.getElementById('runtimeConfigForm').addEventListener('submit', async function(e) {
+            e.preventDefault();
+            
+            const submitBtn = document.getElementById('runtimeConfigSubmitBtn');
+            setButtonLoading(submitBtn, true);
+            
+            const formData = new FormData(this);
+            const config = Object.fromEntries(formData.entries());
+            
+            // 转换为数字类型
+            config.pdf_page_max_workers = parseInt(config.pdf_page_max_workers);
+            config.pdf_page_timeout_sec = parseInt(config.pdf_page_timeout_sec);
+            config.pdf_overall_min_timeout_sec = parseInt(config.pdf_overall_min_timeout_sec);
+            // 获取复选框的值
+            config.auto_delete_md_files = document.getElementById('auto_delete_md_files').checked;
+            config.enable_retry_on_quality_issue = document.getElementById('enable_retry_on_quality_issue').checked;
+            
+            try {
+                const response = await fetch('/api/runtime-config', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify(config)
+                });
+                
+                const data = await response.json();
+                
+                if (response.ok) {
+                    showResult('运行参数配置保存成功！');
+                } else {
+                    showResult('保存失败: ' + (data.error || '未知错误'), false);
+                }
+            } catch (error) {
+                showResult('请求失败: ' + error.message, false);
+            } finally {
+                setButtonLoading(submitBtn, false);
+            }
+        });
+        
+        // 保存OCR配置
+        document.getElementById('ocrConfigForm').addEventListener('submit', async function(e) {
+            e.preventDefault();
+            
+            const submitBtn = document.getElementById('ocrConfigSubmitBtn');
+            setButtonLoading(submitBtn, true);
+            
+            const formData = new FormData(this);
+            const config = Object.fromEntries(formData.entries());
+            
+            // 转换为数字类型
+            config.dpi = parseInt(config.dpi);
+            
+            try {
+                const response = await fetch('/api/ocr-config', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify(config)
+                });
+                
+                const data = await response.json();
+                
+                if (response.ok) {
+                    showResult('OCR配置保存成功！');
+                } else {
+                    showResult('保存失败: ' + (data.error || '未知错误'), false);
+                }
+            } catch (error) {
+                showResult('请求失败: ' + error.message, false);
+            } finally {
+                setButtonLoading(submitBtn, false);
+            }
+        });
+        
+        // 清空数据库
+        document.getElementById('clearDatabaseBtn').addEventListener('click', async function() {
+            if (!confirm('确定要清空数据库吗？此操作不可逆！')) {
+                return;
+            }
+            
+            try {
+                const response = await fetch('/api/settings/maintenance/clear-database', {
+                    method: 'POST'
+                });
+                
+                const data = await response.json();
+                
+                if (response.ok && data.success) {
+                    showResult('数据库清空成功！');
+                } else {
+                    showResult('操作失败: ' + (data.message || '未知错误'), false);
+                }
+            } catch (error) {
+                showResult('请求失败: ' + error.message, false);
+            }
+        });
+        
+        // 清理上传文件夹
+        document.getElementById('cleanupUploadsBtn').addEventListener('click', async function() {
+            if (!confirm('确定要清理上传文件夹吗？此操作将删除所有上传的文件！')) {
+                return;
+            }
+            
+            try {
+                const response = await fetch('/api/settings/maintenance/cleanup-uploads', {
+                    method: 'POST'
+                });
+                
+                const data = await response.json();
+                
+                if (response.ok && data.success) {
+                    showResult('上传文件夹清理成功！');
+                } else {
+                    showResult('操作失败: ' + (data.message || '未知错误'), false);
+                }
+            } catch (error) {
+                showResult('请求失败: ' + error.message, false);
+            }
+        });
+        
+        // 清理临时文件夹
+        document.getElementById('cleanupTempBtn').addEventListener('click', async function() {
+            if (!confirm('确定要清理临时文件夹吗？此操作将删除所有临时文件！')) {
+                return;
+            }
+            
+            try {
+                const response = await fetch('/api/settings/maintenance/cleanup-temp', {
+                    method: 'POST'
+                });
+                
+                const data = await response.json();
+                
+                if (response.ok && data.success) {
+                    showResult('临时文件夹清理成功！');
+                } else {
+                    showResult('操作失败: ' + (data.message || '未知错误'), false);
+                }
+            } catch (error) {
+                showResult('请求失败: ' + error.message, false);
+            }
+        });
+    </script>
+</body>
+</html>

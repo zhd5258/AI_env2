@@ -6,8 +6,10 @@
 import logging
 import json
 import re
-from typing import List, Dict, Any, Optional
-from modules.database import BidDocument, AnalysisResult
+from models.database import BidDocument, AnalysisResult
+
+# 移除价格管理器的导入，价格提取将在统一流程中处理
+# from modules.price_extraction_manager import PriceExtractionManager
 
 
 class BidAnalyzerHelpers:
@@ -15,6 +17,8 @@ class BidAnalyzerHelpers:
 
     def __init__(self):
         self.logger = logging.getLogger(__name__)
+        # 移除价格管理器初始化，价格提取将在统一流程中处理
+        # self.price_manager = PriceExtractionManager()
 
     def _send_progress_update(
         self, completed, total, current_rule, partial_results=None
@@ -32,7 +36,12 @@ class BidAnalyzerHelpers:
             current_rule (str): 当前正在分析的规则名称
             partial_results (list): 部分分析结果，用于动态展示
         """
-        if hasattr(self, 'db') and hasattr(self, 'bid_document_id') and self.db and self.bid_document_id:
+        if (
+            hasattr(self, 'db')
+            and hasattr(self, 'bid_document_id')
+            and self.db
+            and self.bid_document_id
+        ):
             try:
                 bid_doc = (
                     self.db.query(BidDocument)
@@ -45,11 +54,20 @@ class BidAnalyzerHelpers:
                         bid_doc.progress_total_rules = total
                     # 更新已完成规则数
                     bid_doc.progress_completed_rules = completed
-                    
+
                     # 使用更新后的投标人名称（如果已提取）
-                    bidder_name_to_use = self.bidder_name if hasattr(self, 'bidder_name') and self.bidder_name != '未知投标方' else bid_doc.bidder_name
-                    progress_info = f"{bidder_name_to_use} - {current_rule}" if current_rule else bidder_name_to_use
-                    
+                    bidder_name_to_use = (
+                        self.bidder_name
+                        if hasattr(self, 'bidder_name')
+                        and self.bidder_name != '未知投标方'
+                        else bid_doc.bidder_name
+                    )
+                    progress_info = (
+                        f'{bidder_name_to_use} - {current_rule}'
+                        if current_rule
+                        else bidder_name_to_use
+                    )
+
                     # 限制规则名称长度，避免前端显示问题
                     bid_doc.progress_current_rule = (
                         progress_info[:100] if progress_info else None
@@ -130,7 +148,7 @@ class BidAnalyzerHelpers:
                     self.progress_counter += 1
                 else:
                     self.progress_counter = 1
-                    
+
                 current_rule_name = f'正在分析规则 {self.progress_counter}/{getattr(self, "total_rules_to_analyze", 0)}: {rule["criteria_name"]}'
                 detailed_progress_info = f'[{getattr(self, "bidder_name", "未知投标方")}] {current_rule_name}'
                 # 此处可以优化，收集一些结果后再更新进度
@@ -173,7 +191,7 @@ class BidAnalyzerHelpers:
                 # 每分析一个规则就更新进度，确保前端能及时看到进度变化
                 self._update_progress(
                     self.progress_counter,
-                    getattr(self, "total_rules_to_analyze", 0),
+                    getattr(self, 'total_rules_to_analyze', 0),
                     detailed_progress_info,
                     accumulated_results,
                 )
@@ -191,18 +209,13 @@ class BidAnalyzerHelpers:
         )
 
     def _handle_price_criteria(self, rule, bid_pages):
-        """处理价格分项，只提取价格信息，不进行评分"""
-        # 从投标文件中提取价格信息
-        prices = self.price_manager.extract_prices_from_content(bid_pages)
-        best_price = self.price_manager.select_best_price(prices, bid_pages)
-
-        # 创建价格分项结果，分数为0，等待后续综合计算
+        """处理价格分项，只记录信息，不进行价格提取"""
+        # 价格提取和计算将在统一流程中处理
         analyzed_rule = {
             'criteria_name': rule['criteria_name'],
             'max_score': rule['max_score'],
             'score': 0,  # 初始分数为0，等待综合计算
-            'reason': f'价格分需要等所有投标方分析完成后综合计算。已提取报价: {best_price}',
-            'extracted_price': best_price,  # 保存提取的价格信息
+            'reason': '价格分需要等所有投标方分析完成后综合计算。',
             'is_price_criteria': True,  # 标记为价格分项
         }
 
@@ -304,8 +317,27 @@ class BidAnalyzerHelpers:
                 clean_response.replace('```json', '').replace('```', '').strip()
             )
 
-            # 尝试解析JSON
-            result = json.loads(clean_response)
+            # 只在必要时进行转义修复
+            try:
+                # 首先尝试直接解析
+                result = json.loads(clean_response)
+            except json.JSONDecodeError:
+                # 如果直接解析失败，再尝试修复转义字符
+                # 修复JSON中的无效转义字符
+                clean_response = re.sub(
+                    r'\\([^"\\/bfnrtu])', r'\1', clean_response
+                )  # 移除无效的转义
+                clean_response = clean_response.replace(
+                    '\\', '\\\\'
+                )  # 将单独的反斜杠转义
+                # 修复可能存在的其他转义问题
+                clean_response = (
+                    clean_response.replace('\n', '\\n')
+                    .replace('\r', '\\r')
+                    .replace('\t', '\\t')
+                )
+                result = json.loads(clean_response)
+
             score = result.get('score', 0)
             reason = result.get('reason', 'No reason provided.')
 
@@ -342,7 +374,12 @@ class BidAnalyzerHelpers:
 
     def _save_failed_pages_info(self, bid_processor):
         """保存PDF处理失败页面信息到数据库"""
-        if hasattr(self, 'db') and hasattr(self, 'bid_document_id') and self.db and self.bid_document_id:
+        if (
+            hasattr(self, 'db')
+            and hasattr(self, 'bid_document_id')
+            and self.db
+            and self.bid_document_id
+        ):
             try:
                 failed_pages_info = bid_processor.get_failed_pages_info()
                 if failed_pages_info:
@@ -364,17 +401,5 @@ class BidAnalyzerHelpers:
 
     def _save_extracted_price(self, best_price):
         """将提取的价格保存到数据库"""
-        if hasattr(self, 'db') and hasattr(self, 'bid_document_id') and self.db and self.bid_document_id:
-            try:
-                # 查找与此投标文档关联的分析结果记录
-                analysis_record = self.db.query(AnalysisResult).filter(
-                    AnalysisResult.bid_document_id == self.bid_document_id
-                ).first()
-                if analysis_record:
-                    analysis_record.extracted_price = best_price
-                    self.db.commit()
-                    logging.info(f"成功将提取的价格 {best_price} 保存到数据库")
-            except Exception as e:
-                logging.error(f"保存提取的价格到数据库时出错: {e}")
-                if hasattr(self, 'db'):
-                    self.db.rollback()
+        # 移除价格保存逻辑，价格提取和保存将在统一流程中处理
+        pass
