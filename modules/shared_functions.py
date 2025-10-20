@@ -9,8 +9,6 @@
 #
 # Copyright (c) 2025 by 中车眉山车辆有限公司/KingFreeDom, All Rights Reserved.
 #
-#!/usr/bin/env python
-# -*- coding:utf-8 -*-
 """
 共享函数模块，用于避免循环导入问题
 """

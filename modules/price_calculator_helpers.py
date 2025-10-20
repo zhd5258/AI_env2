@@ -239,13 +239,20 @@ class PriceScoreCalculatorHelpers:
                         def calculate_other_scores(scores_list):
                             total = 0
                             for item in scores_list:
-                                if item.get('is_price_criteria') or '价格' in item.get(
-                                    'criteria_name', ''
-                                ):
+                                # 支持多种字段名检查
+                                item_name = (
+                                    item.get('Child_Item_Name')
+                                    or item.get('criteria_name')
+                                    or item.get('name', '')
+                                )
+
+                                if item.get('is_price_criteria') or '价格' in item_name:
                                     # 跳过价格分项
                                     continue
                                 else:
-                                    total += item.get('score', 0)
+                                    score = item.get('score', 0)
+                                    if isinstance(score, (int, float)):
+                                        total += float(score)
                                     # 递归处理子项
                                     if 'children' in item and item['children']:
                                         total += calculate_other_scores(
@@ -266,3 +273,39 @@ class PriceScoreCalculatorHelpers:
                     )
                     continue
         return updated_count
+
+    def _calculate_other_scores_total(self, detailed_scores: list) -> float:
+        """
+        计算除价格分外的其他分数总和
+
+        Args:
+            detailed_scores: 详细评分列表
+
+        Returns:
+            float: 其他分数总和
+        """
+        total = 0
+        try:
+            for item in detailed_scores:
+                # 跳过价格分项 - 支持多种字段名检查
+                item_name = (
+                    item.get('Child_Item_Name')
+                    or item.get('criteria_name')
+                    or item.get('name', '')
+                )
+
+                if item.get('is_price_criteria') or '价格' in item_name:
+                    continue
+
+                # 累加分数
+                score = item.get('score', 0)
+                if isinstance(score, (int, float)):
+                    total += float(score)
+
+                # 递归处理子项
+                if 'children' in item and isinstance(item['children'], list):
+                    total += self._calculate_other_scores_total(item['children'])
+        except Exception as e:
+            self.logger.error(f'计算其他分数总和时出错: {e}')
+
+        return total

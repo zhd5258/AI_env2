@@ -1,0 +1,266 @@
+<!--
+ * @作者           : KingFreeDom
+ * @创建时间         : 2025-10-20 22:16:14
+ * @最近一次编辑者      : KingFreeDom
+ * @最近一次编辑时间     : 2025-10-20 22:16:16
+ * @文件相对于项目的路径   : \AI_ENV2\templates\qualitative_review.html
+ * @
+ * @Copyright (c) 2025 by 中车眉山车辆有限公司/KingFreeDom, All Rights Reserved. 
+-->
+<!--
+ * @作者           : KingFreeDom
+ * @创建时间         : 2025-10-20
+ * @文件相对于项目的路径   : \AI_ENV2\templates\qualitative_review.html
+ * @
+ * @Copyright (c) 2025 by 中车眉山车辆有限公司/KingFreeDom, All Rights Reserved. 
+-->
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>符合性审查表 - AI智能投标文件评价系统</title>
+    <!-- 将CDN引用改为本地引用 -->
+    <link href="/static/css/bootstrap.min.css" rel="stylesheet">
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css" rel="stylesheet">
+    <link rel="stylesheet" href="/static/css/history.css">
+    <style>
+        .table-responsive {
+            overflow-x: auto;
+            overflow-y: auto;
+            max-height: 600px;
+        }
+        .table-fixed-header {
+            position: sticky;
+            top: 0;
+            background-color: #fff;
+            z-index: 10;
+        }
+    </style>
+</head>
+<body>
+    <div class="container-fluid">
+        <!-- 导航栏 -->
+        <nav class="navbar navbar-expand-lg navbar-dark bg-primary">
+            <div class="container-fluid">
+                <a class="navbar-brand" href="/">
+                    <i class="fas fa-file-contract me-2"></i>AI智能投标文件评价系统
+                </a>
+                <div class="navbar-nav ms-auto">
+                    <a class="nav-link" href="/">首页</a>
+                    <a class="nav-link" href="/history">历史项目</a>
+                    <a class="nav-link active" href="#">符合性审查表</a>
+                </div>
+            </div>
+        </nav>
+
+        <!-- 主要内容 -->
+        <div class="container mt-4">
+            <div class="row">
+                <div class="col-12">
+                    <h2 class="mb-4">
+                        <i class="fas fa-clipboard-check me-2"></i>符合性审查表
+                    </h2>
+                    
+                    <!-- 项目信息 -->
+                    <div class="card mb-4">
+                        <div class="card-header">
+                            <h5 class="mb-0">
+                                <i class="fas fa-info-circle me-2"></i>项目信息
+                            </h5>
+                        </div>
+                        <div class="card-body">
+                            <div class="row">
+                                <div class="col-md-6">
+                                    <p><strong>项目编号:</strong> <span id="projectCode"></span></p>
+                                    <p><strong>项目名称:</strong> <span id="projectName"></span></p>
+                                </div>
+                                <div class="col-md-6">
+                                    <p><strong>创建时间:</strong> <span id="createdAt"></span></p>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                    
+                    <!-- 符合性审查表 -->
+                    <div class="card">
+                        <div class="card-header">
+                            <h5 class="mb-0">
+                                <i class="fas fa-table me-2"></i>符合性审查表
+                            </h5>
+                        </div>
+                        <div class="card-body">
+                            <!-- 加载指示器 -->
+                            <div id="loadingIndicator" class="text-center my-4" style="display: none;">
+                                <div class="spinner-border" role="status">
+                                    <span class="visually-hidden">加载中...</span>
+                                </div>
+                                <p class="mt-2">正在加载符合性审查表...</p>
+                            </div>
+                            
+                            <!-- 错误消息 -->
+                            <div id="errorMessage" class="alert alert-danger d-none" role="alert">
+                                <h5><i class="fas fa-exclamation-triangle me-2"></i>错误</h5>
+                                <p id="errorText"></p>
+                                <button type="button" class="btn btn-primary" onclick="location.reload()">
+                                    <i class="fas fa-sync-alt me-1"></i>重新加载
+                                </button>
+                            </div>
+                            
+                            <!-- 符合性审查表内容 -->
+                            <div id="qualitativeReviewContent" style="display: none;">
+                                <div class="table-responsive" style="max-height: 600px; overflow: auto;">
+                                    <table class="table table-bordered table-hover">
+                                        <thead class="table-dark">
+                                            <tr>
+                                                <th>投标人</th>
+                                                <th>审查项</th>
+                                                <th>审查结果</th>
+                                                <th>审查理由</th>
+                                            </tr>
+                                        </thead>
+                                        <tbody id="qualitativeReviewTableBody">
+                                            <!-- 数据将通过JavaScript动态加载 -->
+                                        </tbody>
+                                    </table>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- 引入 Bootstrap JS -->
+    <!-- 将CDN引用改为本地引用 -->
+    <script src="/static/js/bootstrap.bundle.min.js"></script>
+    <!-- 引入 Chart.js -->
+    <script src="/static/js/chart.min.js"></script>
+    <!-- 引入自定义 JS -->
+    <script>
+        document.addEventListener('DOMContentLoaded', function () {
+            const urlParams = new URLSearchParams(window.location.search);
+            const projectId = urlParams.get('project_id');
+            
+            if (!projectId) {
+                showError('项目ID未指定');
+                return;
+            }
+            
+            fetchQualitativeReviewData(projectId);
+        });
+        
+        function fetchQualitativeReviewData(projectId) {
+            showLoading();
+            
+            // 获取项目信息
+            fetch(`/api/projects/${projectId}`)
+                .then(response => response.json())
+                .then(projectData => {
+                    document.getElementById('projectCode').textContent = projectData.project_code || 'N/A';
+                    document.getElementById('projectName').textContent = projectData.name || 'N/A';
+                    document.getElementById('createdAt').textContent = projectData.created_at ? new Date(projectData.created_at).toLocaleString() : 'N/A';
+                })
+                .catch(error => {
+                    console.error('获取项目信息失败:', error);
+                });
+            
+            // 获取定性规则审查数据
+            fetch(`/api/projects/${projectId}/qualitative-summary`)
+                .then(response => {
+                    if (!response.ok) {
+                        throw new Error(`HTTP error! status: ${response.status}`);
+                    }
+                    return response.json();
+                })
+                .then(data => {
+                    if (data.error) {
+                        throw new Error(data.error);
+                    }
+                    
+                    renderQualitativeReviewTable(data);
+                    hideLoading();
+                    document.getElementById('qualitativeReviewContent').style.display = 'block';
+                })
+                .catch(error => {
+                    console.error('获取符合性审查数据失败:', error);
+                    showError('无法加载符合性审查表，请稍后重试。');
+                });
+        }
+        
+        function renderQualitativeReviewTable(data) {
+            const tableBody = document.getElementById('qualitativeReviewTableBody');
+            tableBody.innerHTML = '';
+            
+            // 获取所有投标人名称
+            const bidderNames = Object.keys(data.qualitative_analysis_results || {});
+            
+            // 获取所有定性规则
+            const qualitativeRules = data.qualitative_rules || [];
+            
+            if (bidderNames.length === 0 || qualitativeRules.length === 0) {
+                tableBody.innerHTML = '<tr><td colspan="4" class="text-center">没有找到定性规则审查数据。</td></tr>';
+                return;
+            }
+            
+            // 为每个投标人和每个定性规则生成一行
+            bidderNames.forEach(bidderName => {
+                const bidderResults = data.qualitative_analysis_results[bidderName] || {};
+                
+                qualitativeRules.forEach((rule, index) => {
+                    const ruleName = rule.Child_Item_Name || '未知规则';
+                    const ruleResult = bidderResults[ruleName] || {};
+                    
+                    const row = document.createElement('tr');
+                    
+                    // 只在第一个规则时显示投标人名称
+                    if (index === 0) {
+                        row.innerHTML = `
+                            <td rowspan="${qualitativeRules.length}">${bidderName}</td>
+                            <td>${ruleName}</td>
+                            <td>
+                                ${ruleResult.result ? 
+                                    (ruleResult.result === '符合' ? 
+                                        '<span class="badge bg-success">符合</span>' : 
+                                        '<span class="badge bg-danger">不符合</span>') : 
+                                    '<span class="badge bg-secondary">未评估</span>'}
+                            </td>
+                            <td>${ruleResult.reason || '无'}</td>
+                        `;
+                    } else {
+                        row.innerHTML = `
+                            <td>${ruleName}</td>
+                            <td>
+                                ${ruleResult.result ? 
+                                    (ruleResult.result === '符合' ? 
+                                        '<span class="badge bg-success">符合</span>' : 
+                                        '<span class="badge bg-danger">不符合</span>') : 
+                                    '<span class="badge bg-secondary">未评估</span>'}
+                            </td>
+                            <td>${ruleResult.reason || '无'}</td>
+                        `;
+                    }
+                    
+                    tableBody.appendChild(row);
+                });
+            });
+        }
+        
+        function showLoading() {
+            document.getElementById('loadingIndicator').style.display = 'block';
+            document.getElementById('errorMessage').classList.add('d-none');
+        }
+        
+        function hideLoading() {
+            document.getElementById('loadingIndicator').style.display = 'none';
+        }
+        
+        function showError(message) {
+            hideLoading();
+            document.getElementById('errorText').textContent = message;
+            document.getElementById('errorMessage').classList.remove('d-none');
+        }
+    </script>
+</body>
+</html>

@@ -140,24 +140,21 @@ class PriceScoreCalculator(PriceScoreCalculatorHelpers):
 示例（假设满分为40分）：
 {{"公司A": 38.2, "公司B": 40.0, "公司C": 35.3}}"""
 
-            self.logger.info('=' * 50)
-            self.logger.info('发送给AI大模型的价格分计算请求:')
-            self.logger.info(f'投标人报价信息: {bidder_info_str}')
-            self.logger.info(f'价格评价标准: {price_rule.description}')
-            self.logger.info(f'价格分满分: {price_max_score}分')
-            self.logger.info('完整prompt:')
-            self.logger.info(prompt)
-            self.logger.info('=' * 50)
+            # 简化日志记录，避免重复输出
+            self.logger.info(
+                f'开始计算价格分 - 投标人数量: {len(valid_bidder_prices)}, 满分: {price_max_score}分'
+            )
+            self.logger.debug(f'投标人报价信息: {bidder_info_str}')
+            self.logger.debug(f'价格评价标准: {price_rule.description}')
+            self.logger.debug(f'完整prompt: {prompt}')
 
             # 6. 调用AI大模型计算价格分
             try:
                 ai_response = self.ai_analyzer.analyze_text(prompt)
 
-                # 记录AI大模型的返回值
-                self.logger.info('=' * 50)
-                self.logger.info('AI大模型返回的完整响应:')
-                self.logger.info(ai_response)
-                self.logger.info('=' * 50)
+                # 简化AI响应日志记录
+                self.logger.info('AI大模型响应接收成功')
+                self.logger.debug(f'AI响应内容: {ai_response}')
 
                 # 解析AI响应
                 price_scores = self._parse_price_scores_from_ai_response(ai_response)
@@ -203,8 +200,7 @@ class PriceScoreCalculator(PriceScoreCalculatorHelpers):
 
             # 8. 更新每个投标人的价格分和总分
             updated_count = 0
-            self.logger.info('=' * 50)
-            self.logger.info('开始更新各投标人的价格分和总分:')
+            self.logger.info(f'开始更新 {len(price_scores)} 个投标人的价格分和总分')
 
             # 创建一个映射，用于跟踪已处理的投标人
             processed_bidders = {}
@@ -294,42 +290,6 @@ class PriceScoreCalculator(PriceScoreCalculatorHelpers):
             self.logger.error(f'计算项目 {project_id} 的价格分时出错: {e}')
             return False
 
-    def _extract_bidder_prices(self, analysis_results: List[Any]) -> Dict[str, float]:
-        """
-        从分析结果中提取投标人报价，确保使用有效的投标人名称
-
-        Args:
-            analysis_results: 分析结果列表
-
-        Returns:
-            Dict[str, float]: 投标人名称到报价的映射
-        """
-        bidder_prices = {}
-        for result in analysis_results:
-            try:
-                # 使用投标人名称，如果为空则使用"未知投标人_序号"作为备用
-                bidder_name = (
-                    result.bidder_name
-                    if result.bidder_name
-                    else f'未知投标人_{result.id}'
-                )
-                # 确保投标人名称不是None或空字符串
-                if not bidder_name or not str(bidder_name).strip():
-                    bidder_name = f'未知投标人_{result.id}'
-
-                # 提取价格，如果为空则跳过
-                price = result.extracted_price
-                if price is not None:
-                    bidder_prices[str(bidder_name)] = float(price)
-            except Exception as e:
-                self.logger.error(
-                    f'提取投标人 {getattr(result, "bidder_name", "未知")} 的报价时出错: {e}'
-                )
-                # 继续处理其他投标人
-
-        self.logger.info(f'提取到的投标人报价: {bidder_prices}')
-        return bidder_prices
-
     def _parse_price_scores_from_ai_response(
         self, ai_response: str
     ) -> Dict[str, float]:
@@ -376,7 +336,7 @@ class PriceScoreCalculator(PriceScoreCalculatorHelpers):
                         self.logger.warning(
                             f'跳过无效的分数值：投标人 "{name}" 的分数 "{score}" 不是数字。'
                         )
-                
+
                 self.logger.info(f'成功从AI响应中解析出价格分: {price_scores}')
                 return price_scores
 
@@ -477,37 +437,3 @@ class PriceScoreCalculator(PriceScoreCalculatorHelpers):
         except Exception as e:
             self.logger.error(f'默认价格分计算出错: {e}')
             return {}
-
-    def _calculate_other_scores_total(self, detailed_scores: list) -> float:
-        """
-        计算除价格分外的其他分数总和
-
-        Args:
-            detailed_scores: 详细评分列表
-
-        Returns:
-            float: 其他分数总和
-        """
-        total = 0
-        try:
-            for item in detailed_scores:
-                # 跳过价格分项 - 修正字段名检查
-                if (
-                    item.get('is_price_criteria')
-                    or '价格' in item.get('Child_Item_Name', '')
-                    or '价格' in item.get('criteria_name', '')
-                ):
-                    continue
-
-                # 累加分数
-                score = item.get('score', 0)
-                if isinstance(score, (int, float)):
-                    total += score
-
-                # 递归处理子项
-                if 'children' in item and isinstance(item['children'], list):
-                    total += self._calculate_other_scores_total(item['children'])
-        except Exception as e:
-            self.logger.error(f'计算其他分数总和时出错: {e}')
-
-        return total

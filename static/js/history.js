@@ -229,7 +229,13 @@ document.addEventListener('DOMContentLoaded', function () {
 
             content += '<h6><i class="fas fa-table me-2"></i>评标汇总表</h6>';
             if (summaryData && summaryData.header_rows && summaryData.rows) {
-                content += '<div class="table-responsive">';
+                content += '<div class="mt-2">';
+                content += `<a href="/qualitative-review?project_id=${projectId}" class="btn btn-info btn-sm mb-3">`;
+                content += '<i class="fas fa-clipboard-check me-1"></i>查看符合性审查表';
+                content += '</a>';
+                content += '</div>';
+
+                content += '<div class="table-responsive" style="max-height: 600px; overflow: auto;">';
                 content += '<table class="table table-bordered table-striped table-hover">';
 
                 // 渲染多层表头

@@ -158,12 +158,13 @@ class MDPriceExtractor:
         lines = content.split('\n')
         for i, line in enumerate(lines):
             for keyword in self.bid_summary_keywords:
-                if keyword in line:
+                # 使用更精确的匹配，避免匹配到业绩合同等无关内容
+                if keyword in line and '业绩' not in line and '合同' not in line:
                     self.logger.info(f'在第 {i + 1} 行找到关键词: {keyword}')
                     # 找到关键词后，提取包含该关键词的段落
-                    # 向前向后各扩展一定行数
-                    start_idx = max(0, i - 20)
-                    end_idx = min(len(lines), i + 50)
+                    # 向前向后各扩展一定行数，但限制在合理范围内
+                    start_idx = max(0, i - 15)  # 减少向前扩展的行数
+                    end_idx = min(len(lines), i + 30)  # 减少向后扩展的行数
                     section = '\n'.join(lines[start_idx:end_idx])
                     sections.append(section)
                     self.logger.info(
@@ -226,35 +227,40 @@ class MDPriceExtractor:
         # 如果没有找到特殊格式，使用原有方法
         if small_number_price is None and large_number_price is None:
             for keyword in self.price_field_keywords:
-                pattern = (
-                    rf'{keyword}[:：\s]*\(?(?:小写)?\)?[:：\s]*([￥¥]?\s*[\d,]+\.?\d*)'
-                )
-                match = re.search(pattern, section)
-                if match:
-                    price_str = match.group(1)
-                    small_number_price = self._str_to_float(price_str)
-                    self.logger.info(
-                        f'从投标一览表的投标总价列提取到阿拉伯数字价格: {small_number_price} (原始字符串: {price_str})'
-                    )
-                    if small_number_price is not None:
-                        # 检查是否包含排除关键词
-                        line_start = section.rfind('\n', 0, match.start()) + 1
-                        line_end = section.find('\n', match.end())
-                        if line_end == -1:
-                            line_end = len(section)
-                        line_text = section[line_start:line_end]
-                        if not any(
-                            exclude in line_text for exclude in self.exclude_keywords
-                        ):
-                            # 基础置信度
-                            small_confidence = 70.0
-                            # 如果有千位分隔符，则增加置信度
-                            if ',' in price_str:
-                                small_confidence += 15.0
-                            # 如果在表格环境中，增加置信度
-                            if '|' in line_text or '│' in line_text:
-                                small_confidence += 15.0
-                            break
+                # 避免在包含排除关键词的行中查找价格
+                lines = section.split('\n')
+                for line in lines:
+                    if any(exclude in line for exclude in self.exclude_keywords):
+                        continue
+
+                    pattern = rf'{keyword}[:：\s]*\(?(?:小写)?\)?[:：\s]*([￥¥]?\s*[\d,]+\.?\d*)'
+                    match = re.search(pattern, line)
+                    if match:
+                        price_str = match.group(1)
+                        small_number_price = self._str_to_float(price_str)
+                        self.logger.info(
+                            f'从投标一览表的投标总价列提取到阿拉伯数字价格: {small_number_price} (原始字符串: {price_str})'
+                        )
+                        if small_number_price is not None:
+                            # 检查是否包含排除关键词
+                            line_start = section.rfind('\n', 0, match.start()) + 1
+                            line_end = section.find('\n', match.end())
+                            if line_end == -1:
+                                line_end = len(section)
+                            line_text = section[line_start:line_end]
+                            if not any(
+                                exclude in line_text
+                                for exclude in self.exclude_keywords
+                            ):
+                                # 基础置信度
+                                small_confidence = 70.0
+                                # 如果有千位分隔符，则增加置信度
+                                if ',' in price_str:
+                                    small_confidence += 15.0
+                                # 如果在表格环境中，增加置信度
+                                if '|' in line_text or '│' in line_text:
+                                    small_confidence += 15.0
+                                break
 
             # 2. 查找大写中文金额
             chinese_pattern = r'(?:大写|大写金额)[:：\s]*([壹贰叁肆伍陆柒捌玖拾佰仟万亿零一二三四五六七八九十百千万亿元整]+)'
@@ -269,7 +275,7 @@ class MDPriceExtractor:
                     # 基础置信度
                     large_confidence = 60.0
                     # 根据中文数字的完整性评估置信度
-                    # 包含"亿"、"万"等单位，置信度更高
+                    # 包含"亿"、"萬"、"万"等单位，置信度更高
                     if any(unit in chinese_num for unit in ['亿', '萬', '万']):
                         large_confidence += 20.0
                     elif '千' in chinese_num:
@@ -395,7 +401,10 @@ class MDPriceExtractor:
         found_keyword = None
         for line in table_lines:
             for keyword in self.price_field_keywords:
-                if keyword in line:
+                # 避免在包含排除关键词的行中查找价格关键词
+                if keyword in line and not any(
+                    exclude in line for exclude in self.exclude_keywords
+                ):
                     found_keyword = keyword
                     break
             if found_keyword:
@@ -1230,6 +1239,16 @@ class MDPriceExtractor:
             r'（小写）[￥¥]?([\d,]+\.?\d*)元（写）([壹贰叁肆伍陆柒捌玖拾佰仟万亿零一二三四五六七八九十百千万亿元整\s]+)。含[\d%]+增值税。',
             # 广东创智文件中的格式（部分匹配）
             r'（小写）[￥¥]?([\d,]+\.?\d*)元（写）([壹贰叁肆伍陆柒捌玖拾佰仟万亿零一二三四五六七八九十百千万亿元整\s]+)',
+            # 湖北三江博力智能装备有限公司的格式
+            r'\(小写\)([\d,]+\.?\d+)\(大写\)([壹贰叁肆伍陆柒捌玖拾佰仟万亿零一二三四五六七八九十百千万亿元整]+)',
+            # 盐城大德涂装环保设备有限公司的格式
+            r'\(小写\)([\d,]+\.?\d+)\(大写\)(人民币)?([壹贰叁肆伍陆柒捌玖拾佰仟万亿零一二三四五六七八九十百千万亿元整\s]+)(圆整)?',
+            # 昆明苏净工贸有限公司的格式（表格格式）
+            r'\(小写\)</td><td>([￥¥]?\s*[\d,]+\.?\d*)</td><td>\(大写\)</td><td>([壹贰叁肆伍陆柒捌玖拾佰仟万亿零一二三四五六七八九十百千万亿元整\s]+)',
+            # 昆明苏净工贸有限公司的另一种格式
+            r'\(小写\)\s*([￥¥]?\s*[\d,]+\.?\d*)\s*元?\s*\(大写\)\s*([壹贰叁肆伍陆柒捌玖拾佰仟万亿零一二三四五六七八九十百千万亿元整\s]+)',
+            # 昆明苏净工贸有限公司的表格格式（分离的小写和大写）
+            r'<td>\(小写\)</td><td>([￥¥]?\s*[\d,]+\.?\d*)</td>(?:<td>\(大写\)</td><td>([壹贰叁肆伍陆柒捌玖拾佰仟万亿零一二三四五六七八九十百千万亿元整\s]+)</td>)?',
             # 更通用的格式
             r'小写[）\)]\s*[￥¥]?\s*([\d,]+\.?\d*)\s*(?:万元|元)\s*[(（]大写[)）]\s*([壹贰叁肆伍陆柒捌玖拾佰仟万亿零一二三四五六七八九十百千万亿元万元整\s]+)',
         ]
@@ -1238,14 +1257,31 @@ class MDPriceExtractor:
             match = re.search(pattern, section)
             if match:
                 small_price_str = match.group(1)
-                chinese_num = match.group(2)
+                chinese_num = match.group(2) if len(match.groups()) >= 2 else None
+
+                # 处理不同的捕获组情况
+                if len(match.groups()) >= 3 and match.group(3):
+                    # 如果有第3个捕获组，可能是大写金额
+                    if any(
+                        c in match.group(3)
+                        for c in '壹贰叁肆伍陆柒捌玖拾佰仟万亿零一二三四五六七八九十百千万亿'
+                    ):
+                        chinese_num = match.group(3)
+                    # 如果第2个捕获组不是大写金额，使用第3个
+                    elif not any(
+                        c in match.group(2)
+                        for c in '壹贰叁肆伍陆柒捌玖拾佰仟万亿零一二三四五六七八九十百千万亿'
+                    ):
+                        chinese_num = match.group(3)
 
                 small_number_price = self._str_to_float(small_price_str)
                 # 对于使用(.+)捕获的大写金额，需要清理文本
-                if '(.+)' in pattern:
-                    chinese_num = re.sub(r'[\s元整]+$', '', chinese_num).strip()
+                if chinese_num and '(.+)' in pattern:
+                    chinese_num = re.sub(r'[\s元整圆]+$', '', chinese_num).strip()
 
-                large_number_price = self._chinese_to_number(chinese_num)
+                large_number_price = (
+                    self._chinese_to_number(chinese_num) if chinese_num else None
+                )
 
                 self.logger.info(
                     f'从特殊格式中提取到小写价格: {small_number_price} (原始字符串: {small_price_str})'
@@ -1263,5 +1299,9 @@ class MDPriceExtractor:
                             f'特殊格式价格验证通过，返回小写价格: {small_number_price}'
                         )
                         return small_number_price
-
-        return None
+                # 如果只有小写价格提取成功，且在合理范围内，也返回小写价格
+                elif small_number_price is not None and small_number_price > 1000:
+                    self.logger.info(
+                        f'特殊格式只有小写价格提取成功，返回小写价格: {small_number_price}'
+                    )
+                    return small_number_price

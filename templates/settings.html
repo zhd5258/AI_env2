@@ -189,6 +189,8 @@
                     <option value="optimized">优化OCR</option>
                     <option value="v3_2">V3.2版本</option>
                     <option value="3_2_final">3.2最终版</option>
+                    <option value="mineru_online">在线MinerU (默认)</option>
+                    <option value="mineru_local">本地MinerU</option>
                 </select>
             </div>
             
@@ -204,6 +206,26 @@
                     <option value="en">英文</option>
                     <option value="mix">中英文混合</option>
                 </select>
+            </div>
+            
+            <div class="form-group">
+                <label for="mineru_api_token">MinerU API令牌:</label>
+                <input type="password" id="mineru_api_token" name="mineru_api_token" placeholder="请输入API令牌">
+                <small>用于在线MinerU OCR服务的身份验证</small>
+            </div>
+            
+            <div class="form-group">
+                <label for="mineru_api_url">MinerU API地址:</label>
+                <input type="text" id="mineru_api_url" name="mineru_api_url" placeholder="https://mineru.net/api/v4">
+                <small>在线MinerU OCR服务的API地址</small>
+            </div>
+            
+            <div class="form-group">
+                <label for="fallback_to_local">
+                    <input type="checkbox" id="fallback_to_local" name="fallback_to_local" checked>
+                    在线OCR失败时回退到本地处理
+                </label>
+                <small>启用后，当在线OCR处理失败时自动转为本地GPU模式处理</small>
             </div>
             
             <button type="submit" id="ocrConfigSubmitBtn">保存OCR设置</button>
@@ -299,9 +321,20 @@
                 if (ocrResponse.ok) {
                     const ocrData = await ocrResponse.json();
                     const ocrConfig = ocrData.data;
-                    document.getElementById('ocr_engine').value = ocrConfig.ocr_engine || 'smart';
+                    document.getElementById('ocr_engine').value = ocrConfig.ocr_engine || 'mineru_online';
                     document.getElementById('dpi').value = ocrConfig.dpi || 300;
                     document.getElementById('lang').value = ocrConfig.lang || 'ch';
+                    
+                    // 设置MinerU相关配置
+                    if (ocrConfig.mineru_api_token) {
+                        document.getElementById('mineru_api_token').value = ocrConfig.mineru_api_token;
+                    }
+                    if (ocrConfig.mineru_api_url) {
+                        document.getElementById('mineru_api_url').value = ocrConfig.mineru_api_url;
+                    }
+                    if (ocrConfig.fallback_to_local !== undefined) {
+                        document.getElementById('fallback_to_local').checked = ocrConfig.fallback_to_local;
+                    }
                 }
             } catch (error) {
                 console.error('获取OCR配置失败:', error);
@@ -399,6 +432,9 @@
             
             // 转换为数字类型
             config.dpi = parseInt(config.dpi);
+            
+            // 获取复选框的值
+            config.fallback_to_local = document.getElementById('fallback_to_local').checked;
             
             try {
                 const response = await fetch('/api/ocr-config', {

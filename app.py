@@ -2,18 +2,14 @@
 # -*- coding:utf-8 -*-
 #
 # 作者           : KingFreeDom
-# 创建时间         : 2025-10-03 14:14:03
+# 创建时间         : 2025-10-18 08:22:38
 # 最近一次编辑者      : KingFreeDom
-# 最近一次编辑时间     : 2025-10-12 07:00:21
-# 文件相对于项目的路径   : \AI_ENV2\app.py
+# 最近一次编辑时间     : 2025-10-18 13:10:30
+# 文件相对于项目的路径   : \AI_env2\app.py
 #
 # Copyright (c) 2025 by 中车眉山车辆有限公司/KingFreeDom, All Rights Reserved.
 #
-#!/usr/bin/env python
-# -*- coding:utf-8 -*-
-"""
-主应用文件
-"""
+
 
 import logging
 import sys
@@ -21,7 +17,6 @@ from pathlib import Path
 from flask import Flask, render_template, send_from_directory
 from config.app_config import Config
 
-# 修复导入路径 - 从 cors_middleware 导入而不是 cors
 from middleware.cors_middleware import setup_cors
 from modules.runtime_config import load_config
 

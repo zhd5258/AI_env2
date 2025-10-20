@@ -463,11 +463,9 @@ class PriceCalculationWorkflow:
 示例（假设满分为40分）：
 {{"公司A": 38.2, "公司B": 40.0, "公司C": 35.3}}"""
 
-            self.logger.info('构造AI prompt完成')
-            # 记录构造的prompt
-            self.logger.info('=== 发送给AI大模型的Prompt ===')
-            self.logger.info(prompt)
-            self.logger.info('=== Prompt结束 ===')
+            # 注意：此方法已废弃，价格分计算现在由 PriceScoreCalculator 统一处理
+            # 保留此方法以避免破坏现有代码，但实际不会被调用
+            self.logger.debug('构造AI prompt完成（已废弃的方法）')
             return prompt
         except Exception as e:
             self.logger.error(f'构造AI prompt时出错: {e}', exc_info=True)
@@ -492,93 +490,6 @@ class PriceCalculationWorkflow:
             self.logger.info(default_prompt)
             self.logger.info('=== 默认Prompt结束 ===')
             return default_prompt
-
-    def _calculate_price_scores_with_ai(self, prompt: str) -> Dict[str, float]:
-        """
-        调用AI大模型计算价格分数
-
-        Args:
-            prompt: 发送给AI的prompt
-
-        Returns:
-            Dict[str, float]: 投标人名称到价格分的映射
-        """
-        try:
-            self.logger.info('开始调用AI大模型计算价格分')
-
-            # 记录发送给AI的完整prompt
-            self.logger.info('=' * 50)
-            self.logger.info('发送给AI大模型的价格分计算请求:')
-            self.logger.info(prompt)
-            self.logger.info('=' * 50)
-
-            # 调用AI大模型计算价格分
-            ai_response = self.ai_analyzer.analyze_text(prompt)
-
-            # 记录AI大模型的返回值
-            self.logger.info('=' * 50)
-            self.logger.info('AI大模型返回的完整响应:')
-            self.logger.info(ai_response)
-            self.logger.info('=' * 50)
-
-            # 解析AI响应
-            import json
-
-            # 尝试解析AI响应
-            try:
-                # 清理AI响应，移除可能的额外文本
-                cleaned_response = ai_response.strip()
-                if cleaned_response.startswith('```json'):
-                    cleaned_response = cleaned_response[7:]
-                if cleaned_response.endswith('```'):
-                    cleaned_response = cleaned_response[:-3]
-                cleaned_response = cleaned_response.strip()
-
-                price_scores = json.loads(cleaned_response)
-                if not isinstance(price_scores, dict):
-                    raise ValueError('AI响应不是字典格式')
-
-                # 验证字典中的值都是数字
-                for key, value in price_scores.items():
-                    if not isinstance(value, (int, float)):
-                        raise ValueError(f'价格分值 {key}:{value} 不是数字类型')
-
-                self.logger.info(f'AI计算的价格分结果: {price_scores}')
-                # 记录解析结果
-                self.logger.info('=== AI大模型解析结果 ===')
-                for bidder_name, score in price_scores.items():
-                    self.logger.info(f'投标人 {bidder_name}: 价格分 {score}')
-                self.logger.info('=== 解析结果结束 ===')
-                return price_scores
-            except json.JSONDecodeError as je:
-                self.logger.error(f'AI响应JSON解析失败: {je}')
-                self.logger.error(f'AI响应内容: {ai_response}')
-                # 尝试从响应中提取JSON
-                import re
-
-                json_match = re.search(r'\{.*\}', ai_response, re.DOTALL)
-                if json_match:
-                    try:
-                        price_scores = json.loads(json_match.group())
-                        self.logger.info(f'从响应中提取的JSON: {price_scores}')
-                        # 记录解析结果
-                        self.logger.info('=== AI大模型解析结果 ===')
-                        for bidder_name, score in price_scores.items():
-                            self.logger.info(f'投标人 {bidder_name}: 价格分 {score}')
-                        self.logger.info('=== 解析结果结束 ===')
-                        return price_scores
-                    except json.JSONDecodeError:
-                        self.logger.error('从响应中提取的JSON也无法解析')
-                        return {}
-                return {}
-            except ValueError as ve:
-                self.logger.error(f'AI响应格式错误: {ve}')
-                self.logger.error(f'AI响应内容: {ai_response}')
-                return {}
-
-        except Exception as e:
-            self.logger.error(f'调用AI大模型计算价格分时出错: {e}', exc_info=True)
-            return {}
 
     def _update_project_status(self, project_id: int):
         """

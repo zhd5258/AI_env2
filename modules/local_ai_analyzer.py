@@ -12,6 +12,7 @@
 import requests
 import logging
 import time
+import os
 
 # 设置日志
 logger = logging.getLogger(__name__)
@@ -23,6 +24,8 @@ class LocalAIAnalyzer:
     ):
         self.model = model
         self.api_url = f'{host}/api/generate'
+        # 从环境变量获取上下文长度，默认为8192
+        self.context_length = int(os.environ.get('OLLAMA_CONTEXT_LENGTH', '8192'))
 
     def analyze_text(self, prompt):
         # 优化AI分析速度的参数设置
@@ -31,6 +34,7 @@ class LocalAIAnalyzer:
             'top_p': 0.9,  # 限制词汇选择范围
             'stop': ['\n\n'],  # 设置停止条件
             'num_predict': 500,  # 限制生成长度
+            'num_ctx': self.context_length,  # 设置上下文长度
         }
 
         payload = {
@@ -39,11 +43,11 @@ class LocalAIAnalyzer:
             'stream': False,
             'options': options,
         }
-        
+
         # 增加重试逻辑和更长的超时时间
         max_retries = 3
         retry_delay = 5  # seconds
-        request_timeout = 600 # 10分钟超时
+        request_timeout = 600  # 10分钟超时
 
         for attempt in range(max_retries):
             try:
@@ -68,14 +72,13 @@ class LocalAIAnalyzer:
             except requests.exceptions.RequestException as e:
                 logger.error(f'AI模型请求失败: {e}')
                 return f'Error: AI model request failed: {str(e)}'
-            
+
             # 如果不是最后一次尝试，则等待后重试
             if attempt + 1 < max_retries:
                 logger.info(f'将在 {retry_delay} 秒后重试...')
                 time.sleep(retry_delay)
-        
-        return 'Error: AI model request failed after multiple retries.'
 
+        return 'Error: AI model request failed after multiple retries.'
 
     def check_model_availability(self):
         try:

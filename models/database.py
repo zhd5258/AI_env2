@@ -49,7 +49,7 @@ class TenderProject(Base):
     project_code: Mapped[str] = mapped_column(String, unique=True, index=True)
     name: Mapped[str] = mapped_column(String, index=True)
     description: Mapped[str] = mapped_column(String)
-    tender_file_path: Mapped[str] = mapped_column(String)
+    tender_file_path: Mapped[str] = mapped_column(String, nullable=True)
     scoring_rules_summary: Mapped[dict] = mapped_column(JSON)
     created_at: Mapped[datetime.datetime] = mapped_column(
         DateTime, default=get_local_time
@@ -75,7 +75,7 @@ class BidDocument(Base):
     bidder_name: Mapped[str] = mapped_column(String)
     file_path: Mapped[str] = mapped_column(String)
     original_filename: Mapped[str] = mapped_column(String)  # 添加原始文件名字段
-    file_size: Mapped[int] = mapped_column(Integer)
+    file_size: Mapped[int] = mapped_column(Integer, nullable=True)
     upload_time: Mapped[datetime.datetime] = mapped_column(
         DateTime, default=get_local_time
     )
@@ -132,8 +132,29 @@ class AnalysisResult(Base):
     is_modified: Mapped[bool] = mapped_column(Boolean, default=False)
     original_scores: Mapped[dict] = mapped_column(JSON)
     modification_count: Mapped[int] = mapped_column(Integer, default=0)
-    last_modified_at: Mapped[datetime.datetime] = mapped_column(DateTime)
+    last_modified_at: Mapped[datetime.datetime] = mapped_column(
+        DateTime, default=get_local_time
+    )
     last_modified_by: Mapped[str] = mapped_column(String)
+
+    # 添加定性规则和定量规则分析结果字段
+    qualitative_analysis_results: Mapped[dict] = mapped_column(
+        JSON, default=dict
+    )  # 定性规则分析结果
+    quantitative_analysis_results: Mapped[dict] = mapped_column(
+        JSON, default=dict
+    )  # 定量规则分析结果
+    # 添加否决项检查结果字段
+    veto_items_checked: Mapped[bool] = mapped_column(
+        Boolean, default=False
+    )  # 是否已检查否决项
+    veto_items_passed: Mapped[bool] = mapped_column(
+        Boolean, default=True
+    )  # 否决项是否通过
+    failed_veto_items: Mapped[dict] = mapped_column(
+        JSON, default=dict
+    )  # 未通过的否决项列表
+
     project = relationship('TenderProject', back_populates='analysis_results')
     bid_document = relationship('BidDocument', back_populates='analysis_result')
     modification_history = relationship(
@@ -163,6 +184,14 @@ class ScoringRule(Base):
     price_formula: Mapped[str] = mapped_column(
         String(500), nullable=True
     )  # 增加价格公式字段长度
+
+    # 添加定性规则和定量规则标识字段
+    is_qualitative: Mapped[bool] = mapped_column(
+        Boolean, default=False
+    )  # 是否为定性规则
+    is_quantitative: Mapped[bool] = mapped_column(
+        Boolean, default=False
+    )  # 是否为定量规则
 
     project = relationship('TenderProject', back_populates='scoring_rules')
 

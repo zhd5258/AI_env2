@@ -312,6 +312,23 @@ def init_upload_logic(tender_file, bid_files):
             db.close()
         db = None
 
+        # 检查output目录下是否已存在除了招标文件外的其他投标文件对应的md文件
+        # 如果全部存在，则跳过OCR，直接开始后续流程
+        all_md_files_exist = True
+        output_dir = get_platform_safe_path('output')
+
+        # 检查每个投标文件对应的MD文件是否存在
+        for bid_info in bid_files_info:
+            bid_file_path = bid_info['bid_file_path']
+            # 获取预期的MD文件名（与PDF文件同名，但扩展名为.md）
+            md_filename = os.path.splitext(os.path.basename(bid_file_path))[0] + '.md'
+            md_file_path = get_platform_safe_path(output_dir, md_filename)
+
+            # 如果任何一个MD文件不存在，则需要进行OCR处理
+            if not os.path.exists(md_file_path):
+                all_md_files_exist = False
+                break
+
         # 在后台线程中启动分析
         def start_analysis_in_background():
             try:
@@ -325,14 +342,29 @@ def init_upload_logic(tender_file, bid_files):
                 # 创建分析管理器实例并执行完整的分析流程
                 db_local = SessionLocal()
                 analysis_manager = AnalysisManager(db_session=db_local)
-                # 在新线程中运行分析任务，避免阻塞主线程
-                import threading
 
-                analysis_thread = threading.Thread(
-                    target=analysis_manager.run_analysis_and_calculate_prices,
-                    args=(project_id, bid_files_info),
-                )
-                analysis_thread.start()
+                # 如果所有MD文件都已存在，则跳过OCR处理，直接开始后续流程
+                if all_md_files_exist:
+                    logging.info(
+                        '所有投标文件的MD文件已存在，跳过OCR处理，直接开始后续流程'
+                    )
+                    # 直接运行分析和价格计算，跳过OCR步骤
+                    import threading
+
+                    analysis_thread = threading.Thread(
+                        target=analysis_manager.run_analysis_and_calculate_prices,
+                        args=(project_id, bid_files_info),
+                    )
+                    analysis_thread.start()
+                else:
+                    # 在新线程中运行分析任务，包含OCR处理
+                    import threading
+
+                    analysis_thread = threading.Thread(
+                        target=analysis_manager.run_analysis_and_calculate_prices,
+                        args=(project_id, bid_files_info),
+                    )
+                    analysis_thread.start()
                 db_local.close()
 
                 # 移除手动更新项目状态的代码，让价格计算工作流自己更新项目状态

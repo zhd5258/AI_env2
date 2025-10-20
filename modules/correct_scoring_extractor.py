@@ -4,7 +4,7 @@
 # 作者           : KingFreeDom
 # 创建时间         : 2025-10-05 21:03:02
 # 最近一次编辑者      : KingFreeDom
-# 最近一次编辑时间     : 2025-10-08 08:11:44
+# 最近一次编辑时间     : 2025-10-20 19:02:30
 # 文件相对于项目的路径   : \AI_ENV2\modules\correct_scoring_extractor.py
 #
 # Copyright (c) 2025 by 中车眉山车辆有限公司/KingFreeDom, All Rights Reserved.
@@ -48,11 +48,11 @@ class CorrectScoringExtractor:
             # 1. 使用PyMuPDF打开PDF文件
             doc = fitz.open(self.pdf_path)
 
-            # 2. 查找包含"评标办法"的页面
+            # 2. 查找包含评分规则相关关键词的页面
             scoring_section_pages = self._find_scoring_section_pages(doc)
 
             if not scoring_section_pages:
-                self.logger.warning('未找到评标办法章节')
+                self.logger.warning('未找到评分规则相关章节')
                 doc.close()
                 return []
 
@@ -86,7 +86,34 @@ class CorrectScoringExtractor:
             doc.close()
 
             # 6. 构建层级结构
-            return self._build_hierarchy(all_rules)
+            hierarchy_rules = self._build_hierarchy(all_rules)
+
+            # 7. 自我验证：确保所有父项总分是100分，所有子项总分之和也是100分
+            self._validate_scoring_rules(hierarchy_rules)
+
+            # 修复：记录提取到的规则信息，便于调试
+            self.logger.info(f'提取到 {len(hierarchy_rules)} 条评分规则')
+            for i, rule in enumerate(hierarchy_rules):
+                self.logger.info(
+                    f'规则 {i + 1}: {rule["criteria_name"]}, 分数: {rule["max_score"]}, 是否父项: {rule["is_parent"]}'
+                )
+                if rule.get('children'):
+                    for j, child in enumerate(rule['children']):
+                        self.logger.info(
+                            f'  子项 {j + 1}: {child["criteria_name"]}, 分数: {child["max_score"]}'
+                        )
+
+            # 检查是否提取到了任何有分值的规则
+            has_quantitative_rules = any(
+                rule.get('max_score', 0) > 0 for rule in hierarchy_rules
+            )
+            if not has_quantitative_rules:
+                self.logger.warning(
+                    '警告：未从PDF中提取到任何有效的评分规则（所有规则分数为0）。'
+                    '请检查PDF中的评分表格格式是否正确。'
+                )
+
+            return hierarchy_rules
 
         except Exception as e:
             self.logger.error(f'提取评分规则时出错: {e}')
@@ -199,75 +226,51 @@ class CorrectScoringExtractor:
             keyword in header2_text for keyword in normal_header_keywords
         )
 
-        # 如果第一个是正常表头，第二个不是正常表头，则认为是同一个表格
+        # 如果两个表头都包含正常表头关键词，则认为是相同的表头
+        if is_header1_normal and is_header2_normal:
+            return True
+
+        # 如果第一个表头是正常表头，第二个表头不是正常表头，则认为是同一个表格的内容
         if is_header1_normal and not is_header2_normal:
             return True
 
-        # 如果两个都是正常表头，则比较它们是否相似
-        if is_header1_normal and is_header2_normal:
-            # 检查表头是否相似
-            for i in range(len(header1)):
-                # 清理表头文本进行比较
-                h1 = self._clean_text(header1[i]) if header1[i] else ''
-                h2 = self._clean_text(header2[i]) if header2[i] else ''
-
-                # 如果表头文本相似，则认为是同一个表格
-                if h1 != h2:
-                    # 允许一定的差异
-                    if not (h1 in h2 or h2 in h1):
-                        # 特殊处理：如果第二个表格的表头是空的或者是延续性内容，则认为是同一个表格
-                        # 这种情况常见于跨页表格
-                        if (
-                            not h2
-                            or '分' in h2
-                            or '扣完' in h2
-                            or '评价' in h2
-                            or '标准' in h2
-                        ):
-                            continue
-                        return False
-
-            return True
-
-        # 其他情况，默认不认为是相同表头
         return False
 
     def _find_scoring_section_pages(self, doc) -> List[int]:
         """
-        查找包含评标办法的页面
+        查找包含评分规则相关关键词的页面
 
         Args:
             doc: PyMuPDF文档对象
 
         Returns:
-            List[int]: 包含评标办法的页面索引列表
+            List[int]: 包含评分规则相关关键词的页面编号列表
         """
         scoring_pages = []
-
-        # 查找关键词（中英文）
+        # 扩展关键词列表，包含更多与评分规则相关的关键词
         keywords = [
             '评标办法',
-            '评审办法',
-            '评分办法',
+            '评分标准',
+            '评审标准',
             'Evaluation Method',
-            'Scoring Method',
-            'Evaluation Criteria',
+            'Scoring Criteria',
+            '价格分',
+            '技术部分',
+            '商务部分',
+            '价格部分',
         ]
 
         for page_num in range(len(doc)):
             page = doc.load_page(page_num)
             text = page.get_text()
 
+            # 查找包含评分规则关键词的页面
             for keyword in keywords:
                 if keyword in text:
-                    # 找到评标办法章节，添加当前页及后续几页
-                    for i in range(
-                        page_num, min(page_num + 10, len(doc))
-                    ):  # 最多检查10页
-                        scoring_pages.append(i)
-                    break
+                    scoring_pages.append(page_num)
+                    break  # 避免重复添加同一页面
 
-        return list(set(scoring_pages))  # 去重
+        return scoring_pages
 
     def _parse_scoring_table(self, table_data: List[List[str]]) -> List[Dict[str, Any]]:
         """
@@ -277,24 +280,31 @@ class CorrectScoringExtractor:
             table_data: 表格数据
 
         Returns:
-            List[Dict[str, Any]]: 解析后的评分规则
+            List[Dict[str, Any]]: 评分规则列表
         """
-        rules = []
-
         if not table_data or len(table_data) < 2:
-            return rules
+            return []
 
-        # 查找表头
+        rules = []
         header_index = 0
+
+        # 查找表头行
         for i, row in enumerate(table_data):
             if (
                 len(row) >= 2
-                and row[0]
                 and (
-                    '评价项目' in row[0]
-                    or '评分项' in row[0]
-                    or 'Evaluation Item' in row[0]
-                    or 'Scoring Item' in row[0]
+                    '评价项目' in (row[0] if row[0] else '')
+                    or '评分项' in (row[0] if row[0] else '')
+                    or 'Evaluation Item' in (row[0] if row[0] else '')
+                    or 'Scoring Item' in (row[0] if row[0] else '')
+                )
+            ) or (
+                len(row) >= 3
+                and (
+                    '评价项目' in (row[1] if row[1] else '')
+                    or '评分项' in (row[1] if row[1] else '')
+                    or 'Evaluation Item' in (row[1] if row[1] else '')
+                    or 'Scoring Item' in (row[1] if row[1] else '')
                 )
             ):
                 header_index = i
@@ -355,16 +365,27 @@ class CorrectScoringExtractor:
                         # 调试信息
                         # print(f"DEBUG: 价格项描述处理 - 名称: {first_info['name']}, 第二列: {second_col}, 清理后: {price_description}")
 
+                    # 判断是否为否决项（名称前有"*"号）
+                    is_veto = first_info['name'].startswith('*')
+                    # 清理名称，移除"*"号
+                    clean_name = first_info['name'].lstrip('*').strip()
+
+                    # 判断是否为定性规则（无分数）或定量规则（有分数）
+                    is_qualitative = first_info['score'] == 0 and not is_parent
+                    is_quantitative = first_info['score'] > 0 or is_parent
+
                     rules.append(
                         {
-                            'criteria_name': first_info['name'],
+                            'criteria_name': clean_name,
                             'max_score': first_info['score'],
                             'description': price_description
                             if '价格' in first_info['name']
                             else '',
                             'is_price_criteria': '价格' in first_info['name'],
-                            'is_veto': False,
+                            'is_veto': is_veto,
                             'is_parent': is_parent,
+                            'is_qualitative': is_qualitative,
+                            'is_quantitative': is_quantitative,
                         }
                     )
 
@@ -376,26 +397,49 @@ class CorrectScoringExtractor:
                     ):
                         # 使用第三列作为描述
                         child_description = self._clean_description(third_col)
+
+                        # 判断是否为否决项（名称前有"*"号）
+                        is_veto = second_info['name'].startswith('*')
+                        # 清理名称，移除"*"号
+                        clean_name = second_info['name'].lstrip('*').strip()
+
+                        # 判断是否为定性规则（无分数）或定量规则（有分数）
+                        is_qualitative = second_info['score'] == 0
+                        is_quantitative = second_info['score'] > 0
+
                         rules.append(
                             {
-                                'criteria_name': second_info['name'],
+                                'criteria_name': clean_name,
                                 'max_score': second_info['score'],
                                 'description': child_description,
                                 'is_price_criteria': False,
-                                'is_veto': False,
+                                'is_veto': is_veto,
                                 'is_parent': False,
+                                'is_qualitative': is_qualitative,
+                                'is_quantitative': is_quantitative,
                             }
                         )
                 elif second_info and not self._should_ignore_item(second_info['name']):
                     # 第二列是子项
+                    # 判断是否为否决项（名称前有"*"号）
+                    is_veto = second_info['name'].startswith('*')
+                    # 清理名称，移除"*"号
+                    clean_name = second_info['name'].lstrip('*').strip()
+
+                    # 判断是否为定性规则（无分数）或定量规则（有分数）
+                    is_qualitative = second_info['score'] == 0
+                    is_quantitative = second_info['score'] > 0
+
                     rules.append(
                         {
-                            'criteria_name': second_info['name'],
+                            'criteria_name': clean_name,
                             'max_score': second_info['score'],
                             'description': description,
                             'is_price_criteria': False,
-                            'is_veto': False,
+                            'is_veto': is_veto,
                             'is_parent': False,
+                            'is_qualitative': is_qualitative,
+                            'is_quantitative': is_quantitative,
                         }
                     )
                 elif (
@@ -407,14 +451,25 @@ class CorrectScoringExtractor:
                     # 尝试从第二列文本中提取分数
                     second_info_alt = self._parse_item_with_score(second_col)
                     if second_info_alt:
+                        # 判断是否为否决项（名称前有"*"号）
+                        is_veto = second_info_alt['name'].startswith('*')
+                        # 清理名称，移除"*"号
+                        clean_name = second_info_alt['name'].lstrip('*').strip()
+
+                        # 判断是否为定性规则（无分数）或定量规则（有分数）
+                        is_qualitative = second_info_alt['score'] == 0
+                        is_quantitative = second_info_alt['score'] > 0
+
                         rules.append(
                             {
-                                'criteria_name': second_info_alt['name'],
+                                'criteria_name': clean_name,
                                 'max_score': second_info_alt['score'],
                                 'description': description,
                                 'is_price_criteria': False,
-                                'is_veto': False,
+                                'is_veto': is_veto,
                                 'is_parent': False,
+                                'is_qualitative': is_qualitative,
+                                'is_quantitative': is_quantitative,
                             }
                         )
                     else:
@@ -422,26 +477,68 @@ class CorrectScoringExtractor:
                         # 在这种情况下，我们尝试从第三列提取分数信息
                         score_info = self._extract_score_from_description(third_col)
                         if score_info:
+                            # 判断是否为否决项（名称前有"*"号）
+                            is_veto = (
+                                score_info['name'].startswith('*')
+                                if 'name' in score_info
+                                else False
+                            )
+                            # 清理名称，移除"*"号
+                            clean_name = (
+                                score_info['name'].lstrip('*').strip()
+                                if 'name' in score_info
+                                else self._clean_text(second_col)
+                            )
+
+                            # 判断是否为定性规则（无分数）或定量规则（有分数）
+                            is_qualitative = (
+                                score_info['score'] == 0
+                                if 'score' in score_info
+                                else True
+                            )
+                            is_quantitative = (
+                                score_info['score'] > 0
+                                if 'score' in score_info
+                                else False
+                            )
+
                             rules.append(
                                 {
-                                    'criteria_name': self._clean_text(second_col),
-                                    'max_score': score_info['score'],
-                                    'description': score_info['description'],
+                                    'criteria_name': clean_name,
+                                    'max_score': score_info['score']
+                                    if 'score' in score_info
+                                    else 0,
+                                    'description': score_info['description']
+                                    if 'description' in score_info
+                                    else '',
                                     'is_price_criteria': False,
-                                    'is_veto': False,
+                                    'is_veto': is_veto,
                                     'is_parent': False,
+                                    'is_qualitative': is_qualitative,
+                                    'is_quantitative': is_quantitative,
                                 }
                             )
                 elif first_info and not second_col and description:
                     # 第一列是项，第二列为空，但有描述（可能是子项）
+                    # 判断是否为否决项（名称前有"*"号）
+                    is_veto = first_info['name'].startswith('*')
+                    # 清理名称，移除"*"号
+                    clean_name = first_info['name'].lstrip('*').strip()
+
+                    # 判断是否为定性规则（无分数）或定量规则（有分数）
+                    is_qualitative = first_info['score'] == 0
+                    is_quantitative = first_info['score'] > 0
+
                     rules.append(
                         {
-                            'criteria_name': first_info['name'],
+                            'criteria_name': clean_name,
                             'max_score': first_info['score'],
                             'description': description,
                             'is_price_criteria': False,
-                            'is_veto': False,
+                            'is_veto': is_veto,
                             'is_parent': False,
+                            'is_qualitative': is_qualitative,
+                            'is_quantitative': is_quantitative,
                         }
                     )
                 # 特殊处理：同一行中既有父项又有子项的情况
@@ -457,9 +554,19 @@ class CorrectScoringExtractor:
                         or first_info['score'] > 10
                         or '价格' in first_info['name']
                     )
+
+                    # 判断是否为否决项（名称前有"*"号）
+                    is_veto_first = first_info['name'].startswith('*')
+                    # 清理名称，移除"*"号
+                    clean_name_first = first_info['name'].lstrip('*').strip()
+
+                    # 判断是否为定性规则（无分数）或定量规则（有分数）
+                    is_qualitative_first = first_info['score'] == 0 and not is_parent
+                    is_quantitative_first = first_info['score'] > 0 or is_parent
+
                     rules.append(
                         {
-                            'criteria_name': first_info['name'],
+                            'criteria_name': clean_name_first,
                             'max_score': first_info['score'],
                             'description': ''
                             if not is_parent
@@ -469,8 +576,10 @@ class CorrectScoringExtractor:
                                 else ''
                             ),
                             'is_price_criteria': '价格' in first_info['name'],
-                            'is_veto': False,
+                            'is_veto': is_veto_first,
                             'is_parent': is_parent,
+                            'is_qualitative': is_qualitative_first,
+                            'is_quantitative': is_quantitative_first,
                         }
                     )
 
@@ -478,14 +587,25 @@ class CorrectScoringExtractor:
                     if (
                         not is_parent or '价格' not in first_info['name']
                     ):  # 价格项特殊处理
+                        # 判断是否为否决项（名称前有"*"号）
+                        is_veto_second = second_info['name'].startswith('*')
+                        # 清理名称，移除"*"号
+                        clean_name_second = second_info['name'].lstrip('*').strip()
+
+                        # 判断是否为定性规则（无分数）或定量规则（有分数）
+                        is_qualitative_second = second_info['score'] == 0
+                        is_quantitative_second = second_info['score'] > 0
+
                         rules.append(
                             {
-                                'criteria_name': second_info['name'],
+                                'criteria_name': clean_name_second,
                                 'max_score': second_info['score'],
                                 'description': description,
                                 'is_price_criteria': False,
-                                'is_veto': False,
+                                'is_veto': is_veto_second,
                                 'is_parent': False,
+                                'is_qualitative': is_qualitative_second,
+                                'is_quantitative': is_quantitative_second,
                             }
                         )
         else:
@@ -511,45 +631,51 @@ class CorrectScoringExtractor:
                         self._parse_item_with_score(second_col) if second_col else None
                     )
 
-                    # 特别处理价格项
-                    if first_info and '价格' in first_info['name'] and second_col:
-                        # 对于价格项，保存第二列作为描述信息
-                        price_description = self._clean_description(second_col)
-                        rules.append(
-                            {
-                                'criteria_name': first_info['name'],
-                                'max_score': first_info['score'],
-                                'description': price_description,
-                                'is_price_criteria': True,
-                                'is_veto': False,
-                                'is_parent': True,
-                            }
-                        )
-                    elif first_info and not self._should_ignore_item(
-                        first_info['name']
-                    ):
-                        # 检查是否是父项（包含"部分"或分数大于10）
+                    # 处理不同的情况
+                    if first_info and not self._should_ignore_item(first_info['name']):
+                        # 第一列是父项或子项
+                        # 修复：正确识别父项，包含"部分"关键词或分数大于10或包含价格关键词的项应被视为父项
                         is_parent = (
                             '部分' in first_info['name']
                             or first_info['score'] > 10
                             or '价格' in first_info['name']
                         )
+
                         # 特殊处理：如果该行还有子项信息（第二列也有分数），则第一列更可能是父项
                         if second_info and not self._should_ignore_item(
                             second_info['name']
                         ):
                             is_parent = True
 
+                        # 对于价格项，保存第二列作为描述信息
+                        price_description = ''
+                        if '价格' in first_info['name'] and second_col:
+                            price_description = self._clean_description(second_col)
+
+                        # 判断是否为否决项（名称前有"*"号）
+                        is_veto = first_info['name'].startswith('*')
+                        # 清理名称，移除"*"号
+                        clean_name = first_info['name'].lstrip('*').strip()
+
+                        # 判断是否为定性规则（无分数）或定量规则（有分数）
+                        is_qualitative = first_info['score'] == 0 and not is_parent
+                        is_quantitative = first_info['score'] > 0 or is_parent
+
                         rules.append(
                             {
-                                'criteria_name': first_info['name'],
+                                'criteria_name': clean_name,
                                 'max_score': first_info['score'],
-                                'description': '',
+                                'description': price_description
+                                if '价格' in first_info['name']
+                                else '',
                                 'is_price_criteria': '价格' in first_info['name'],
-                                'is_veto': False,
+                                'is_veto': is_veto,
                                 'is_parent': is_parent,
+                                'is_qualitative': is_qualitative,
+                                'is_quantitative': is_quantitative,
                             }
                         )
+
                         # 如果第一列是父项，且第二列也是有效的子项，则同时添加第二列作为子项
                         if (
                             is_parent
@@ -558,107 +684,55 @@ class CorrectScoringExtractor:
                         ):
                             # 使用第三列作为描述
                             child_description = self._clean_description(third_col)
+
+                            # 判断是否为否决项（名称前有"*"号）
+                            is_veto = second_info['name'].startswith('*')
+                            # 清理名称，移除"*"号
+                            clean_name = second_info['name'].lstrip('*').strip()
+
+                            # 判断是否为定性规则（无分数）或定量规则（有分数）
+                            is_qualitative = second_info['score'] == 0
+                            is_quantitative = second_info['score'] > 0
+
                             rules.append(
                                 {
-                                    'criteria_name': second_info['name'],
+                                    'criteria_name': clean_name,
                                     'max_score': second_info['score'],
                                     'description': child_description,
                                     'is_price_criteria': False,
-                                    'is_veto': False,
+                                    'is_veto': is_veto,
                                     'is_parent': False,
+                                    'is_qualitative': is_qualitative,
+                                    'is_quantitative': is_quantitative,
                                 }
                             )
                     elif second_info and not self._should_ignore_item(
                         second_info['name']
                     ):
                         # 第二列是子项
-                        description = self._clean_description(third_col)
+                        # 判断是否为否决项（名称前有"*"号）
+                        is_veto = second_info['name'].startswith('*')
+                        # 清理名称，移除"*"号
+                        clean_name = second_info['name'].lstrip('*').strip()
+
+                        # 判断是否为定性规则（无分数）或定量规则（有分数）
+                        is_qualitative = second_info['score'] == 0
+                        is_quantitative = second_info['score'] > 0
+
                         rules.append(
                             {
-                                'criteria_name': second_info['name'],
+                                'criteria_name': clean_name,
                                 'max_score': second_info['score'],
-                                'description': description,
+                                'description': self._clean_description(third_col),
                                 'is_price_criteria': False,
-                                'is_veto': False,
+                                'is_veto': is_veto,
                                 'is_parent': False,
+                                'is_qualitative': is_qualitative,
+                                'is_quantitative': is_quantitative,
                             }
                         )
-                    elif (
-                        not first_col
-                        and second_col
-                        and not self._should_ignore_item(second_col)
-                    ):
-                        # 第一列为空，第二列是子项
-                        second_info_alt = self._parse_item_with_score(second_col)
-                        if second_info_alt:
-                            description = self._clean_description(third_col)
-                            rules.append(
-                                {
-                                    'criteria_name': second_info_alt['name'],
-                                    'max_score': second_info_alt['score'],
-                                    'description': description,
-                                    'is_price_criteria': False,
-                                    'is_veto': False,
-                                    'is_parent': False,
-                                }
-                            )
 
         return rules
-
-    def _extract_score_from_description(self, description: str) -> Dict[str, Any]:
-        """
-        从描述中提取分数信息
-
-        Args:
-            description: 描述文本
-
-        Returns:
-            Dict[str, Any]: 包含分数和清理后描述的字典
-        """
-        if not description:
-            return {}  # 返回空字典而不是None
-
-        # 清理描述
-        clean_desc = self._clean_description(description)
-
-        # 尝试从描述中提取分数
-        # 匹配模式如：(1-3分), (0-2 分), (1-2 分) 等
-        pattern = r'[(（](\d+(?:-\d+)?)[分\)\)]'
-        match = re.search(pattern, clean_desc)
-
-        if match:
-            score_text = match.group(1)
-            # 如果是范围分数，取最大值
-            if '-' in score_text:
-                score = float(score_text.split('-')[1])
-            else:
-                score = float(score_text)
-
-            # 移除分数部分的描述
-            clean_desc = re.sub(r'[(（]\d+(?:-\d+)?[分\)\)]', '', clean_desc).strip()
-
-            return {'score': score, 'description': clean_desc}
-
-        return {}  # 返回空字典而不是None
-
-    def _should_ignore_item(self, item_name: str) -> bool:
-        """
-        判断是否应该忽略某个评分项
-
-        Args:
-            item_name: 评分项名称
-
-        Returns:
-            bool: 是否应该忽略
-        """
-        # 定义应该忽略的项的关键字
-        ignore_keywords = ['投标保证金', '保证金', '没收', '废标', '否决', '无效']
-
-        for keyword in ignore_keywords:
-            if keyword in item_name:
-                return True
-
-        return False
 
     def _parse_item_with_score(self, text: str) -> Dict[str, Any]:
         """
@@ -692,19 +766,78 @@ class CorrectScoringExtractor:
             else:
                 score = float(score_text)
 
-            # 彻底清理名称
-            name = self._clean_text(name)
-
             return {'name': name, 'score': score}
 
-        return {}  # 返回空字典而不是None
+        # 如果没有匹配到括号格式，尝试其他格式
+        # 匹配格式如：商务部分 18分
+        pattern2 = r'(.+?)\s+(\d+(?:\.\d+)?)\s*分'
+        match2 = re.search(pattern2, text)
+        if match2:
+            name = match2.group(1).strip()
+            score = float(match2.group(2))
+            return {'name': name, 'score': score}
+
+        # 如果仍然没有匹配到，返回原始文本作为名称，分数为0
+        return {'name': text.strip(), 'score': 0}
+
+    def _should_ignore_item(self, item_name: str) -> bool:
+        """
+        判断是否应该忽略某个评分项
+
+        Args:
+            item_name: 评分项名称
+
+        Returns:
+            bool: 是否应该忽略
+        """
+        # 定义应该忽略的项的关键字
+        ignore_keywords = ['投标保证金', '保证金', '没收', '废标', '否决', '无效']
+
+        for keyword in ignore_keywords:
+            if keyword in item_name:
+                return True
+
+        return False
+
+    def _extract_score_from_description(self, description: str) -> Dict[str, Any]:
+        """
+        从描述中提取分数信息
+
+        Args:
+            description: 描述文本
+
+        Returns:
+            Dict[str, Any]: 分数信息{score: 分值, description: 描述}
+        """
+        if not description:
+            return {}
+
+        # 尝试从描述中提取分数
+        pattern = r'(\d+(?:\.\d+)?)\s*分'
+        match = re.search(pattern, description)
+        if match:
+            score = float(match.group(1))
+            # 移除分数部分，得到纯描述
+            clean_description = re.sub(pattern, '', description).strip()
+            clean_description = re.sub(r'\s+', ' ', clean_description)
+            # 从描述中提取名称（假设描述的第一部分是名称）
+            name_parts = (
+                clean_description.split('，')[0]
+                .split('。')[0]
+                .split(',')[0]
+                .split('.')[0]
+            )
+            name = name_parts.strip()
+            return {'name': name, 'score': score, 'description': clean_description}
+
+        return {}
 
     def _clean_text(self, text: str) -> str:
         """
-        彻底清理文本内容
+        清理文本，移除多余的空格和特殊字符
 
         Args:
-            text: 待清理的文本
+            text: 原始文本
 
         Returns:
             str: 清理后的文本
@@ -712,72 +845,20 @@ class CorrectScoringExtractor:
         if not text:
             return ''
 
-        # 替换中文标点为英文标点
-        text = re.sub(r'[，,]', ',', text)
-        text = re.sub(r'[：:]', ':', text)
-        text = re.sub(r'[；;]', ';', text)
-        text = re.sub(r'[（]', '(', text)
-        text = re.sub(r'[）]', ')', text)
-
-        # 移除所有类型的换行符
-        text = re.sub(r'[\r\n]+', ' ', text)
-
-        # 移除多余的空格和换行符，但保留单个空格
-        text = re.sub(r'\s+', ' ', text)
-
-        # 特别处理"部分"关键词前后的空格
-        text = re.sub(r'\s*部分\s*', '部分', text)
-
-        # 移除冒号后的多余空格
-        text = re.sub(r':\s+', ':', text)
-
-        # 更彻底地清理文本中的单个空格
-        # 逐个字符检查，移除单词间的多余空格
-        chars = list(text)
-        cleaned_chars = []
-        for i in range(len(chars)):
-            # 检查字符是否有效
-            if chars[i] is None:
-                continue
-
-            # 如果当前字符是空格，且前后都是中文字符或英文字符，则移除
-            if (
-                chars[i] == ' '
-                and i > 0
-                and i < len(chars) - 1
-                and chars[i - 1] is not None
-                and chars[i + 1] is not None
-                and (
-                    (chars[i - 1].isalnum() or '\u4e00' <= chars[i - 1] <= '\u9fff')
-                    and (chars[i + 1].isalnum() or '\u4e00' <= chars[i + 1] <= '\u9fff')
-                )
-            ):
-                # 检查是否是必要的空格（比如英文单词间的空格）
-                if not (
-                    chars[i - 1].isalpha()
-                    and chars[i - 1].islower()
-                    and chars[i + 1].isalpha()
-                    and chars[i + 1].islower()
-                ):
-                    continue  # 跳过这个空格
-            cleaned_chars.append(chars[i])
-
-        text = ''.join(cleaned_chars)
-
-        # 再次清理多余的空格
-        text = re.sub(r'\s+', ' ', text)
-
-        # 去除首尾空格
+        # 移除首尾空格
         text = text.strip()
+
+        # 移除多余的空格
+        text = re.sub(r'\s+', ' ', text)
 
         return text
 
     def _clean_description(self, description: str) -> str:
         """
-        清理描述内容
+        清理描述文本
 
         Args:
-            description: 待清理的描述
+            description: 原始描述
 
         Returns:
             str: 清理后的描述
@@ -785,56 +866,27 @@ class CorrectScoringExtractor:
         if not description:
             return ''
 
-        # 移除所有类型的换行符（包括Unicode换行符）
-        description = re.sub(r'[\r\n\u2029\u2028]+', ' ', description)
+        # 移除首尾空格
+        description = description.strip()
 
-        # 替换中文标点为英文标点
-        description = re.sub(r'[，,]', ',', description)
-        description = re.sub(r'[：:]', ':', description)
-        description = re.sub(r'[；;]', ';', description)
-        description = re.sub(r'[（]', '(', description)
-        description = re.sub(r'[）]', ')', description)
-
-        # 移除多余的空格，但保留单个空格
+        # 移除多余的空格
         description = re.sub(r'\s+', ' ', description)
 
-        # 更彻底地清理描述中的单个空格
-        # 逐个字符检查，移除单词间的多余空格
-        chars = list(description)
-        cleaned_chars = []
-        for i in range(len(chars)):
-            # 检查字符是否有效
-            if chars[i] is None:
-                continue
+        # 移除常见的无用描述
+        useless_patterns = [
+            r'见.*说明',
+            r'详见.*',
+            r'参见.*',
+            r'见.*表',
+            r'如.*所示',
+            r'同上',
+            r'同前',
+        ]
 
-            # 如果当前字符是空格，且前后都是中文字符或英文字符，则移除
-            if (
-                chars[i] == ' '
-                and i > 0
-                and i < len(chars) - 1
-                and chars[i - 1] is not None
-                and chars[i + 1] is not None
-                and (
-                    (chars[i - 1].isalnum() or '\u4e00' <= chars[i - 1] <= '\u9fff')
-                    and (chars[i + 1].isalnum() or '\u4e00' <= chars[i + 1] <= '\u9fff')
-                )
-            ):
-                # 检查是否是必要的空格（比如英文单词间的空格）
-                if not (
-                    chars[i - 1].isalpha()
-                    and chars[i - 1].islower()
-                    and chars[i + 1].isalpha()
-                    and chars[i + 1].islower()
-                ):
-                    continue  # 跳过这个空格
-            cleaned_chars.append(chars[i])
+        for pattern in useless_patterns:
+            description = re.sub(pattern, '', description, flags=re.IGNORECASE)
 
-        description = ''.join(cleaned_chars)
-
-        # 再次清理多余的空格
-        description = re.sub(r'\s+', ' ', description)
-
-        # 去除首尾空格
+        # 移除首尾空格
         description = description.strip()
 
         return description
@@ -883,6 +935,8 @@ class CorrectScoringExtractor:
                     'is_price_criteria': rule['is_price_criteria'],
                     'is_veto': rule['is_veto'],
                     'is_parent': True,  # 确保标记为父项
+                    'is_qualitative': rule['is_qualitative'],
+                    'is_quantitative': rule['is_quantitative'],
                     'children': [],
                 }
 
@@ -900,6 +954,8 @@ class CorrectScoringExtractor:
                         'is_price_criteria': True,
                         'is_veto': False,
                         'is_parent': False,  # 子项不应该标记为父项
+                        'is_qualitative': False,
+                        'is_quantitative': True,
                     }
                     parent_rule['children'].append(child_rule)
                     # 价格项通常没有其他子项，直接添加到结果中
@@ -921,6 +977,8 @@ class CorrectScoringExtractor:
                             'is_price_criteria': child_rule['is_price_criteria'],
                             'is_veto': child_rule['is_veto'],
                             'is_parent': False,  # 子项不应该标记为父项
+                            'is_qualitative': child_rule['is_qualitative'],
+                            'is_quantitative': child_rule['is_quantitative'],
                         }
                     )
                     # 累加子项分值
@@ -929,10 +987,13 @@ class CorrectScoringExtractor:
 
                 # 校验子项分值之和是否等于父项分值
                 parent_score = parent_rule['max_score']
-                if abs(child_scores_sum - parent_score) > 0.001:  # 允许小数精度误差
+                # 修复：允许更大的误差范围，避免浮点数精度问题
+                if abs(child_scores_sum - parent_score) > 0.1:  # 允许0.1的误差
                     self.logger.warning(
                         f"父项 '{parent_rule['criteria_name']}' 的子项分值之和 ({child_scores_sum}) 不等于父项分值 ({parent_score})"
                     )
+                    # 修复：当子项分值之和不等于父项分值时，调整父项分值为子项分值之和
+                    parent_rule['max_score'] = child_scores_sum
 
                 result.append(parent_rule)
             else:
@@ -946,6 +1007,8 @@ class CorrectScoringExtractor:
                         'is_price_criteria': rule['is_price_criteria'],
                         'is_veto': rule['is_veto'],
                         'is_parent': False,  # 确保标记为非父项
+                        'is_qualitative': rule['is_qualitative'],
+                        'is_quantitative': rule['is_quantitative'],
                         'children': [],
                     }
                 )
@@ -995,3 +1058,47 @@ class CorrectScoringExtractor:
         """
         # 默认价格公式
         return '投标报价得分＝(评标基准价/投标报价)×价格权重×100'
+
+    def _validate_scoring_rules(self, rules: List[Dict[str, Any]]) -> None:
+        """
+        验证评分规则的完整性
+
+        Args:
+            rules: 评分规则列表
+        """
+        if not rules:
+            self.logger.warning('没有提取到任何评分规则')
+            return
+
+        # 计算所有父项总分
+        parent_total_score = 0
+        child_total_score = 0
+
+        for rule in rules:
+            if rule.get('is_parent', False):
+                parent_score = rule.get('max_score', 0)
+                parent_total_score += parent_score
+
+                # 计算子项分数之和
+                children = rule.get('children', [])
+                child_scores_sum = sum(child.get('max_score', 0) for child in children)
+
+                # 验证父项分数是否等于子项分数之和
+                if abs(parent_score - child_scores_sum) > 0.1:
+                    self.logger.warning(
+                        f"父项 '{rule.get('criteria_name', 'N/A')}' 的分数({parent_score})不等于其子项分数之和({child_scores_sum})"
+                    )
+
+                # 累加子项分数
+                child_total_score += child_scores_sum
+
+        # 验证总分是否为100分
+        if abs(parent_total_score - 100) > 0.1:
+            self.logger.warning(f'所有父项总分({parent_total_score})不等于100分')
+        else:
+            self.logger.info('✓ 所有父项总分等于100分')
+
+        if abs(child_total_score - 100) > 0.1:
+            self.logger.warning(f'所有子项总分({child_total_score})不等于100分')
+        else:
+            self.logger.info('✓ 所有子项总分等于100分')

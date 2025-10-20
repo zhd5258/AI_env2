@@ -10,8 +10,9 @@
 2. **评分规则提取**：自动从招标文件中提取评分规则
 3. **投标文件分析**：对投标文件进行智能分析，提取关键信息
 4. **自动评分**：根据评分规则对投标文件进行自动评分
-5. **并行处理**：支持大文件的分块并行处理，提高处理速度
-6. **Web界面**：提供友好的Web操作界面
+5. **价格分特殊处理**：价格规则作为特殊定量规则独立处理
+6. **并行处理**：支持大文件的分块并行处理，提高处理速度
+7. **Web界面**：提供友好的Web操作界面
 
 ## 技术架构
 
@@ -77,13 +78,39 @@
 
 ### 分析管理器
 - `analysis_manager.py`：分析管理器，统一处理项目分析流程
-- `intelligent_bid_analyzer.py`：智能投标文件分析器
+- `intelligent_bid_analyzer.py`：智能投标文件分析器（排除价格规则）
 - `scoring_rules_manager.py`：评分规则管理器
 
 ### 数据提取器
 - `bidder_name_extractor.py`：投标人名称提取器
-- `price_score_calculator.py`：价格分计算器
+- `price_score_calculator.py`：价格分计算器（价格规则特殊处理）
+- `price_calculation_workflow.py`：价格计算工作流
 - `correct_scoring_extractor.py`：评分规则提取器
+
+### 规则处理模块
+- `scoring_rules_manager.py`：评分规则管理（正确标识价格规则）
+- `intelligent_bid_analyzer.py`：智能分析（排除价格规则）
+- `price_calculation_workflow.py`：价格计算工作流（专门处理价格规则）
+- `price_score_calculator.py`：价格分计算（AI计算和默认方法）
+
+## 评分规则分类处理
+
+系统将评分规则分为三类进行特殊处理：
+
+1. **价格规则**：
+   - 标识：`is_price_criteria=true`
+   - 特点：包含价格公式，独立处理
+   - 处理：由价格计算工作流专门处理，不参与普通AI分析
+
+2. **定量规则**：
+   - 标识：`is_price_criteria=false` 且 `Child_max_score>0`
+   - 特点：有具体分数，需要打分
+   - 处理：逐条AI分析，给出具体分数
+
+3. **定性规则**：
+   - 标识：`is_price_criteria=false` 且 `Child_max_score=0或null`
+   - 特点：无具体分数，判断符合/不符合
+   - 处理：组合AI分析，判断符合/不符合
 
 ## 使用说明
 
@@ -97,6 +124,7 @@
 1. 请确保已正确安装MinerU及其依赖
 2. 大文件处理可能需要较长时间，请耐心等待
 3. 系统需要足够的内存和存储空间
+4. 价格规则作为特殊规则独立处理，不与普通规则混合分析
 
 ## 许可证
 

@@ -10,6 +10,7 @@
 # Copyright (c) 2025 by 中车眉山车辆有限公司/KingFreeDom, All Rights Reserved.
 #
 import json
+import logging
 from sqlalchemy.orm import Session
 from models.database import AnalysisResult, ScoringRule
 
@@ -43,10 +44,77 @@ def get_score_for_rule(detailed_scores, rule_name):
         if not isinstance(item, dict):
             continue
 
-        # 支持两种格式：旧格式使用criteria_name，新格式使用Child_Item_Name
-        criteria_name = item.get('Child_Item_Name') or item.get('criteria_name')
+        # 支持多种格式：Child_Item_Name, criteria_name, name
+        criteria_name = (
+            item.get('Child_Item_Name') or item.get('criteria_name') or item.get('name')
+        )
+
+        # 精确匹配规则名称
         if criteria_name == rule_name:
-            return item.get('score')
+            score = item.get('score')
+            # 确保返回的是数字类型
+            if score is not None:
+                try:
+                    return float(score)
+                except (ValueError, TypeError):
+                    return 0.0
+            return 0.0
+
+        # 递归搜索子项
+        if 'children' in item and isinstance(item['children'], list):
+            child_score = get_score_for_rule(item['children'], rule_name)
+            if child_score is not None:
+                return child_score
+
+    return None
+
+
+def _find_actual_score_in_detailed_scores(detailed_scores, rule_name):
+    """
+    在详细评分中查找实际分数，支持模糊匹配
+
+    Args:
+        detailed_scores: 详细评分数据
+        rule_name: 规则名称
+
+    Returns:
+        float or None: 找到的分数，如果未找到则返回None
+    """
+    if not detailed_scores or not isinstance(detailed_scores, list):
+        return None
+
+    for item in detailed_scores:
+        if not isinstance(item, dict):
+            continue
+
+        # 支持多种字段名
+        criteria_name = (
+            item.get('Child_Item_Name')
+            or item.get('criteria_name')
+            or item.get('name', '')
+        )
+
+        # 模糊匹配：检查规则名称是否包含在criteria_name中，或相反
+        if (
+            criteria_name
+            and rule_name
+            and (rule_name in criteria_name or criteria_name in rule_name)
+        ):
+            score = item.get('score')
+            if score is not None:
+                try:
+                    return float(score)
+                except (ValueError, TypeError):
+                    continue
+
+        # 递归搜索子项
+        if 'children' in item and isinstance(item['children'], list):
+            child_score = _find_actual_score_in_detailed_scores(
+                item['children'], rule_name
+            )
+            if child_score is not None:
+                return child_score
+
     return None
 
 
@@ -69,6 +137,7 @@ def generate_summary_data(project_id: int, db: Session):
     parent_items = {}
     child_items = []
     price_rules = []
+    qualitative_rules = []  # 定性规则列表
 
     for rule in rules:
         # 分离价格评分规则
@@ -76,31 +145,52 @@ def generate_summary_data(project_id: int, db: Session):
             price_rules.append(rule)
             continue
 
-        # 识别父项和子项
+        # 分离定性规则
+        if getattr(rule, 'is_qualitative', False):
+            qualitative_rules.append(rule)
+            continue
+
+        # 修复：正确识别父项和子项
         parent_name_attr = getattr(rule, 'Parent_Item_Name', None)
         child_name_attr = getattr(rule, 'Child_Item_Name', None)
 
-        # 如果是父项（有Parent_Item_Name但Child_Item_Name为None）
-        if parent_name_attr is not None and (
-            child_name_attr is None or child_name_attr == ''
+        # 如果是父项（有Parent_Item_Name但Child_Item_Name为空）
+        if (
+            parent_name_attr is not None
+            and parent_name_attr.strip()
+            and (child_name_attr is None or not child_name_attr.strip())
         ):
-            parent_name = str(parent_name_attr) if parent_name_attr else '未知'
+            parent_name = str(parent_name_attr).strip()
             parent_items[parent_name] = {
                 'name': parent_name,
                 'max_score': rule.Parent_max_score or 0,
                 'children': [],
             }
-        # 如果是子项（Parent_Item_Name和Child_Item_Name都不为None且不为空）
+        # 如果是子项（Parent_Item_Name和Child_Item_Name都不为空）
         elif (
             parent_name_attr is not None
+            and parent_name_attr.strip()
             and child_name_attr is not None
-            and child_name_attr != ''
+            and child_name_attr.strip()
         ):
-            parent_name = str(parent_name_attr) if parent_name_attr else '未知'
+            parent_name = str(parent_name_attr).strip()
             child_items.append(
                 {
                     'parent_name': parent_name,
-                    'name': str(child_name_attr) if child_name_attr else '未知子项',
+                    'name': str(child_name_attr).strip(),
+                    'max_score': rule.Child_max_score or 0,
+                }
+            )
+        # 如果是独立项（没有Parent_Item_Name但有Child_Item_Name）
+        elif (
+            (parent_name_attr is None or not parent_name_attr.strip())
+            and child_name_attr is not None
+            and child_name_attr.strip()
+        ):
+            child_items.append(
+                {
+                    'parent_name': '其他',  # 为独立项创建一个默认父项
+                    'name': str(child_name_attr).strip(),
                     'max_score': rule.Child_max_score or 0,
                 }
             )
@@ -114,8 +204,12 @@ def generate_summary_data(project_id: int, db: Session):
             # 如果父项不存在，创建一个虚拟父项
             parent_items[parent_name] = {
                 'name': parent_name,
-                'max_score': 0,
-                'children': [child],
+                'max_score': sum(
+                    c['max_score']
+                    for c in child_items
+                    if c['parent_name'] == parent_name
+                ),
+                'children': [c for c in child_items if c['parent_name'] == parent_name],
             }
 
     # 按照父项在数据库中的出现顺序排序
@@ -126,17 +220,20 @@ def generate_summary_data(project_id: int, db: Session):
 
         parent_name = None
         # 父项记录
-        if parent_name_attr is not None and (
-            child_name_attr is None or child_name_attr == ''
+        if (
+            parent_name_attr is not None
+            and parent_name_attr.strip()
+            and (child_name_attr is None or not child_name_attr.strip())
         ):
-            parent_name = str(parent_name_attr)
+            parent_name = str(parent_name_attr).strip()
         # 子项记录
         elif (
             parent_name_attr is not None
+            and parent_name_attr.strip()
             and child_name_attr is not None
-            and child_name_attr != ''
+            and child_name_attr.strip()
         ):
-            parent_name = str(parent_name_attr)
+            parent_name = str(parent_name_attr).strip()
 
         if parent_name and len(parent_name) > 0:
             if (
@@ -175,10 +272,28 @@ def generate_summary_data(project_id: int, db: Session):
         detailed_scores = result.detailed_scores
 
         scores = []
-        # 按照父项和子项的顺序收集分数
+        # 按照父项和子项的顺序收集分数（只收集定量规则的分数）
         for parent in ordered_parents:
             for child in parent['children']:
                 score = get_score_for_rule(detailed_scores, child['name'])
+                # 如果分数为None，尝试使用0作为默认值
+                if score is None:
+                    # 检查是否是价格分
+                    is_price_score = any(
+                        price_rule.Child_Item_Name == child['name']
+                        for price_rule in price_rules
+                    )
+                    # 如果是价格分且AnalysisResult中有price_score，则使用price_score
+                    if is_price_score and hasattr(result, 'price_score'):
+                        score = result.price_score
+                    else:
+                        # 修复：对于非价格分项，尝试从detailed_scores中查找实际分数
+                        # 而不是直接设置为0
+                        score = _find_actual_score_in_detailed_scores(
+                            detailed_scores, child['name']
+                        )
+                        if score is None:
+                            score = 0
                 scores.append(score)
 
         # 直接使用数据库中存储的总分，避免重复计算
@@ -210,8 +325,8 @@ def generate_summary_data(project_id: int, db: Session):
     price_header_added = False
     for price_rule in price_rules:
         if hasattr(price_rule, 'Child_Item_Name') and price_rule.Child_Item_Name:
-            price_name = str(price_rule.Child_Item_Name)
-            if not price_header_added:
+            price_name = str(price_rule.Child_Item_Name).strip()
+            if not price_header_added and price_name:
                 header_top.append({'name': price_name, 'rowspan': 2})
                 price_header_added = True
                 break
@@ -242,6 +357,18 @@ def generate_summary_data(project_id: int, db: Session):
         'header_rows': header_rows,
         'rows': rows_data,
         'scoring_items': scoring_items,
+        # 添加定性规则信息
+        'qualitative_rules': [
+            {
+                'id': rule.id,
+                'Child_Item_Name': rule.Child_Item_Name,
+                'description': rule.description,
+                'is_veto': rule.is_veto,
+            }
+            for rule in qualitative_rules
+        ],
+        # 添加定性规则分析结果
+        'qualitative_analysis_results': {},
     }
 
     # 同时生成兼容旧格式的summary数据
@@ -264,5 +391,13 @@ def generate_summary_data(project_id: int, db: Session):
         )
 
     final_summary['summary'] = summary_data
+
+    # 为每个分析结果添加定性规则分析结果
+    for result in results:
+        # 获取定性规则分析结果
+        qualitative_results = getattr(result, 'qualitative_analysis_results', {})
+        final_summary['qualitative_analysis_results'][result.bidder_name] = (
+            qualitative_results
+        )
 
     return final_summary

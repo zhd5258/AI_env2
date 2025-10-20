@@ -34,6 +34,8 @@ except ImportError:
     logging.warning('PyMuPDF (fitz) 未安装')
 
 from .advanced_pdf_processor import MinerUProcessor
+from .minerui_OCR import MinerUOnlineProcessor
+from .batch_pdf_processor import BatchPDFProcessor
 
 # 添加一个锁来防止并行PDF转换
 pdf_conversion_lock = threading.Lock()
@@ -458,6 +460,12 @@ class PDFProcessor:
         self.mineru_processor = MinerUProcessor(
             output_dir=Path(self.output_dir), temp_dir=Path('temp/mineru')
         )
+        # 初始化在线MinerU处理器
+        self.mineru_online_processor = MinerUOnlineProcessor(output_dir=self.output_dir)
+        # 初始化批量处理器
+        self.batch_processor = BatchPDFProcessor(
+            output_dir=self.output_dir, temp_dir='temp/mineru'
+        )
 
     def _get_expected_output_paths(self):
         """
@@ -522,9 +530,27 @@ class PDFProcessor:
                     )
                     return md_file_path
                 else:
-                    # 对于投标文件，强制使用MinerU处理
+                    # 对于投标文件，优先使用批量在线MinerU处理，失败后使用本地MinerU处理
                     self.logger.info(
-                        f'投标文件 {self.file_path} 使用MinerU处理生成MD文件'
+                        f'投标文件 {self.file_path} 优先使用批量在线MinerU处理生成MD文件'
+                    )
+
+                    # 尝试批量在线OCR处理
+                    md_files = self.batch_processor.process_batch_files(
+                        [self.file_path], use_online=True
+                    )
+
+                    if md_files and len(md_files) > 0:
+                        md_file_path = md_files[0]
+                        if os.path.exists(md_file_path):
+                            self.logger.info(
+                                f'投标文件在线处理完成，生成的MD文件路径: {md_file_path}'
+                            )
+                            return md_file_path
+
+                    # 在线处理失败，使用本地MinerU处理
+                    self.logger.warning(
+                        f'投标文件在线处理失败，回退到本地MinerU处理: {self.file_path}'
                     )
                     md_file_path = self.mineru_processor.process_with_mineru(
                         self.file_path,
@@ -534,7 +560,7 @@ class PDFProcessor:
                         'ch',  # language
                     )
                     self.logger.info(
-                        f'投标文件处理完成，生成的MD文件路径: {md_file_path}'
+                        f'投标文件本地处理完成，生成的MD文件路径: {md_file_path}'
                     )
 
                     # 删除质量评估调用，确保即使质量不达标也参与价格分计算
@@ -554,6 +580,27 @@ class PDFProcessor:
         """
         # 直接调用PyMuPDF处理方法生成MD文件
         return self._process_with_pymupdf()
+
+    def _process_with_online_mineru(self) -> str:
+        """
+        使用在线MinerU处理PDF并生成MD文件
+
+        Returns:
+            str: 生成的MD文件路径
+        """
+        try:
+            # 使用在线MinerU处理器处理单个文件
+            md_files = self.mineru_online_processor.process_files([self.file_path])
+
+            if md_files and len(md_files) > 0:
+                # 返回第一个（也是唯一一个）生成的MD文件路径
+                return md_files[0]
+            else:
+                self.logger.warning(f'在线MinerU处理未生成MD文件: {self.file_path}')
+                return ''
+        except Exception as e:
+            self.logger.error(f'使用在线MinerU处理PDF时出错: {e}')
+            return ''
 
     def _process_with_pymupdf(self) -> str:
         """

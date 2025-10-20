@@ -54,7 +54,7 @@ class ScoringRulesManager:
                 is_price_rule = bool(rule.get('is_price_criteria', False))
 
                 # 检查是否有有效的子项
-                children = rule.get('children', [])
+                children = rule.get('children') or []
                 has_valid_children = any(
                     child.get('criteria_name')
                     and str(child.get('criteria_name')).strip()
@@ -74,6 +74,18 @@ class ScoringRulesManager:
                 else:
                     self.logger.warning(f'过滤掉无效的评分规则: {rule}')
 
+            # 修复：记录将要保存的规则信息
+            self.logger.info(f'准备保存 {len(valid_rules)} 条有效评分规则')
+            for i, rule in enumerate(valid_rules):
+                self.logger.info(
+                    f'规则 {i + 1}: {rule["criteria_name"]}, 分数: {rule["max_score"]}, 是否价格规则: {rule["is_price_criteria"]}'
+                )
+                if rule.get('children'):
+                    for j, child in enumerate(rule['children']):
+                        self.logger.info(
+                            f'  子项 {j + 1}: {child["criteria_name"]}, 分数: {child["max_score"]}'
+                        )
+
             def save_rule_recursive(rule_data, project_id, parent_name=None):
                 """递归保存评分规则（父项填 Parent_Item_Name，子项填 Child_Item_Name）"""
                 # 再次检查规则数据是否有效
@@ -81,6 +93,13 @@ class ScoringRulesManager:
                 description = rule_data.get('description', '')
                 is_price = bool(rule_data.get('is_price_criteria', False))
                 children = rule_data.get('children') or []
+
+                # 获取定性规则和定量规则标识
+                is_qualitative = bool(rule_data.get('is_qualitative', False))
+                is_quantitative = bool(rule_data.get('is_quantitative', False))
+
+                # 获取否决项标识
+                is_veto = bool(rule_data.get('is_veto', False))
 
                 # 如果规则名称和描述都为空且不是价格规则，跳过保存
                 if (
@@ -100,6 +119,9 @@ class ScoringRulesManager:
                         Parent_max_score=int(rule_data.get('max_score') or 0),
                         description=str(rule_data.get('description') or ''),
                         is_price_criteria=is_price,
+                        is_qualitative=is_qualitative,
+                        is_quantitative=is_quantitative,
+                        is_veto=is_veto,
                     )
                     if is_price:
                         db_rule.price_formula = str(
@@ -119,6 +141,10 @@ class ScoringRulesManager:
                     if self.db:
                         self.db.add(db_rule)
                         self.db.flush()
+                        # 修复：记录保存的父项规则
+                        self.logger.info(
+                            f'保存父项规则: {db_rule.Parent_Item_Name}, 分数: {db_rule.Parent_max_score}'
+                        )
 
                     # 特殊处理价格规则：不需要为价格规则创建额外的子项规则
                     # 因为价格规则的父项和子项是同一个规则
@@ -146,10 +172,17 @@ class ScoringRulesManager:
                         Child_max_score=int(rule_data.get('max_score') or 0),
                         description=str(rule_data.get('description') or ''),
                         is_price_criteria=False,
+                        is_qualitative=is_qualitative,
+                        is_quantitative=is_quantitative,
+                        is_veto=is_veto,
                     )
                     if self.db:
                         self.db.add(db_rule)
                         self.db.flush()
+                        # 修复：记录保存的子项规则
+                        self.logger.info(
+                            f'保存子项规则: {db_rule.Child_Item_Name}, 分数: {db_rule.Child_max_score}, 父项: {db_rule.Parent_Item_Name}'
+                        )
 
             for rule_data in valid_rules:
                 save_rule_recursive(rule_data, project_id)
@@ -213,5 +246,5 @@ class ScoringRulesManager:
 
             return valid_rules
         except Exception as e:
-            self.logger.error(f'获取评分规则时出错: {e}', exc_info=True)
+            self.logger.error(f'获取评分规则时出错: {e}')
             return []

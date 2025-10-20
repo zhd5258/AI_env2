@@ -1,14 +1,6 @@
 #!/usr/bin/env python
 # -*- coding:utf-8 -*-
-#
-# 作者           : KingFreeDom
-# 创建时间         : 2025-10-03 14:14:03
-# 最近一次编辑者      : KingFreeDom
-# 最近一次编辑时间     : 2025-10-12 13:53:42
-# 文件相对于项目的路径   : \AI_ENV2\routes\config_routes.py
-#
-# Copyright (c) 2025 by 中车眉山车辆有限公司/KingFreeDom, All Rights Reserved.
-#
+
 
 from flask import Blueprint, request, jsonify
 import logging
@@ -32,14 +24,17 @@ RUNTIME_CONFIG = load_config()
 # OCR配置相关变量
 OCR_CONFIG_FILE = 'ocr_config.json'
 DEFAULT_OCR_CONFIG = {
-    'ocr_engine': 'smart',
+    'ocr_engine': 'mineru_online',
     'dpi': 300,
     'max_side': 1024,
     'lang': 'ch',
-    'use_gpu': False,
+    'use_gpu': True,
     'det_model_dir': None,
     'rec_model_dir': None,
     'cls_model_dir': None,
+    'mineru_api_token': 'eyJ0eXBlIjoiSldUIiwiYWxnIjoiSFM1MTIifQ.eyJqdGkiOiI2MzIwMDAzMyIsInJvbCI6IlJPTEVfUkVHSVNURVIiLCJpc3MiOiJPcGVuWExhYiIsImlhdCI6MTc2MDg0MDM2OSwiY2xpZW50SWQiOiJsa3pkeDU3bnZ5MjJqa3BxOXgydyIsInBob25lIjoiIiwib3BlbklkIjpudWxsLCJ1dWlkIjoiMzJjZjlkMWQtMjIzMi00NzAwLWI1YzItOTAwYTU0ZDViNjk1IiwiZW1haWwiOiJ6aGQ1MjU4QDE2My5jb20iLCJleHAiOjE3NjIwNDk5Njl9.sdAaT6nt2oyEIaqGaM-Vuj7rBkJrwOX-YbpXtETopxx8uY86mC49s4MTM4kc7y3jgUuN08pcc6OUBxjNBQe5lg',
+    'mineru_api_url': 'https://mineru.net/api/v4',
+    'fallback_to_local': True,
 }
 
 
@@ -272,6 +267,8 @@ def update_ocr_config():
             'optimized',
             'v3_2',
             '3_2_final',
+            'mineru_online',
+            'mineru_local',
         ]
 
         if data.get('ocr_engine') not in valid_engines:

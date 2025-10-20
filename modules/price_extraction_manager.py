@@ -177,13 +177,88 @@ class PriceExtractionManager:
             # 过滤掉明显不合理的低价（如小于1000元的价格）
             filtered_prices = [p for p in prices if p['value'] >= 1000]
 
+            # 对价格进行置信度评估，过滤明显不合理的投标总价
+            validated_prices = []
+            for price_info in filtered_prices:
+                if self._is_price_reasonable(price_info['value'], pages):
+                    validated_prices.append(price_info)
+                else:
+                    self.logger.warning(
+                        f'检测到价格 {price_info["value"]} 可能不合理，已过滤'
+                    )
+
             self.logger.info(
-                f'从{len(pages)}页内容中提取到{len(filtered_prices)}个有效价格'
+                f'从{len(pages)}页内容中提取到{len(validated_prices)}个有效价格'
             )
-            return filtered_prices
+            return validated_prices
         except Exception as e:
             self.logger.error(f'提取价格时出错: {e}')
             return []
+
+    def _is_price_reasonable(self, price: float, pages: List[str]) -> bool:
+        """
+        评估价格是否合理
+
+        Args:
+            price: 价格值
+            pages: PDF页面文本列表
+
+        Returns:
+            bool: 价格是否合理
+        """
+        # 基本范围检查
+        if price < 1000:  # 小于1000元的价格不太可能是投标总价
+            self.logger.warning(f'价格 {price} 小于1000元，可能不合理')
+            return False
+        if price > 10000000000:  # 大于100亿的价格可能过大
+            self.logger.warning(f'价格 {price} 大于100亿，可能不合理')
+            return False
+
+        # 获取所有页面文本
+        full_text = ' '.join(pages)
+
+        # 查找投标一览表关键词
+        bid_summary_keywords = [
+            '投标一览表',
+            '开标一览表',
+            '价格一览表',
+            '投标报价一览表',
+            '报价一览表',
+            '投标文件一览表',
+            '投标价格汇总表',
+            '投标汇总表',
+        ]
+
+        # 查找价格在文本中的位置
+        price_str = str(price)
+        price_positions = []
+        start = 0
+        while True:
+            pos = full_text.find(price_str, start)
+            if pos == -1:
+                break
+            price_positions.append(pos)
+            start = pos + 1
+
+        # 检查每个价格位置附近是否有投标一览表关键词
+        for pos in price_positions:
+            # 检查位置前后一定范围内的文本
+            start_pos = max(0, pos - 500)  # 前500个字符
+            end_pos = min(len(full_text), pos + 500)  # 后500个字符
+            context = full_text[start_pos:end_pos]
+
+            # 检查上下文中是否包含投标一览表关键词
+            if any(keyword in context for keyword in bid_summary_keywords):
+                # 检查上下文中是否包含排除关键词（如业绩、合同等）
+                exclude_keywords = ['业绩', '合同', '注册资本', '年营业额', '净资产']
+                if not any(
+                    exclude_keyword in context for exclude_keyword in exclude_keywords
+                ):
+                    self.logger.info(f'价格 {price} 出现在投标一览表附近，合理')
+                    return True
+
+        self.logger.warning(f'价格 {price} 未出现在投标一览表附近，可能不合理')
+        return False
 
     def select_best_price(
         self, prices: List[Dict[str, Any]], pages: List[str]

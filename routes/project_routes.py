@@ -484,3 +484,28 @@ def get_project_dynamic_summary(project_id):
     except Exception as e:
         logging.error(f'生成项目动态汇总时出错: {e}')
         return jsonify({'error': f'生成汇总失败: {str(e)}'}), 500
+
+
+@router.route('/projects/<int:project_id>/qualitative-summary', methods=['GET'])
+def get_project_qualitative_summary(project_id):
+    """获取项目定性规则符合性审查表数据"""
+    try:
+        with get_db() as db:
+            from modules.summary_generator import generate_summary_data
+
+            summary_data = generate_summary_data(project_id, db)
+            if not summary_data:
+                return jsonify({'error': '无法生成汇总数据'}), 500
+
+            # 添加项目信息到返回数据
+            project = (
+                db.query(TenderProject).filter(TenderProject.id == project_id).first()
+            )
+            if project:
+                summary_data['project_id'] = project_id
+                summary_data['project_name'] = project.name
+
+            return jsonify(summary_data)
+    except Exception as e:
+        logging.error(f'生成项目定性规则汇总时出错: {e}')
+        return jsonify({'error': f'生成定性规则汇总失败: {str(e)}'}), 500

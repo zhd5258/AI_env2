@@ -225,9 +225,17 @@ class UnifiedExtractor:
             # 使用价格提取管理器提取价格（仅处理PDF内容，不重复处理MD文件）
             pages = [content]  # 将内容包装成页面列表格式
             self.logger.info('使用价格提取管理器提取价格')
-            price = self.price_manager.extract_and_select_price(pages)
 
-            if price is not None:
+            # 使用增强的价格提取器提取价格
+            from modules.enhanced_price_extractor import EnhancedPriceExtractor
+
+            extractor = EnhancedPriceExtractor()
+            candidate = extractor.extract_bid_price(
+                pdf_path=file_path, pages_text=pages
+            )
+
+            if candidate:
+                price = candidate.value
                 self.logger.info(f'从PDF内容提取到价格: {price}')
                 return float(price)
             else:

@@ -51,6 +51,7 @@ coverage.xml
 .pytest_cache/
 cover/
 test/
+temp/
 # Translations
 *.mo
 *.pot
@@ -209,3 +210,11 @@ MinerU_API_token.txt
 project_configs/
 db/data.db
 logs/
+
+
+# docs
+*.pdf
+*.md
+*.json
+*.jpg
+*.png

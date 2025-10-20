@@ -4,7 +4,7 @@
 # 作者           : KingFreeDom
 # 创建时间         : 2025-09-26 18:46:24
 # 最近一次编辑者      : KingFreeDom
-# 最近一次编辑时间     : 2025-10-08 14:27:04
+# 最近一次编辑时间     : 2025-10-20 06:36:49
 # 文件相对于项目的路径   : \AI_ENV2\modules\analysis_manager.py
 #
 # Copyright (c) 2025 by 中车眉山车辆有限公司/KingFreeDom, All Rights Reserved.
@@ -25,6 +25,7 @@ import os
 import threading
 import glob
 import datetime
+import json
 
 from modules.workflow_status import (
     WorkflowStatus,
@@ -40,6 +41,7 @@ from modules.scoring_rules_manager import ScoringRulesManager
 from modules.price_score_calculator import PriceScoreCalculator
 from modules.intelligent_bid_analyzer import IntelligentBidAnalyzer
 from modules.runtime_config import load_config, get_bool
+from modules.batch_pdf_processor import BatchPDFProcessor
 
 # 禁止并行处理，移除线程池
 # executor = ThreadPoolExecutor(max_workers=4)
@@ -128,6 +130,17 @@ class AnalysisManager:
             scoring_rules = extractor.extract_scoring_rules()
 
             if scoring_rules:
+                # 检查是否至少有一个定量规则
+                if not any(
+                    child.get('max_score', 0) > 0
+                    for rule in scoring_rules
+                    for child in rule.get('children', [rule])
+                ):
+                    self.logger.error(
+                        '评分规则提取失败：未找到任何有分值的评分项。请检查招标文件中的评分表格。'
+                    )
+                    return False
+
                 # 使用统一的评分规则管理器保存评分规则
                 rules_manager = ScoringRulesManager(db_session=self.db)
                 save_result = rules_manager.save_scoring_rules(
@@ -481,17 +494,25 @@ class AnalysisManager:
                         #         float(analysis_result.get('price_score', 0)),
                         #     )
                         # 价格分将在后续计算，此处不再强制设置为0
-                        extracted_price = analysis_result.get('extracted_price')
-                        if extracted_price is not None:
-                            setattr(
-                                result_record, 'extracted_price', float(extracted_price)
-                            )
-                        else:
-                            setattr(result_record, 'extracted_price', None)
+                        # 移除在非价格项分析阶段对extracted_price的错误处理
+                        # 处理 detailed_scores 数据格式
+                        detailed_scores_data = analysis_result.get(
+                            'detailed_scores', []
+                        )
+                        # 确保detailed_scores是JSON可序列化的格式
+                        if isinstance(detailed_scores_data, list):
+                            # 验证列表中的每个元素都是字典
+                            validated_scores = []
+                            for item in detailed_scores_data:
+                                if isinstance(item, dict):
+                                    validated_scores.append(item)
+                            detailed_scores_data = validated_scores
+
+                        # 将detailed_scores转换为JSON字符串存储
                         setattr(
                             result_record,
                             'detailed_scores',
-                            analysis_result.get('detailed_scores', []),
+                            detailed_scores_data,
                         )
                         setattr(
                             result_record,
@@ -506,7 +527,7 @@ class AnalysisManager:
                         setattr(
                             result_record,
                             'original_scores',
-                            analysis_result.get('detailed_scores', {}),
+                            detailed_scores_data,
                         )
                         setattr(
                             result_record,
@@ -534,6 +555,10 @@ class AnalysisManager:
                         self.logger.info(
                             f'成功保存分析结果到数据库: {bid_document.bidder_name}'
                         )
+                        # 记录保存的详细评分信息
+                        self.logger.info(
+                            f'保存的详细评分: {json.dumps(detailed_scores_data, ensure_ascii=False)}'
+                        )
                     except Exception as e:
                         self.logger.error(f'保存分析结果到数据库时出错: {e}')
                         db.rollback()
@@ -545,6 +570,20 @@ class AnalysisManager:
                             'other_scores_total', 0
                         )
 
+                        # 处理 detailed_scores 数据格式
+                        detailed_scores_data = analysis_result.get(
+                            'detailed_scores', []
+                        )
+                        # 确保detailed_scores是JSON可序列化的格式
+                        if isinstance(detailed_scores_data, list):
+                            # 验证列表中的每个元素都是字典
+                            validated_scores = []
+                            for item in detailed_scores_data:
+                                if isinstance(item, dict):
+                                    validated_scores.append(item)
+                            detailed_scores_data = validated_scores
+
+                        # 将detailed_scores转换为JSON字符串存储
                         new_result_record = AnalysisResult(
                             project_id=project_id,
                             bid_document_id=bid_document_id,
@@ -552,13 +591,13 @@ class AnalysisManager:
                             total_score=other_scores_total,  # 初始总分设为非价格项的总分
                             # 不再设置price_score，因为价格分将在价格计算工作流中计算
                             price_score=0.0,  # 价格分将在后续计算
-                            extracted_price=analysis_result.get('extracted_price'),
-                            detailed_scores=analysis_result.get('detailed_scores', []),
+                            extracted_price=0.0,  # 设置默认值以满足数据库非空约束
+                            detailed_scores=detailed_scores_data,
                             analysis_summary=str(
                                 analysis_result.get('analysis_summary', '')
                             ),
                             ai_model=str(analysis_result.get('ai_model', '')),
-                            original_scores=analysis_result.get('detailed_scores', {}),
+                            original_scores=detailed_scores_data,
                             last_modified_at=datetime.datetime.now(),
                             last_modified_by='system',
                             dynamic_scores={},
@@ -567,6 +606,10 @@ class AnalysisManager:
                         db.commit()
                         self.logger.info(
                             f'成功创建新的分析结果记录: {bid_document.bidder_name}'
+                        )
+                        # 记录保存的详细评分信息
+                        self.logger.info(
+                            f'保存的详细评分: {json.dumps(detailed_scores_data, ensure_ascii=False)}'
                         )
                     except Exception as e:
                         self.logger.error(f'创建新的分析结果记录时出错: {e}')
@@ -652,7 +695,7 @@ class AnalysisManager:
         try:
             # 加载运行时配置
             runtime_config = load_config()
-            auto_delete = get_bool(runtime_config, 'auto_delete_md_files', False)
+            auto_delete = get_bool('auto_delete_md_files', False)
 
             # 如果没有启用自动删除，则直接返回
             if not auto_delete:
@@ -752,20 +795,71 @@ class AnalysisManager:
 
         # 步骤1: 初始化状态
         self.logger.info(f'项目 {project_id}: 初始化分析状态...')
-        project.status = 'analyzing'
-        bid_documents = (
-            self.db.query(BidDocument)
-            .filter(BidDocument.project_id == project_id)
-            .all()
-        )
-        for bid_doc in bid_documents:
-            bid_doc.processing_status = 'processing'
-        self.db.commit()
+        if self.db is not None:
+            project.status = 'analyzing'
+            bid_documents = (
+                self.db.query(BidDocument)
+                .filter(BidDocument.project_id == project_id)
+                .all()
+            )
+            for bid_doc in bid_documents:
+                bid_doc.processing_status = 'processing'
+            self.db.commit()
         self.logger.info(
             f'项目 {project_id}: 状态已更新为 "analyzing"，所有投标文件状态已更新为 "processing"。'
         )
 
-        # 步骤2: 为每个投标文件创建并执行分析任务
+        # 检查是否需要跳过OCR处理
+        # 如果所有投标文件对应的MD文件都已存在，则跳过OCR处理
+        skip_ocr = True
+        output_dir = 'output'
+        for bid_info in bid_files_info:
+            bid_file_path = bid_info['bid_file_path']
+            # 获取预期的MD文件名（与PDF文件同名，但扩展名为.md）
+            md_filename = os.path.splitext(os.path.basename(bid_file_path))[0] + '.md'
+            md_file_path = os.path.join(output_dir, md_filename)
+
+            # 如果任何一个MD文件不存在，则需要进行OCR处理
+            if not os.path.exists(md_file_path):
+                skip_ocr = False
+                break
+
+        if skip_ocr:
+            self.logger.info(
+                f'项目 {project_id}: 所有投标文件的MD文件已存在，跳过OCR处理'
+            )
+        else:
+            # 步骤2: 批量处理所有投标文件的PDF转换
+            self.logger.info(f'项目 {project_id}: 开始批量处理所有投标文件的PDF转换...')
+
+            # 收集所有需要处理的投标文件路径
+            bid_file_paths = [bid_info['bid_file_path'] for bid_info in bid_files_info]
+
+            # 使用批量处理器处理所有投标文件
+            batch_processor = BatchPDFProcessor()
+            processed_md_files, status_info = batch_processor.process_batch_files(
+                bid_file_paths, use_online=True
+            )
+
+            # 检查处理结果
+            if status_info['status'] == 'success':
+                self.logger.info(
+                    f'项目 {project_id}: 批量PDF转换完成，成功处理 {len(processed_md_files)} 个文件'
+                )
+            elif status_info['status'] == 'fallback':
+                self.logger.warning(
+                    f'项目 {project_id}: 批量PDF转换使用回退方案完成，处理 {len(processed_md_files)} 个文件'
+                )
+            else:
+                self.logger.error(
+                    f'项目 {project_id}: 批量PDF转换失败，状态: {status_info["message"]}'
+                )
+                if self.db is not None:
+                    project.status = 'error'
+                    self.db.commit()
+                return
+
+        # 步骤3: 为每个投标文件创建并执行分析任务
         self.logger.info(f'项目 {project_id}: 开始执行所有投标文件的非价格项分析...')
         for bid_info in bid_files_info:
             try:
@@ -787,8 +881,9 @@ class AnalysisManager:
             self.logger.error(
                 f'项目 {project_id}: 非价格项分析步骤未全部成功完成，无法进行价格计算。'
             )
-            project.status = 'error'
-            self.db.commit()
+            if self.db is not None:
+                project.status = 'error'
+                self.db.commit()
             return
 
         # 步骤4: 所有分析完成后，执行价格计算和总分合成工作流
@@ -797,17 +892,27 @@ class AnalysisManager:
         )
         from modules.price_calculation_workflow import PriceCalculationWorkflow
 
-        price_workflow = PriceCalculationWorkflow(db_session=self.db)
-        success = price_workflow.execute_workflow(project_id)
+        if self.db is not None:
+            price_workflow = PriceCalculationWorkflow(db_session=self.db)
+            success = price_workflow.execute_workflow(project_id)
 
-        if success:
-            self.logger.info(f'项目 {project_id}: 价格计算与总分合成工作流执行成功。')
-            # 最终更新项目状态
-            self._update_project_status_when_all_completed(project_id)
+            if success:
+                self.logger.info(
+                    f'项目 {project_id}: 价格计算与总分合成工作流执行成功。'
+                )
+                # 最终更新项目状态
+                self._update_project_status_when_all_completed(project_id)
+            else:
+                self.logger.error(
+                    f'项目 {project_id}: 价格计算与总分合成工作流执行失败。'
+                )
+                project.status = 'error'
+                self.db.commit()
         else:
-            self.logger.error(f'项目 {project_id}: 价格计算与总分合成工作流执行失败。')
-            project.status = 'error'
-            self.db.commit()
+            self.logger.error(
+                f'项目 {project_id}: 数据库会话无效，无法执行价格计算工作流。'
+            )
+            return
 
         # 步骤5: 清理临时文件
         self._cleanup_md_files(project_id)
@@ -931,27 +1036,28 @@ class AnalysisManager:
                     valid_results_count += 1
 
             self.logger.info(
-                f'项目 {project_id} 价格提取检查完成: {valid_results_count}/{len(analysis_results)} 个投标人价格提取成功'
+                f'项目 {project_id} 价格提取检查完成: 有效结果数 {valid_results_count}/{len(analysis_results)}'
             )
 
-            return all_prices_extracted and valid_results_count == len(analysis_results)
+            # 如果所有结果都有效，则返回True
+            return valid_results_count == len(analysis_results)
 
         except Exception as e:
             self.logger.error(f'检查价格提取状态时出错: {e}')
             return False
 
-    def _check_all_analysis_completed(self, project_id: int):
+    def _check_all_analysis_completed(self, project_id: int) -> bool:
         """
-        检查项目中所有分析任务是否都已完成
+        检查项目中所有投标文件的分析是否都已完成
 
         Args:
             project_id: 项目ID
 
         Returns:
-            bool: 是否所有分析任务都已完成
+            bool: 是否所有分析都已完成
         """
         try:
-            self.logger.info(f'检查项目 {project_id} 的所有分析任务完成状态')
+            self.logger.info(f'检查项目 {project_id} 的分析完成状态')
 
             # 获取项目下的所有投标文件
             bid_documents = []
@@ -967,81 +1073,83 @@ class AnalysisManager:
                 return False
 
             # 检查每个投标文件的分析状态
-            all_analysis_completed = True
+            all_completed = True
             completed_count = 0
 
-            for bid_doc in bid_documents:
-                bidder_name = bid_doc.bidder_name or f'未知投标人_{bid_doc.id}'
-                processing_status = bid_doc.processing_status
+            for doc in bid_documents:
+                bidder_name = doc.bidder_name or f'未知投标人_{doc.id}'
+                processing_status = doc.processing_status
 
                 self.logger.info(
-                    f'投标人 [{bidder_name}] 处理状态: {processing_status}'
+                    f'投标人 [{bidder_name}] 分析状态: {processing_status}'
                 )
 
-                # 检查处理状态是否为completed
-                if processing_status != 'completed':
-                    self.logger.warning(
-                        f'投标人 [{bidder_name}] 的分析任务未完成，当前状态为 {processing_status}'
-                    )
-                    all_analysis_completed = False
-                else:
+                # 检查状态是否为完成
+                if processing_status == 'completed':
                     completed_count += 1
+                elif processing_status == 'error':
+                    self.logger.warning(
+                        f'投标人 [{bidder_name}] 分析出错，状态: {processing_status}'
+                    )
+                    all_completed = False
+                else:
+                    self.logger.info(
+                        f'投标人 [{bidder_name}] 分析未完成，状态: {processing_status}'
+                    )
+                    all_completed = False
 
             self.logger.info(
-                f'项目 {project_id} 分析任务检查完成: {completed_count}/{len(bid_documents)} 个投标文件分析完成'
+                f'项目 {project_id} 分析完成检查: {completed_count}/{len(bid_documents)} 完成'
             )
 
-            return all_analysis_completed and completed_count == len(bid_documents)
+            return all_completed
 
         except Exception as e:
-            self.logger.error(f'检查分析任务完成状态时出错: {e}')
+            self.logger.error(f'检查分析完成状态时出错: {e}')
             return False
 
     def _update_project_status_when_all_completed(self, project_id: int):
         """
-        当所有分析任务完成时更新项目状态
+        当所有分析任务都完成时更新项目状态
 
         Args:
             project_id: 项目ID
         """
         try:
-            from models.database import TenderProject
+            self.logger.info(f'检查项目 {project_id} 是否所有任务都已完成')
 
-            # 检查所有分析任务是否完成
+            if not self.db:
+                self.logger.error('数据库会话未提供')
+                return
+
+            # 检查是否所有分析都已完成
             if not self._check_all_analysis_completed(project_id):
-                self.logger.warning(
-                    f'项目 {project_id} 的分析任务尚未全部完成，暂不更新项目状态'
-                )
-                return False
+                self.logger.info(f'项目 {project_id} 还有未完成的分析任务')
+                return
 
-            # 不再检查价格提取状态，因为价格分计算应该在价格计算工作流中完成
-            # 项目状态更新应该只依赖于分析任务的完成状态
+            # 获取项目信息
+            project = (
+                self.db.query(TenderProject)
+                .filter(TenderProject.id == project_id)
+                .first()
+            )
+            if not project:
+                self.logger.error(f'项目 {project_id} 不存在')
+                return
 
-            # 所有任务都完成，更新项目状态
-            project = None
-            if self.db is not None:
-                project = (
-                    self.db.query(TenderProject)
-                    .filter(TenderProject.id == project_id)
-                    .first()
-                )
+            # 更新项目状态为completed
+            old_status = project.status
+            project.status = 'completed'
+            project.analysis_end_time = datetime.datetime.now()
 
-            if project:
-                setattr(project, 'status', 'completed')
-                project.analysis_end_time = datetime.datetime.now()
-                if self.db is not None:
-                    self.db.commit()
-                self.logger.info(f'项目 {project_id} 状态已更新为 completed')
-                return True
-            else:
-                self.logger.error(f'未找到项目 {project_id}')
-                return False
+            # 提交更改
+            self.db.commit()
+
+            self.logger.info(
+                f'项目 {project_id} 状态已从 "{old_status}" 更新为 "completed"'
+            )
 
         except Exception as e:
             self.logger.error(f'更新项目状态时出错: {e}')
-            if self.db is not None:
-                try:
-                    self.db.rollback()
-                except Exception as rollback_e:
-                    self.logger.error(f'数据库回滚时出错: {rollback_e}')
-            return False
+            if self.db:
+                self.db.rollback()

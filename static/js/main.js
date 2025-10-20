@@ -2,6 +2,7 @@
 let currentProjectId = null;
 let pollingActive = false;
 let progressInterval = null;
+let lastProgressData = null; // 保存最后一次进度数据
 
 // 轮询分析进度
 async function pollAnalysisStatus (projectId) {
@@ -22,6 +23,9 @@ async function pollAnalysisStatus (projectId) {
 
         const data = await response.json();
         console.log('Polling data:', data);
+
+        // 保存进度数据
+        lastProgressData = data;
 
         // 更新进度显示
         updateProgress(data);
@@ -109,12 +113,85 @@ function startProgressPolling () {
     const progressSection = document.getElementById('progressSection');
     if (progressSection && progressSection.style.display !== 'none' && currentProjectId) {
         pollingActive = true;
-        // 调用index.html中的函数，但要确保不是递归调用
-        if (typeof window.startProgressPolling === 'function' && window.startProgressPolling !== startProgressPolling) {
-            window.startProgressPolling();
+        // 使用定时器而不是递归调用
+        if (progressInterval) {
+            clearInterval(progressInterval);
         }
+        progressInterval = setInterval(() => {
+            if (currentProjectId && shouldContinuePolling()) {
+                fetch(`/api/projects/${currentProjectId}/progress`)
+                    .then(response => {
+                        if (!response.ok) {
+                            throw new Error(`HTTP error! status: ${response.status}`);
+                        }
+                        return response.json();
+                    })
+                    .then(data => {
+                        console.log('Polling data:', data);
+                        lastProgressData = data;
+                        updateProgress(data);
+
+                        // 检查项目是否完成
+                        if (data.project_status === 'completed' || data.project_status === 'completed_with_errors' ||
+                            data.processing_status === 'completed' || data.processing_status === 'completed_with_errors') {
+                            // 停止轮询
+                            stopProgressPolling();
+
+                            // 显示结果
+                            const progressTextAfter = document.getElementById('progressText');
+                            if (progressTextAfter) {
+                                progressTextAfter.innerHTML = '处理完成，正在获取结果...';
+                            }
+
+                            setTimeout(async function () {
+                                try {
+                                    const summaryResponse = await fetch(`/api/projects/${currentProjectId}/dynamic-summary`);
+                                    if (summaryResponse.ok) {
+                                        const summaryData = await summaryResponse.json();
+                                        displaySummary(summaryData);
+                                    } else {
+                                        const resultResponse = await fetch(`/api/projects/${currentProjectId}/results`);
+                                        const resultData = await resultResponse.json();
+                                        displayResults(resultData);
+                                    }
+                                } catch (error) {
+                                    console.error('获取结果失败:', error);
+                                }
+                            }, 300);
+                        }
+                    })
+                    .catch(error => {
+                        console.error('轮询进度时出错:', error);
+                    });
+            } else {
+                stopProgressPolling();
+            }
+        }, 2000); // 每2秒轮询一次
     }
 }
+
+// 页面可见性变化处理
+document.addEventListener('visibilitychange', function () {
+    if (document.visibilityState === 'visible') {
+        // 页面变为可见时，如果在进度页面且有项目ID，则恢复轮询
+        const progressSection = document.getElementById('progressSection');
+        if (progressSection && progressSection.style.display !== 'none' && currentProjectId) {
+            startProgressPolling();
+        }
+    } else {
+        // 页面隐藏时停止轮询
+        stopProgressPolling();
+    }
+});
+
+// 页面加载完成后检查是否需要启动轮询
+document.addEventListener('DOMContentLoaded', function () {
+    // 如果页面加载时进度界面是显示的，则启动轮询
+    const progressSection = document.getElementById('progressSection');
+    if (progressSection && progressSection.style.display !== 'none' && currentProjectId) {
+        startProgressPolling();
+    }
+});
 
 // 更新进度显示 - 实现每个投标文件的动态进展
 function updateProgress (data) {
@@ -483,3 +560,11 @@ function displayResults (results) {
         resultArea.style.display = 'block';
     }
 }
+
+// 导出函数供其他脚本使用
+window.currentProjectId = currentProjectId;
+window.startProgressPolling = startProgressPolling;
+window.stopProgressPolling = stopProgressPolling;
+window.updateProgress = updateProgress;
+window.displaySummary = displaySummary;
+window.displayResults = displayResults;

@@ -183,25 +183,27 @@ class EnhancedPriceExtractor:
     def extract_enhanced_prices(self, pages_text: List[str]) -> List[Dict[str, Any]]:
         """
         从PDF页面中提取价格，为与现有系统兼容而提供的接口方法
-        
+
         Args:
             pages_text: PDF页面文本列表
-            
+
         Returns:
             价格信息列表，每个元素包含value、confidence等字段
         """
         # 调用现有的extract_bid_price方法
-        candidate = self.extract_bid_price(pdf_path="", pages_text=pages_text)
-        
+        candidate = self.extract_bid_price(pdf_path='', pages_text=pages_text)
+
         if candidate:
             # 转换为与现有系统兼容的格式
-            return [{
-                'value': candidate.value,
-                'page': candidate.page_index,
-                'confidence': candidate.confidence,
-                'reason': f'增强版价格提取器 ({candidate.source_type})',
-                'location': candidate.location_info
-            }]
+            return [
+                {
+                    'value': candidate.value,
+                    'page': candidate.page_index,
+                    'confidence': candidate.confidence,
+                    'reason': f'增强版价格提取器 ({candidate.source_type})',
+                    'location': candidate.location_info,
+                }
+            ]
         else:
             # 如果没有找到价格，回退到基础提取器
             return self.base_extractor.extract_enhanced_prices(pages_text)
@@ -211,7 +213,7 @@ class EnhancedPriceExtractor:
     ) -> List[PriceCandidate]:
         """从目标页面文本中提取价格候选项"""
         candidates = []
-        
+
         # 首先查找投标一览表中的特殊格式价格（小写和大写在同一单元格中）
         # 这种格式具有最高的置信度
         bid_table_patterns = [
@@ -225,7 +227,7 @@ class EnhancedPriceExtractor:
             # 新增支持用户提到的格式：小写）203 万元  （大写）贰佰零叁万元
             r'小写[）\)]\s*([\d,]+\.?\d*)\s*(?:万元|元)\s*[(（]大写[)）]\s*([壹贰叁肆伍陆柒捌玖拾佰仟万亿零一二三四五六七八九十百千万亿元万元整]+)',
         ]
-        
+
         for pattern in bid_table_patterns:
             matches = list(re.finditer(pattern, page_text))
             for match in matches:
@@ -238,14 +240,18 @@ class EnhancedPriceExtractor:
                 else:
                     small_price_str = match.group(1)
                     chinese_num = match.group(2)
-                
+
                 try:
                     small_number_price = self._str_to_float(small_price_str)
-                    large_number_price = self.chinese_converter.chinese_to_number(chinese_num)
-                    
+                    large_number_price = self.chinese_converter.chinese_to_number(
+                        chinese_num
+                    )
+
                     if small_number_price and large_number_price:
                         # 验证两个价格是否接近
-                        if abs(small_number_price - large_number_price) < 10000:  # 允许一定误差（扩大到10000）
+                        if (
+                            abs(small_number_price - large_number_price) < 10000
+                        ):  # 允许一定误差（扩大到10000）
                             # 这种格式具有最高置信度
                             candidates.append(
                                 PriceCandidate(
@@ -253,19 +259,21 @@ class EnhancedPriceExtractor:
                                     page_index=page_idx,
                                     confidence=98.0,  # 最高置信度
                                     source_type='bid_table_format',
-                                    location_info=f'页面{page_idx+1}投标一览表格式',
+                                    location_info=f'页面{page_idx + 1}投标一览表格式',
                                     validation_data={
                                         'small_price': small_price_str,
                                         'large_price': chinese_num,
-                                        'match_text': match.group(0)
-                                    }
+                                        'match_text': match.group(0),
+                                    },
                                 )
                             )
-                            self.logger.info(f'从投标一览表特殊格式提取到价格: {small_number_price}, 大写: {large_number_price}')
+                            self.logger.info(
+                                f'从投标一览表特殊格式提取到价格: {small_number_price}, 大写: {large_number_price}'
+                            )
                 except Exception as e:
                     self.logger.warning(f'处理投标一览表格式价格时出错: {e}')
-        
-        # 查找数字价格
+
+        # 查找数字价格，但要避免在包含排除关键词的上下文中查找
         for pattern in self.table_price_patterns:
             for match in re.finditer(pattern, page_text, re.IGNORECASE | re.MULTILINE):
                 price_str = match.group(1)
@@ -275,8 +283,18 @@ class EnhancedPriceExtractor:
                 context_end = min(len(page_text), match.end() + 100)
                 context = page_text[context_start:context_end]
 
+                # 检查上下文中是否包含排除关键词
                 if any(keyword in context for keyword in self.exclude_keywords):
-                    continue
+                    # 特别检查是否在投标一览表附近
+                    bid_summary_found = False
+                    for keyword in self.bid_summary_keywords:
+                        if keyword in context:
+                            bid_summary_found = True
+                            break
+
+                    # 如果不在投标一览表附近且包含排除关键词，则跳过
+                    if not bid_summary_found:
+                        continue
 
                 try:
                     # 清理和转换价格
@@ -285,15 +303,17 @@ class EnhancedPriceExtractor:
 
                     # 验证价格合理性
                     if self._is_reasonable_price(price_value, context):
-                        confidence = self._calculate_confidence(page_text, match, context)
+                        confidence = self._calculate_confidence(
+                            page_text, match, context
+                        )
                         candidates.append(
                             PriceCandidate(
                                 value=price_value,
                                 page_index=page_idx,
                                 confidence=confidence,
                                 source_type='text',
-                                location_info=f'页面{page_idx+1}文本',
-                                validation_data={'context': context}
+                                location_info=f'页面{page_idx + 1}文本',
+                                validation_data={'context': context},
                             )
                         )
 
@@ -301,22 +321,26 @@ class EnhancedPriceExtractor:
                     continue
 
         # 查找大写中文价格
-        chinese_pattern = r'([壹贰叁肆伍陆柒捌玖拾佰仟万亿零一二三四五六七八九十百千万亿元整]+)'
+        chinese_pattern = (
+            r'([壹贰叁肆伍陆柒捌玖拾佰仟万亿零一二三四五六七八九十百千万亿元整]+)'
+        )
         for match in re.finditer(chinese_pattern, page_text):
             chinese_text = match.group(1)
             # 清理大写价格文本
             cleaned_text = re.sub(r'[^\u4e00-\u9fa5]', '', chinese_text)
             price_value = self.chinese_converter.chinese_to_number(cleaned_text)
-            
-            if price_value and self._is_reasonable_price(price_value, page_text[match.start()-50:match.end()+50]):
+
+            if price_value and self._is_reasonable_price(
+                price_value, page_text[match.start() - 50 : match.end() + 50]
+            ):
                 candidates.append(
                     PriceCandidate(
                         value=price_value,
                         page_index=page_idx,
                         confidence=85.0,  # 大写中文价格的置信度
                         source_type='chinese_text',
-                        location_info=f'页面{page_idx+1}大写中文',
-                        validation_data={'chinese_text': cleaned_text}
+                        location_info=f'页面{page_idx + 1}大写中文',
+                        validation_data={'chinese_text': cleaned_text},
                     )
                 )
 
@@ -332,8 +356,16 @@ class EnhancedPriceExtractor:
 
         # 检查上下文中是否包含保证金相关信息
         bond_indicators = [
-            '保证金', '投标保证金', '履约保证金', '质量保证金', '保函', 
-            '投标保函', '履约保函', '押金', '担保', '银行保函'
+            '保证金',
+            '投标保证金',
+            '履约保证金',
+            '质量保证金',
+            '保函',
+            '投标保函',
+            '履约保函',
+            '押金',
+            '担保',
+            '银行保函',
         ]
 
         for indicator in bond_indicators:
@@ -341,10 +373,26 @@ class EnhancedPriceExtractor:
             indicator_pos = context.find(indicator)
             if indicator_pos != -1:
                 # 检查indicator附近是否有"价格"、"金额"等词，如果有则可能是相关价格
-                nearby_text = context[max(0, indicator_pos-10):min(len(context), indicator_pos+len(indicator)+10)]
+                nearby_text = context[
+                    max(0, indicator_pos - 10) : min(
+                        len(context), indicator_pos + len(indicator) + 10
+                    )
+                ]
                 price_related_words = ['价格', '金额', '报价', '总价']
                 if not any(word in nearby_text for word in price_related_words):
-                    return False
+                    # 检查是否在投标一览表附近
+                    bid_summary_keywords = [
+                        '投标一览表',
+                        '开标一览表',
+                        '价格一览表',
+                        '投标报价一览表',
+                        '报价一览表',
+                        '投标文件一览表',
+                        '投标价格汇总表',
+                        '投标汇总表',
+                    ]
+                    if not any(keyword in context for keyword in bid_summary_keywords):
+                        return False
 
         return True
 
@@ -373,7 +421,7 @@ class EnhancedPriceExtractor:
         # 上下文中有"元"字符加分
         if '元' in context:
             confidence += 5.0
-            
+
         # 价格数值大小加分（大额价格更可能是总价）
         try:
             price_value = self._str_to_float(price_str)
@@ -384,6 +432,23 @@ class EnhancedPriceExtractor:
         except:
             pass
 
+        # 检查是否在排除关键词附近，如果是则降低置信度
+        exclude_keywords = ['业绩', '合同', '注册资本', '年营业额', '净资产']
+        if any(keyword in context for keyword in exclude_keywords):
+            # 但如果是投标一览表附近，则不降低置信度
+            bid_summary_keywords = [
+                '投标一览表',
+                '开标一览表',
+                '价格一览表',
+                '投标报价一览表',
+                '报价一览表',
+                '投标文件一览表',
+                '投标价格汇总表',
+                '投标汇总表',
+            ]
+            if not any(keyword in context for keyword in bid_summary_keywords):
+                confidence -= 30.0  # 大幅降低置信度
+
         return min(confidence, 100.0)
 
     def _fallback_extraction(self, pages_text: List[str]) -> List[PriceCandidate]:
@@ -391,7 +456,7 @@ class EnhancedPriceExtractor:
         try:
             # 使用基础提取器提取价格
             base_prices = self.base_extractor.extract_enhanced_prices(pages_text)
-            
+
             # 转换为基础价格候选项
             candidates = []
             for price_info in base_prices:
@@ -399,35 +464,48 @@ class EnhancedPriceExtractor:
                     PriceCandidate(
                         value=price_info['value'],
                         page_index=price_info['page'],
-                        confidence=price_info['confidence'] * 0.8,  # 降低回退方法的置信度
+                        confidence=price_info['confidence']
+                        * 0.8,  # 降低回退方法的置信度
                         source_type='fallback',
                         location_info=price_info.get('reason', '回退提取'),
-                        validation_data={}
+                        validation_data={},
                     )
                 )
-            
+
             return candidates
         except Exception as e:
             self.logger.error(f'回退提取出错: {e}')
             return []
 
-    def _select_best_candidate(self, candidates: List[PriceCandidate]) -> Optional[PriceCandidate]:
+    def _select_best_candidate(
+        self, candidates: List[PriceCandidate]
+    ) -> Optional[PriceCandidate]:
         """选择最佳价格候选项"""
         if not candidates:
             return None
 
         # 优先选择来自投标一览表特殊格式的候选项（置信度最高）
-        bid_table_candidates = [c for c in candidates if c.source_type == 'bid_table_format' and c.confidence >= 95]
+        bid_table_candidates = [
+            c
+            for c in candidates
+            if c.source_type == 'bid_table_format' and c.confidence >= 95
+        ]
         if bid_table_candidates:
             return max(bid_table_candidates, key=lambda x: x.confidence)
 
         # 其次选择来自表格且置信度高的候选项
-        table_candidates = [c for c in candidates if c.source_type == 'table' and c.confidence > 90]
+        table_candidates = [
+            c for c in candidates if c.source_type == 'table' and c.confidence > 90
+        ]
         if table_candidates:
             return max(table_candidates, key=lambda x: x.confidence)
 
         # 再次选择来自文本且置信度高的候选项
-        text_candidates = [c for c in candidates if c.source_type in ['text', 'chinese_text'] and c.confidence > 85]
+        text_candidates = [
+            c
+            for c in candidates
+            if c.source_type in ['text', 'chinese_text'] and c.confidence > 85
+        ]
         if text_candidates:
             return max(text_candidates, key=lambda x: x.confidence)
 
@@ -444,7 +522,9 @@ class EnhancedPriceExtractor:
                     return i
         return None
 
-    def _search_price_in_all_cells(self, table_data: List[List[Any]], page_idx: int, table_info: Dict[str, Any]) -> Optional[PriceCandidate]:
+    def _search_price_in_all_cells(
+        self, table_data: List[List[Any]], page_idx: int, table_info: Dict[str, Any]
+    ) -> Optional[PriceCandidate]:
         """在表格的所有单元格中搜索价格"""
         for row_idx, row in enumerate(table_data):
             for col_idx, cell in enumerate(row):
@@ -456,7 +536,7 @@ class EnhancedPriceExtractor:
                             page_index=page_idx,
                             confidence=80.0,  # 表格提取的中等置信度
                             source_type='table_cell',
-                            location_info=f'表格第{row_idx+1}行第{col_idx+1}列',
+                            location_info=f'表格第{row_idx + 1}行第{col_idx + 1}列',
                             validation_data={
                                 'cell_value': cell,
                             },
@@ -471,7 +551,7 @@ class EnhancedPriceExtractor:
             r'([\d,]+\.?\d*)\s*(?:元|万元)',
             r'(?:小写|小写金额)[:：\s]*([￥¥]?\s*[\d,]+\.?\d*)',
         ]
-        
+
         for pattern in patterns:
             match = re.search(pattern, cell_value, re.IGNORECASE)
             if match:

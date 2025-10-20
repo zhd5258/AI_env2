@@ -247,6 +247,7 @@
         let progressInterval = null;
         let startTime = null;
         let pollingActive = false;
+        let currentProjectId = null; // 保存当前项目ID
 
         // 更新文件列表显示
         function updateFileList() {
@@ -497,7 +498,7 @@
 
         // 导航链接点击事件处理
         document.querySelectorAll('.navbar a').forEach(link => {
-            link.addEventListener('click', function() {
+            link.addEventListener('click', function(e) {
                 // 点击导航链接时停止轮询
                 if (typeof stopProgressPolling === 'function' && window.stopProgressPolling !== stopProgressPolling) {
                     stopProgressPolling();
@@ -721,7 +722,7 @@
                         <h3 class="card-title">项目汇总结果 - ${summaryData.project_name || '未知项目'}</h3>
                     </div>
                     <div class="card-body">
-                        <div class="table-responsive">
+                        <div class="table-responsive" style="max-height: 600px; overflow: auto;">
                             <table class="table table-bordered table-hover">
                                 <thead class="table-light">
             `;
