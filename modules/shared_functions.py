@@ -31,7 +31,9 @@ from models.database import (
     AnalysisResult,
     ScoringRule,
 )
-from modules.intelligent_bid_analyzer import IntelligentBidAnalyzer
+
+# 移除未使用的导入以避免循环导入问题
+# from modules.intelligent_bid_analyzer import IntelligentBidAnalyzer
 from modules.correct_scoring_extractor import CorrectScoringExtractor
 from modules.bidder_name_extractor import extract_bidder_name_from_file_after_analysis
 
@@ -115,5 +117,13 @@ def analyze_single_bid_document(project_id: int, bid_document_id: int):
         logging.error(
             f'分析投标文件时出错 project_id: {project_id}, bid_document_id: {bid_document_id}: {e}'
         )
+        # 更新项目状态为错误
+        try:
+            from modules.project_status_manager import ProjectStatusManager
+
+            status_manager = ProjectStatusManager(db_session=db)
+            status_manager.update_project_status(project_id, 'error')
+        except Exception as status_e:
+            logging.error(f'更新项目状态时出错: {status_e}')
     finally:
         db.close()

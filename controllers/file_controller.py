@@ -173,24 +173,14 @@ def update_project_status(project_id: int, status: str):
     """更新项目状态"""
     db = SessionLocal()
     try:
-        project = db.query(TenderProject).filter(TenderProject.id == project_id).first()
-        if project:
-            project.status = status
-            # 如果项目状态是完成或错误，则记录结束时间
-            if status in ['completed', 'completed_with_errors', 'error']:
-                project.analysis_end_time = datetime.datetime.now()
-                cleanup_upload_directory(project_id)
+        # 使用统一的项目状态管理器
+        from modules.project_status_manager import ProjectStatusManager
 
-                # 清理临时目录
-                try:
-                    processor = AdvancedPDFProcessor()
-                    processor.cleanup_temp_directory()
-                except Exception as e:
-                    logging.error(f'清理临时目录时出错: {e}')
-            db.commit()
-            logging.info(f'更新项目 {project_id} 的状态为: {status}')
+        status_manager = ProjectStatusManager(db_session=db)
+        return status_manager.update_project_status(project_id, status)
     except Exception as e:
         logging.error(f'更新项目状态时出错: {e}')
+        return False
     finally:
         db.close()
 

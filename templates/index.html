@@ -4,22 +4,20 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>智能评标系统</title>
-    <link rel="stylesheet" href="/static/css/style.css">
-    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css">
+    <!-- 将CDN引用改为本地引用 -->
+    <link href="/static/css/bootstrap.min.css" rel="stylesheet">
+    <link href="/static/css/all.min.css" rel="stylesheet">
     <style>
         body {
-            font-family: Arial, sans-serif;
-            max-width: 100%;
-            margin: 0 auto;
-            padding: 20px;
+            font-family: 'Microsoft YaHei', Arial, sans-serif;
+            background-color: #f5f5f5;
+            margin: 0;
+            padding: 0;
         }
-        /* 导航栏样式优化 */
         .navbar {
-            background: linear-gradient(135deg, #007bff, #0056b3);
+            background-color: #007bff;
             padding: 15px 0;
-            margin-bottom: 30px;
-            border-radius: 10px;
-            box-shadow: 0 4px 12px rgba(0,0,0,0.1);
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
         }
         .navbar ul {
             list-style-type: none;
@@ -34,20 +32,12 @@
         .navbar a {
             color: white;
             text-decoration: none;
-            padding: 12px 20px;
-            border-radius: 25px;
-            transition: all 0.3s ease;
-            font-weight: 500;
-            display: block;
+            padding: 10px 15px;
+            border-radius: 4px;
+            transition: background-color 0.3s;
         }
-        .navbar a:hover {
-            background-color: rgba(255, 255, 255, 0.2);
-            transform: translateY(-2px);
-            box-shadow: 0 4px 8px rgba(0,0,0,0.1);
-        }
-        .navbar a.active {
-            background-color: rgba(255, 255, 255, 0.3);
-            font-weight: bold;
+        .navbar a:hover, .navbar a.active {
+            background-color: #0056b3;
         }
         .upload-section {
             border: 1px solid #ddd;
@@ -177,6 +167,11 @@
                 margin: 5px 0;
             }
         }
+        /* 符合性审查按钮样式 */
+        .compliance-btn {
+            margin-top: 15px;
+            display: none;
+        }
     </style>
 </head>
 <body>
@@ -235,6 +230,12 @@
         <div id="timeDisplay" class="time-display processing">
             <i class="fas fa-clock me-1"></i>已用时: <span id="elapsedTime">0</span> 秒
         </div>
+        <!-- 符合性审查按钮 -->
+        <div id="complianceReviewBtn" class="compliance-btn">
+            <a href="#" class="btn btn-info" id="complianceReviewLink">
+                <i class="fas fa-clipboard-check me-1"></i>查看符合性审查表
+            </a>
+        </div>
     </div>
     
     <!-- 结果显示区域 -->
@@ -248,63 +249,69 @@
         let startTime = null;
         let pollingActive = false;
         let currentProjectId = null; // 保存当前项目ID
-
+        
+        // 从localStorage恢复项目ID（如果存在）
+        function restoreProjectId() {
+            const savedProjectId = localStorage.getItem('currentProjectId');
+            if (savedProjectId) {
+                currentProjectId = parseInt(savedProjectId);
+                projectId = currentProjectId;
+                // 更新页面上的项目ID显示
+                const projectIdElement = document.getElementById('projectId');
+                if (projectIdElement) {
+                    projectIdElement.textContent = currentProjectId;
+                }
+                console.log('恢复项目ID:', currentProjectId);
+            }
+        }
+        
+        // 保存项目ID到localStorage
+        function saveProjectId(projectId) {
+            localStorage.setItem('currentProjectId', projectId.toString());
+        }
+        
+        // 清除保存的项目ID
+        function clearProjectId() {
+            localStorage.removeItem('currentProjectId');
+        }
+        
         // 更新文件列表显示
         function updateFileList() {
             const fileList = document.getElementById('fileList');
             let html = '<ul>';
             
             if (selectedTenderFile) {
-                html += `<li>招标文件: ${selectedTenderFile.name} (${(selectedTenderFile.size / 1024 / 1024).toFixed(2)} MB)</li>`;
+                html += `<li><strong>招标文件:</strong> ${selectedTenderFile.name}</li>`;
             }
             
             if (selectedBidFiles.length > 0) {
-                html += '<li>投标文件:<ul>';
-                selectedBidFiles.forEach((file, index) => {
-                    html += `<li>${file.name} (${(file.size / 1024 / 1024).toFixed(2)} MB) <button type="button" onclick="removeBidFile(${index})" style="background-color: #dc3545; color: white; border: none; padding: 2px 5px; cursor: pointer;">删除</button></li>`;
+                html += '<li><strong>投标文件:</strong><ul>';
+                selectedBidFiles.forEach(file => {
+                    html += `<li>${file.name}</li>`;
                 });
                 html += '</ul></li>';
             }
             
             html += '</ul>';
             fileList.innerHTML = html;
-            
-            // 显示文件列表区域
-            document.getElementById('fileListSection').style.display = selectedTenderFile || selectedBidFiles.length > 0 ? 'block' : 'none';
         }
-
-        // 删除投标文件
-        function removeBidFile(index) {
-            selectedBidFiles.splice(index, 1);
-            // 重新构建FileList对象
-            const dataTransfer = new DataTransfer();
-            selectedBidFiles.forEach(file => {
-                dataTransfer.items.add(file);
-            });
-            document.getElementById('bid_files').files = dataTransfer.files;
-            updateFileList();
-        }
-
+        
         // 文件选择事件处理
         document.getElementById('tender_file').addEventListener('change', function(e) {
-            if (e.target.files.length > 0) {
-                selectedTenderFile = e.target.files[0];
-            } else {
-                selectedTenderFile = null;
-            }
+            selectedTenderFile = e.target.files[0];
             updateFileList();
         });
-
+        
         document.getElementById('bid_files').addEventListener('change', function(e) {
+            selectedBidFiles = [];
             if (e.target.files.length > 0) {
-                // 添加新选择的文件到数组中
                 for (let i = 0; i < e.target.files.length; i++) {
                     selectedBidFiles.push(e.target.files[i]);
                 }
             }
             updateFileList();
         });
-
+        
         // 轮询进度
         async function pollProgress() {
             // 直接实现轮询逻辑，而不是调用main.js中的函数
@@ -331,11 +338,24 @@
                             progressTextAfter.innerHTML = '处理完成，正在获取结果...';
                         }
                         
+                        // 显示符合性审查按钮
+                        const complianceBtn = document.getElementById('complianceReviewBtn');
+                        if (complianceBtn) {
+                            complianceBtn.style.display = 'block';
+                            const complianceLink = document.getElementById('complianceReviewLink');
+                            if (complianceLink) {
+                                complianceLink.href = `/qualitative-review?project_id=${currentProjectId}`;
+                            }
+                        }
+                        
                         // 停止轮询
                         if (progressInterval) {
                             clearInterval(progressInterval);
                             progressInterval = null;
                         }
+                        
+                        // 清除保存的项目ID
+                        clearProjectId();
                         
                         // 等待一段时间后再获取结果
                         setTimeout(async function() {
@@ -485,8 +505,13 @@
             }
         });
 
-        // 页面卸载时停止轮询
+        // 页面卸载时停止轮询并保存项目ID
         window.addEventListener('beforeunload', function() {
+            // 保存当前项目ID
+            if (currentProjectId) {
+                saveProjectId(currentProjectId);
+            }
+            
             if (typeof stopProgressPolling === 'function' && window.stopProgressPolling !== stopProgressPolling) {
                 stopProgressPolling();
             } else if (progressInterval) {
@@ -499,82 +524,88 @@
         // 导航链接点击事件处理
         document.querySelectorAll('.navbar a').forEach(link => {
             link.addEventListener('click', function(e) {
-                // 点击导航链接时停止轮询
-                if (typeof stopProgressPolling === 'function' && window.stopProgressPolling !== stopProgressPolling) {
-                    stopProgressPolling();
-                } else if (progressInterval) {
-                    clearInterval(progressInterval);
-                    progressInterval = null;
-                    pollingActive = false;
+                // 移除所有链接的active类
+                document.querySelectorAll('.navbar a').forEach(a => a.classList.remove('active'));
+                // 为当前点击的链接添加active类
+                this.classList.add('active');
+                
+                // 保存当前项目ID，以便在返回时恢复
+                if (currentProjectId) {
+                    saveProjectId(currentProjectId);
                 }
             });
         });
 
         // 更新进度显示
         function updateProgressDisplay(data) {
-            const progressFill = document.getElementById('progressFill');
+            const progressBar = document.getElementById('progressFill');
             const progressText = document.getElementById('progressText');
-            const detailedProgress = document.getElementById('detailedProgress');
+            const progressStatus = document.getElementById('progressStatus');
+            const detailedProgressContainer = document.getElementById('detailedProgress');
             const timeDisplay = document.getElementById('timeDisplay');
             const elapsedTimeElement = document.getElementById('elapsedTime');
-            
-            // 确保详细进度容器存在
-            let detailedProgressContainer = document.getElementById('detailedProgressContainer');
-            if (!detailedProgressContainer) {
-                // 创建详细进度显示区域
-                detailedProgressContainer = document.createElement('div');
-                detailedProgressContainer.id = 'detailedProgressContainer';
-                detailedProgressContainer.className = 'mt-3';
-                detailedProgress.parentNode.insertBefore(detailedProgressContainer, detailedProgress.nextSibling);
-            }
-            
-            // 更新总体进度
-            if (data.overall_progress !== undefined) {
-                // 确保进度条宽度正确设置
-                progressFill.style.width = `${data.overall_progress}%`;
-                progressFill.setAttribute('aria-valuenow', data.overall_progress);
-                // 更新状态徽章
-                const progressStatus = document.getElementById('progressStatus');
-                if (progressStatus) {
-                    // 根据处理状态设置徽章样式
-                    let statusClass = 'bg-info';
-                    if (data.processing_status === 'completed' || data.processing_status === 'completed_with_errors') {
-                        statusClass = 'bg-success';
-                    } else if (data.processing_status === 'error') {
-                        statusClass = 'bg-danger';
-                    }
-                    progressStatus.className = `badge ${statusClass}`;
-                    progressStatus.textContent = data.processing_status;
-                }
-                
-                // 显示更详细的总体进度信息
-                let phaseInfo = '';
-                if (data.document_statuses && data.document_statuses.length > 0) {
-                    const phases = data.document_statuses.map(doc => doc.processing_phase).filter(phase => phase);
-                    if (phases.length > 0) {
-                        // 统计各阶段的文件数量
-                        const phaseCounts = {};
-                        phases.forEach(phase => {
-                            phaseCounts[phase] = (phaseCounts[phase] || 0) + 1;
-                        });
 
-                        // 构建阶段信息字符串
-                        const phaseTexts = Object.entries(phaseCounts).map(([phase, count]) => `${phase}: ${count}个`);
-                        phaseInfo = ` (${phaseTexts.join(', ')})`;
+            if (!detailedProgressContainer) return;
+
+            // 更新总体进度
+            let overallProgress = 0;
+            let totalBids = data.document_statuses ? data.document_statuses.length : 0;
+            let completedBids = 0;
+
+            if (data.document_statuses) {
+                data.document_statuses.forEach(bid => {
+                    if (bid.processing_status === 'completed') {
+                        completedBids++;
                     }
-                }
-                progressText.textContent = `总体进度: ${data.processing_status} (${data.completed_files || 0}/${data.total_files || 0} 个文件完成)${phaseInfo}`;
+                });
             }
-            
+
+            if (totalBids > 0) {
+                overallProgress = (completedBids / totalBids) * 100;
+            }
+
+            // 更新总体进度条
+            if (progressBar) {
+                // 确保进度条宽度正确设置
+                progressBar.style.width = `${overallProgress}%`;
+                progressBar.setAttribute('aria-valuenow', overallProgress);
+            }
+
+            // 更新状态文本
+            if (progressStatus) {
+                progressStatus.textContent = data.project_status || data.processing_status || '处理中';
+            }
+
+            // 显示总体进度文本
+            let phaseInfo = '';
+            if (data.document_statuses && data.document_statuses.length > 0) {
+                const phases = data.document_statuses.map(doc => doc.processing_phase).filter(phase => phase);
+                if (phases.length > 0) {
+                    // 统计各阶段的文件数量
+                    const phaseCounts = {};
+                    phases.forEach(phase => {
+                        phaseCounts[phase] = (phaseCounts[phase] || 0) + 1;
+                    });
+
+                    // 构建阶段信息字符串
+                    const phaseTexts = Object.entries(phaseCounts).map(([phase, count]) => `${phase}: ${count}个`);
+                    phaseInfo = ` (${phaseTexts.join(', ')})`;
+                }
+            }
+
+            if (progressText) {
+                progressText.textContent = `总体进度: ${data.processing_status} (${completedBids}/${totalBids} 个文件完成)${phaseInfo}`;
+            }
+
             // 显示每个投标文件的详细进度
             // 过滤掉招标文件，只显示投标文件的进度
-            if (data.document_statuses) {
+            if (data.document_statuses && detailedProgressContainer) {
                 // 过滤掉招标文件，只保留投标文件
-                const bidDocuments = data.document_statuses.filter(doc => 
+                const bidDocuments = data.document_statuses.filter(doc =>
                     doc.file_path && !doc.file_path.includes('tender') && !doc.file_path.includes('招标')
                 );
-                
-                let detailedHtml = '<div class="row g-3">'; // 使用g-3增加网格间距
+
+                let detailedHtml = '<div class="row">';
 
                 bidDocuments.forEach((bid, index) => {
                     // 计算单个文件的进度
@@ -850,12 +881,21 @@
                     <a href="/history" class="btn btn-secondary ms-2">
                         <i class="fas fa-history me-1"></i>查看历史记录
                     </a>
+                    <a href="#" class="btn btn-info ms-2" id="summaryComplianceReviewLink">
+                        <i class="fas fa-clipboard-check me-1"></i>查看符合性审查表
+                    </a>
                 </div>
             `;
             
             resultDiv.className = 'result success';
             resultDiv.innerHTML = html;
             resultDiv.style.display = 'block';
+            
+            // 为汇总结果页面的符合性审查链接添加事件处理
+            const summaryComplianceLink = document.getElementById('summaryComplianceReviewLink');
+            if (summaryComplianceLink && currentProjectId) {
+                summaryComplianceLink.href = `/qualitative-review?project_id=${currentProjectId}`;
+            }
         }
 
         // 表单提交处理
@@ -896,6 +936,12 @@
             fileListSection.style.display = 'none';
             progressSection.style.display = 'block'; // 确保进度界面显示
             
+            // 隐藏符合性审查按钮
+            const complianceBtn = document.getElementById('complianceReviewBtn');
+            if (complianceBtn) {
+                complianceBtn.style.display = 'none';
+            }
+            
             // 重置用时显示和开始时间
             const timeDisplay = document.getElementById('timeDisplay');
             timeDisplay.className = 'time-display processing';
@@ -915,6 +961,9 @@
                     projectId = data.project_id;
                     currentProjectId = data.project_id; // 同步到全局变量
                     document.getElementById('projectId').textContent = projectId;
+                    
+                    // 保存项目ID到localStorage
+                    saveProjectId(currentProjectId);
                     
                     // 现在开始轮询进度，因为进度界面已经显示
                     startProgressPolling();
@@ -954,25 +1003,30 @@
 
         // 页面加载完成后检查是否需要启动轮询
         // 如果页面加载时进度界面是显示的，则启动轮询
-        const progressSection = document.getElementById('progressSection');
-        if (progressSection && progressSection.style.display !== 'none' && (projectId || currentProjectId)) {
-            if (typeof startProgressPolling === 'function' && window.startProgressPolling !== startProgressPolling) {
-                startProgressPolling();
-            } else {
-                // 如果无法调用index.html中的函数，则直接启动轮询
-                // 先停止现有的轮询
-                if (progressInterval) {
-                    clearInterval(progressInterval);
-                }
-                // 重启轮询
-                const projectIdToUse = projectId || currentProjectId;
-                if (projectIdToUse) {
-                    progressInterval = setInterval(() => pollProgress(), 2000);
-                    // 立即执行一次
-                    pollProgress();
+        document.addEventListener('DOMContentLoaded', function() {
+            // 恢复项目ID
+            restoreProjectId();
+            
+            const progressSection = document.getElementById('progressSection');
+            if (progressSection && progressSection.style.display !== 'none' && (projectId || currentProjectId)) {
+                if (typeof startProgressPolling === 'function' && window.startProgressPolling !== startProgressPolling) {
+                    startProgressPolling();
+                } else {
+                    // 如果无法调用index.html中的函数，则直接启动轮询
+                    // 先停止现有的轮询
+                    if (progressInterval) {
+                        clearInterval(progressInterval);
+                    }
+                    // 重启轮询
+                    const projectIdToUse = projectId || currentProjectId;
+                    if (projectIdToUse) {
+                        progressInterval = setInterval(() => pollProgress(), 2000);
+                        // 立即执行一次
+                        pollProgress();
+                    }
                 }
             }
-        }
+        });
     </script>
 </body>
 </html>

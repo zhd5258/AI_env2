@@ -33,6 +33,15 @@ except ImportError:
     fitz = None
     logging.warning('PyMuPDF (fitz) 未安装')
 
+# 尝试导入TextProcessor
+try:
+    from .text_processor import TextProcessor
+except ImportError:
+    try:
+        from text_processor import TextProcessor
+    except ImportError:
+        TextProcessor = None
+
 from .advanced_pdf_processor import MinerUProcessor
 from .minerui_OCR import MinerUOnlineProcessor
 from .batch_pdf_processor import BatchPDFProcessor
@@ -452,6 +461,8 @@ class PDFProcessor:
         self.file_type = file_type  # "tender" or "bid"
         self.output_dir = output_dir
         self.logger = logging.getLogger(__name__)
+        # 初始化文本处理器
+        self.text_processor = TextProcessor() if TextProcessor else None
 
         # 确保输出目录存在
         Path(self.output_dir).mkdir(exist_ok=True)
@@ -922,7 +933,7 @@ class PDFProcessor:
 
     def _clean_cell_content(self, content: str) -> str:
         """
-        清理单元格内容，去除多余的换行和空格，智能保留表格结构
+        使用textacy清理单元格内容，去除多余的换行和空格，智能保留表格结构
 
         Args:
             content: 单元格原始内容
@@ -934,6 +945,19 @@ class PDFProcessor:
             if not content:
                 return ''
 
+            # 如果textacy可用，使用textacy清洗文本
+            if self.text_processor:
+                try:
+                    # 使用textacy清洗，但保留表格结构
+                    cleaned_content = self.text_processor.clean_text(content)
+                    # 保留行内换行符，但去除首尾换行符
+                    cleaned_content = cleaned_content.strip('\n')
+                    return cleaned_content
+                except Exception as e:
+                    self.logger.warning(f'使用textacy清洗单元格内容时出错: {e}')
+                    # 回退到基本方法
+
+            # 基本清理方法（textacy不可用时的回退方案）
             # 去除首尾空白字符
             content = content.strip()
 

@@ -39,7 +39,7 @@ from models.database import TenderProject, BidDocument, AnalysisResult, ScoringR
 from modules.correct_scoring_extractor import CorrectScoringExtractor
 from modules.scoring_rules_manager import ScoringRulesManager
 from modules.price_score_calculator import PriceScoreCalculator
-from modules.intelligent_bid_analyzer import IntelligentBidAnalyzer
+from modules.enhanced_intelligent_bid_analyzer import EnhancedIntelligentBidAnalyzer
 from modules.runtime_config import load_config, get_bool
 from modules.batch_pdf_processor import BatchPDFProcessor
 
@@ -246,7 +246,7 @@ class AnalysisManager:
             # 改为使用统一提取器在招标文件分析完成后集中处理
 
             # 创建智能投标分析器，传递投标人名称
-            analyzer = IntelligentBidAnalyzer(
+            analyzer = EnhancedIntelligentBidAnalyzer(
                 tender_file_path, bid_file_path, db, bid_document_id, project_id
             )
             # 确保分析器中的投标人名称与数据库中的保持一致
@@ -886,35 +886,36 @@ class AnalysisManager:
                 self.db.commit()
             return
 
-        # 步骤4: 所有分析完成后，执行价格计算和总分合成工作流
+        # 新增步骤: 使用统一综合计算器执行价格分和综合分析规则的计算
         self.logger.info(
-            f'项目 {project_id}: 非价格项分析全部完成，开始执行价格计算与总分合成...'
+            f'项目 {project_id}: 开始执行统一综合计算（价格分和综合分析规则）...'
         )
-        from modules.price_calculation_workflow import PriceCalculationWorkflow
+        try:
+            from modules.unified_comprehensive_calculator import (
+                UnifiedComprehensiveCalculator,
+            )
 
-        if self.db is not None:
-            price_workflow = PriceCalculationWorkflow(db_session=self.db)
-            success = price_workflow.execute_workflow(project_id)
+            unified_calculator = UnifiedComprehensiveCalculator(db_session=self.db)
+
+            # 执行统一综合计算
+            success = unified_calculator.execute_comprehensive_calculation(project_id)
 
             if success:
-                self.logger.info(
-                    f'项目 {project_id}: 价格计算与总分合成工作流执行成功。'
-                )
-                # 最终更新项目状态
-                self._update_project_status_when_all_completed(project_id)
+                self.logger.info(f'项目 {project_id}: 统一综合计算执行成功。')
             else:
-                self.logger.error(
-                    f'项目 {project_id}: 价格计算与总分合成工作流执行失败。'
-                )
+                self.logger.error(f'项目 {project_id}: 统一综合计算执行失败。')
+                if self.db is not None:
+                    project.status = 'error'
+                    self.db.commit()
+                return
+        except Exception as e:
+            self.logger.error(f'项目 {project_id}: 执行统一综合计算时出错: {e}')
+            if self.db is not None:
                 project.status = 'error'
                 self.db.commit()
-        else:
-            self.logger.error(
-                f'项目 {project_id}: 数据库会话无效，无法执行价格计算工作流。'
-            )
             return
 
-        # 步骤5: 清理临时文件
+        # 步骤4: 清理临时文件
         self._cleanup_md_files(project_id)
 
     def _log_price_calculation_failure_details(self, project_id: int):
@@ -1122,32 +1123,11 @@ class AnalysisManager:
                 self.logger.error('数据库会话未提供')
                 return
 
-            # 检查是否所有分析都已完成
-            if not self._check_all_analysis_completed(project_id):
-                self.logger.info(f'项目 {project_id} 还有未完成的分析任务')
-                return
+            # 使用统一的项目状态管理器
+            from modules.project_status_manager import ProjectStatusManager
 
-            # 获取项目信息
-            project = (
-                self.db.query(TenderProject)
-                .filter(TenderProject.id == project_id)
-                .first()
-            )
-            if not project:
-                self.logger.error(f'项目 {project_id} 不存在')
-                return
-
-            # 更新项目状态为completed
-            old_status = project.status
-            project.status = 'completed'
-            project.analysis_end_time = datetime.datetime.now()
-
-            # 提交更改
-            self.db.commit()
-
-            self.logger.info(
-                f'项目 {project_id} 状态已从 "{old_status}" 更新为 "completed"'
-            )
+            status_manager = ProjectStatusManager(db_session=self.db)
+            status_manager.update_project_status_when_all_completed(project_id)
 
         except Exception as e:
             self.logger.error(f'更新项目状态时出错: {e}')

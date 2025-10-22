@@ -290,48 +290,34 @@ class PriceScoreCalculator(PriceScoreCalculatorHelpers):
             self.logger.error(f'计算项目 {project_id} 的价格分时出错: {e}')
             return False
 
-    def _parse_price_scores_from_ai_response(
-        self, ai_response: str
-    ) -> Dict[str, float]:
+    def _parse_price_scores_from_ai_response(self, ai_response):
         """
-        更加健壮地解析AI大模型返回的价格分计算结果。
-        优先使用正则表达式提取JSON块，以忽略无关的解释性文本。
+        从AI响应中解析价格分
 
         Args:
-            ai_response: AI大模型的原始响应字符串。
+            ai_response (str): AI大模型的响应
 
         Returns:
-            Dict[str, float]: 投标人名称到价格分的映射，如果解析失败则返回空字典。
+            dict: 投标人名称到价格分的映射
         """
         import re
+        import json
 
         price_scores = {}
         try:
-            # 1. 使用正则表达式查找被大括号包围的JSON块
-            # re.DOTALL 使得 '.' 可以匹配包括换行在内的任意字符
-            json_match = re.search(r'\{.*\}', ai_response, re.DOTALL)
+            # 使用我们改进的JSON修复函数
+            result = self._fix_and_parse_json_response(ai_response)
 
-            if not json_match:
-                self.logger.error(
-                    f'解析AI响应失败：未找到有效的JSON块。原始响应: {ai_response}'
-                )
-                return {}
-
-            json_str = json_match.group(0)
-
-            # 2. 尝试解析提取出的JSON字符串
-            try:
-                data = json.loads(json_str)
-                if not isinstance(data, dict):
-                    self.logger.error(
-                        f'解析AI响应失败：JSON不是一个字典。解析内容: {json_str}'
-                    )
-                    return {}
-
-                # 3. 验证数据格式并转换为所需类型
-                for name, score in data.items():
+            if isinstance(result, dict):
+                # 验证数据格式并转换为所需类型
+                for name, score in result.items():
                     if isinstance(score, (int, float)):
                         price_scores[str(name)] = float(score)
+                    elif isinstance(score, dict) and 'score' in score:
+                        # 如果分数在嵌套字典中
+                        score_value = score.get('score', 0)
+                        if isinstance(score_value, (int, float)):
+                            price_scores[str(name)] = float(score_value)
                     else:
                         self.logger.warning(
                             f'跳过无效的分数值：投标人 "{name}" 的分数 "{score}" 不是数字。'
@@ -339,18 +325,93 @@ class PriceScoreCalculator(PriceScoreCalculatorHelpers):
 
                 self.logger.info(f'成功从AI响应中解析出价格分: {price_scores}')
                 return price_scores
-
-            except json.JSONDecodeError as e:
-                self.logger.error(
-                    f'解析AI响应中的JSON时出错: {e}。原始JSON字符串: {json_str}'
-                )
-                self.logger.error(f'完整的原始AI响应: {ai_response}')
+            else:
+                # 如果修复函数返回的不是字典，返回空字典
                 return {}
-
         except Exception as e:
             self.logger.error(
                 f'解析AI响应时发生未知错误: {e}。完整的原始AI响应: {ai_response}'
             )
+            return {}
+
+    def _fix_and_parse_json_response(self, response):
+        """
+        修复并解析AI返回的JSON响应
+        """
+        try:
+            import re
+            import json
+
+            # 首先尝试清理响应，移除可能的代码块标记
+            cleaned_response = response.strip()
+            if cleaned_response.startswith('```json'):
+                cleaned_response = cleaned_response[7:]
+            if cleaned_response.startswith('```'):
+                cleaned_response = cleaned_response[3:]
+            if cleaned_response.endswith('```'):
+                cleaned_response = cleaned_response[:-3]
+            cleaned_response = cleaned_response.strip()
+
+            # 移除控制字符
+            cleaned_response = re.sub(r'[\x00-\x1f\x7f-\x9f]', '', cleaned_response)
+
+            # 使用正则表达式查找被大括号包围的JSON块
+            # re.DOTALL 使得 '.' 可以匹配包括换行在内的任意字符
+            json_match = re.search(r'\{.*\}', cleaned_response, re.DOTALL)
+            if json_match:
+                json_str = json_match.group(0)
+            else:
+                # 如果没有找到JSON块，直接使用清理后的响应
+                json_str = cleaned_response
+
+            # 尝试修复JSON格式问题
+            # 1. 确保字符串以闭合的大括号结尾
+            if not json_str.rstrip().endswith('}'):
+                # 查找最后一个闭合的大括号的位置
+                last_brace_pos = json_str.rfind('}')
+                if last_brace_pos != -1:
+                    # 在最后一个闭合大括号后添加缺失的闭合大括号
+                    json_str = json_str[: last_brace_pos + 1] + '}'
+
+            # 2. 确保所有引号都是成对出现的
+            quote_count = json_str.count('"')
+            if quote_count % 2 != 0:
+                # 如果引号数量是奇数，尝试在末尾添加一个引号
+                json_str = json_str.rstrip() + '"'
+
+            # 3. 修复缺少逗号的问题 - 在 }" 和 " 之间添加逗号（如果它们在同一行）
+            json_str = re.sub(r'(\}"\s*)\n\s*"', r'\1,\n"', json_str)
+
+            # 4. 修复多余的逗号问题 - 移除对象或数组末尾的逗号
+            json_str = re.sub(r',(\s*[}\]])', r'\1', json_str)
+
+            # 5. 移除控制字符
+            json_str = re.sub(r'[\x00-\x1f\x7f-\x9f]', '', json_str)
+
+            # 尝试解析修复后的JSON
+            data = json.loads(json_str)
+            return data
+        except Exception as e:
+            self.logger.error(f'修复JSON时出错: {e}')
+            # 如果修复失败，尝试使用更简单的修复方法
+            try:
+                import re
+
+                # 尝试提取所有的键值对
+                pattern = r'"([^"]+)"\s*:\s*([0-9.]+)'
+                matches = re.findall(pattern, response)
+
+                result = {}
+                for match in matches:
+                    key, score = match
+                    result[key] = float(score)
+
+                if result:
+                    return result
+            except Exception as e2:
+                self.logger.error(f'简单修复方法也失败了: {e2}')
+
+            # 如果所有方法都失败，返回空字典
             return {}
 
     def _calculate_price_scores_default(

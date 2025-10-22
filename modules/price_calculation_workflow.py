@@ -499,77 +499,11 @@ class PriceCalculationWorkflow:
             project_id: 项目ID
         """
         try:
-            from models.database import TenderProject
+            # 使用统一的项目状态管理器
+            from modules.project_status_manager import ProjectStatusManager
 
-            # 更新项目状态
-            project = (
-                self.db.query(TenderProject)
-                .filter(TenderProject.id == project_id)
-                .first()
-            )
-
-            if project:
-                # 检查是否所有价格分都已计算
-                analysis_results = (
-                    self.db.query(AnalysisResult)
-                    .filter(AnalysisResult.project_id == project_id)
-                    .all()
-                )
-
-                # 检查是否所有价格分都已计算
-                all_scores_calculated = True
-                for result in analysis_results:
-                    # 检查price_score属性是否存在且不为0
-                    price_score = (
-                        getattr(result, 'price_score', 0.0)
-                        if hasattr(result, 'price_score')
-                        else 0.0
-                    )
-                    total_score = (
-                        getattr(result, 'total_score', 0.0)
-                        if hasattr(result, 'total_score')
-                        else 0.0
-                    )
-                    # 如果价格分为0但总分不为0，说明价格分可能未计算
-                    # 但如果价格分和总分都为0，可能是正常情况（所有分数都为0）
-                    # 我们需要更准确的判断方式
-                    if price_score == 0.0 and total_score > 0.0:
-                        # 检查是否有非价格的详细评分
-                        detailed_scores = result.detailed_scores
-                        has_detailed_scores = False
-
-                        # 处理详细评分数据
-                        if detailed_scores:
-                            if isinstance(detailed_scores, str):
-                                try:
-                                    detailed_scores = json.loads(detailed_scores)
-                                except (json.JSONDecodeError, TypeError):
-                                    detailed_scores = []
-                            elif isinstance(detailed_scores, dict):
-                                if 'detailed_scores' in detailed_scores:
-                                    detailed_scores = detailed_scores['detailed_scores']
-
-                        # 检查是否有评分项
-                        if (
-                            isinstance(detailed_scores, list)
-                            and len(detailed_scores) > 0
-                        ):
-                            has_detailed_scores = True
-
-                        # 如果有详细评分但价格分为0，说明价格分未计算
-                        if has_detailed_scores and price_score == 0.0:
-                            all_scores_calculated = False
-                            break
-
-                # 不再在这里更新项目状态为completed
-                # 项目状态应该在所有分析任务（包括规则打分）完成后再更新
-                # 这里只记录日志
-                if all_scores_calculated:
-                    self.logger.info('价格分计算完成，等待规则打分完成后再更新项目状态')
-                else:
-                    self.logger.warning('并非所有价格分都已计算完成')
-            else:
-                self.logger.error(f'未找到项目 {project_id}')
-
+            status_manager = ProjectStatusManager(db_session=self.db)
+            return status_manager.update_project_status(project_id, 'price_calculated')
         except Exception as e:
             self.logger.error(f'更新项目状态时出错: {e}', exc_info=True)
+            return False

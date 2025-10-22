@@ -193,6 +193,11 @@ class ScoringRule(Base):
         Boolean, default=False
     )  # 是否为定量规则
 
+    # 添加需要综合分析的标记字段
+    needs_comprehensive_analysis: Mapped[bool] = mapped_column(
+        Boolean, default=False
+    )  # 是否需要综合分析（如排名类规则）
+
     project = relationship('TenderProject', back_populates='scoring_rules')
 
 

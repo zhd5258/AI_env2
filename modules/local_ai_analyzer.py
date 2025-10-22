@@ -13,6 +13,7 @@ import requests
 import logging
 import time
 import os
+from typing import List
 
 # 设置日志
 logger = logging.getLogger(__name__)
@@ -24,6 +25,7 @@ class LocalAIAnalyzer:
     ):
         self.model = model
         self.api_url = f'{host}/api/generate'
+        self.host = host
         # 从环境变量获取上下文长度，默认为8192
         self.context_length = int(os.environ.get('OLLAMA_CONTEXT_LENGTH', '8192'))
 
@@ -79,6 +81,37 @@ class LocalAIAnalyzer:
                 time.sleep(retry_delay)
 
         return 'Error: AI model request failed after multiple retries.'
+
+    def get_embeddings(
+        self, texts: List[str], embedding_model: str = 'qwen3-embedding:latest'
+    ):
+        """
+        获取文本嵌入向量
+
+        Args:
+            texts: 文本列表
+            embedding_model: 嵌入模型名称
+
+        Returns:
+            嵌入向量列表
+        """
+        try:
+            embeddings = []
+            embedding_api_url = f'{self.host}/api/embeddings'
+
+            for text in texts:
+                payload = {'model': embedding_model, 'prompt': text}
+
+                response = requests.post(embedding_api_url, json=payload, timeout=300)
+                response.raise_for_status()
+
+                result = response.json()
+                embeddings.append(result.get('embedding', []))
+
+            return embeddings
+        except Exception as e:
+            logger.error(f'获取嵌入向量时出错: {e}')
+            return []
 
     def check_model_availability(self):
         try:

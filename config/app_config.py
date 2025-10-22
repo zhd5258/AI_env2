@@ -32,3 +32,16 @@ class Config:
         os.path.dirname(os.path.abspath(__file__)), '..', 'uploads'
     )
     Path(UPLOADS_DIR).mkdir(parents=True, exist_ok=True)
+
+    # RAG优化配置
+    RAG_ENABLED = os.environ.get('RAG_ENABLED', 'false').lower() == 'true'
+    RAG_EMBEDDING_MODEL = os.environ.get(
+        'RAG_EMBEDDING_MODEL', 'qwen3-embedding:latest'
+    )
+    RAG_RERANKER_MODEL = os.environ.get(
+        'RAG_RERANKER_MODEL', 'dengcao/Qwen3-Reranker-8B:Q5_K_M'
+    )
+    RAG_OLLAMA_HOST = os.environ.get('RAG_OLLAMA_HOST', 'http://localhost:11434')
+    RAG_CHUNK_SIZE = int(os.environ.get('RAG_CHUNK_SIZE', '1000'))
+    RAG_CHUNK_OVERLAP = int(os.environ.get('RAG_CHUNK_OVERLAP', '200'))
+    RAG_MAX_GROUP_SIZE = int(os.environ.get('RAG_MAX_GROUP_SIZE', '5'))

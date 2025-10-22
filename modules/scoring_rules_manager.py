@@ -192,6 +192,24 @@ class ScoringRulesManager:
             self.logger.info(
                 f'成功保存 {len(valid_rules)} 条评分规则到数据库（过滤前共 {len(rules)} 条）'
             )
+
+            # 新增：使用智能规则分类器对规则进行分类和标记
+            try:
+                from modules.intelligent_rules_classifier import (
+                    IntelligentRulesClassifier,
+                )
+
+                classifier = IntelligentRulesClassifier(db_session=self.db)
+                classification_success = classifier.classify_and_mark_rules(project_id)
+                if classification_success:
+                    self.logger.info(f'项目 {project_id} 的评分规则智能分类和标记完成')
+                else:
+                    self.logger.warning(
+                        f'项目 {project_id} 的评分规则智能分类和标记失败'
+                    )
+            except Exception as e:
+                self.logger.error(f'调用智能规则分类器时出错: {e}')
+
             return True
 
         except Exception as e:

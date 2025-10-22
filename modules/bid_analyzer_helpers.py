@@ -302,53 +302,51 @@ class BidAnalyzerHelpers:
 
     def _parse_ai_score_response(self, response, max_score):
         try:
-            # 处理包含思考过程的响应
-            clean_response = response.strip()
+            # 使用我们改进的JSON修复函数
+            result = self._fix_and_parse_json_response(response)
 
-            # 移除思考标签
-            if '思考过程' in clean_response and '最终答案' in clean_response:
-                # 提取最终答案部分
-                final_answer_start = clean_response.find('最终答案')
-                if final_answer_start != -1:
-                    clean_response = clean_response[final_answer_start:]
+            if isinstance(result, dict):
+                # 提取分数和理由
+                score = float(result.get('score', 0))
+                reason = str(result.get('reason', 'No reason provided.'))
 
-            # 移除代码块标记
-            clean_response = (
-                clean_response.replace('```json', '').replace('```', '').strip()
-            )
+                if not isinstance(score, (int, float)):
+                    score = 0
+                score = max(0, min(float(score), float(max_score)))
 
-            # 只在必要时进行转义修复
-            try:
-                # 首先尝试直接解析
-                result = json.loads(clean_response)
-            except json.JSONDecodeError:
-                # 如果直接解析失败，再尝试修复转义字符
-                # 修复JSON中的无效转义字符
-                clean_response = re.sub(
-                    r'\\([^"\\/bfnrtu])', r'\1', clean_response
-                )  # 移除无效的转义
-                clean_response = clean_response.replace(
-                    '\\', '\\\\'
-                )  # 将单独的反斜杠转义
-                # 修复可能存在的其他转义问题
-                clean_response = (
-                    clean_response.replace('\n', '\\n')
-                    .replace('\r', '\\r')
-                    .replace('\t', '\\t')
+                return score, reason
+            else:
+                # 如果修复函数返回的不是字典，尝试从响应中提取数字
+                # 寻找可能的分数值
+                import re
+
+                score_patterns = [
+                    r'"score":\s*(\d+(?:\.\d+)?)',  # JSON格式的score
+                    r'score["\']?\s*[:=]\s*(\d+(?:\.\d+)?)',  # 其他格式的score
+                    r'(\d+(?:\.\d+)?)\s*分',  # 中文格式
+                    r'(\d+(?:\.\d+)?)',  # 任何数字
+                ]
+
+                for pattern in score_patterns:
+                    match = re.search(pattern, response, re.IGNORECASE)
+                    if match:
+                        score = float(match.group(1))
+                        score = max(0, min(score, max_score))
+                        return (
+                            score,
+                            f'从AI响应中提取到分数: {score}。原始响应: {response[:200]}...',
+                        )
+
+                # 如果无法提取分数，返回默认值
+                return (
+                    0,
+                    f'无法从AI响应中提取有效分数。响应内容: {response[:200]}...',
                 )
-                result = json.loads(clean_response)
-
-            score = result.get('score', 0)
-            reason = result.get('reason', 'No reason provided.')
-
-            if not isinstance(score, (int, float)):
-                score = 0
-            score = max(0, min(float(score), float(max_score)))
-
-            return score, reason
         except (json.JSONDecodeError, TypeError):
             # 如果JSON解析失败，尝试从响应中提取数字
             # 寻找可能的分数值
+            import re
+
             score_patterns = [
                 r'"score":\s*(\d+(?:\.\d+)?)',  # JSON格式的score
                 r'score["\']?\s*[:=]\s*(\d+(?:\.\d+)?)',  # 其他格式的score
@@ -371,6 +369,85 @@ class BidAnalyzerHelpers:
                 0,
                 f'无法从AI响应中提取有效分数。响应内容: {response[:200]}...',
             )
+
+    def _fix_and_parse_json_response(self, response):
+        """
+        修复并解析AI返回的JSON响应
+        """
+        try:
+            import re
+            import json
+
+            # 首先尝试清理响应，移除可能的代码块标记
+            cleaned_response = response.strip()
+            if cleaned_response.startswith('```json'):
+                cleaned_response = cleaned_response[7:]
+            if cleaned_response.startswith('```'):
+                cleaned_response = cleaned_response[3:]
+            if cleaned_response.endswith('```'):
+                cleaned_response = cleaned_response[:-3]
+            cleaned_response = cleaned_response.strip()
+
+            # 移除控制字符
+            cleaned_response = re.sub(r'[\x00-\x1f\x7f-\x9f]', '', cleaned_response)
+
+            # 使用正则表达式查找被大括号包围的JSON块
+            # re.DOTALL 使得 '.' 可以匹配包括换行在内的任意字符
+            json_match = re.search(r'\{.*\}', cleaned_response, re.DOTALL)
+            if json_match:
+                json_str = json_match.group(0)
+            else:
+                # 如果没有找到JSON块，直接使用清理后的响应
+                json_str = cleaned_response
+
+            # 尝试修复JSON格式问题
+            # 1. 确保字符串以闭合的大括号结尾
+            if not json_str.rstrip().endswith('}'):
+                # 查找最后一个闭合的大括号的位置
+                last_brace_pos = json_str.rfind('}')
+                if last_brace_pos != -1:
+                    # 在最后一个闭合大括号后添加缺失的闭合大括号
+                    json_str = json_str[: last_brace_pos + 1] + '}'
+
+            # 2. 确保所有引号都是成对出现的
+            quote_count = json_str.count('"')
+            if quote_count % 2 != 0:
+                # 如果引号数量是奇数，尝试在末尾添加一个引号
+                json_str = json_str.rstrip() + '"'
+
+            # 3. 修复缺少逗号的问题 - 在 }" 和 " 之间添加逗号（如果它们在同一行）
+            json_str = re.sub(r'(\}"\s*)\n\s*"', r'\1,\n"', json_str)
+
+            # 4. 修复多余的逗号问题 - 移除对象或数组末尾的逗号
+            json_str = re.sub(r',(\s*[}\]])', r'\1', json_str)
+
+            # 5. 移除控制字符
+            json_str = re.sub(r'[\x00-\x1f\x7f-\x9f]', '', json_str)
+
+            # 尝试解析修复后的JSON
+            data = json.loads(json_str)
+            return data
+        except Exception:
+            # 如果修复失败，尝试使用更简单的修复方法
+            try:
+                import re
+
+                # 尝试提取所有的键值对
+                pattern = r'"([^"]+)"\s*:\s*([0-9.]+)'
+                matches = re.findall(pattern, response)
+
+                result = {}
+                for match in matches:
+                    key, score = match
+                    result[key] = float(score)
+
+                if result:
+                    return result
+            except Exception:
+                pass
+
+            # 如果所有方法都失败，返回空字典
+            return {}
 
     def _save_failed_pages_info(self, bid_processor):
         """保存PDF处理失败页面信息到数据库"""

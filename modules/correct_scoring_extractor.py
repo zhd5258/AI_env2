@@ -21,6 +21,15 @@ import logging
 from typing import List, Dict, Any
 import fitz  # PyMuPDF
 
+# 尝试导入TextProcessor
+try:
+    from .text_processor import TextProcessor
+except ImportError:
+    try:
+        from text_processor import TextProcessor
+    except ImportError:
+        TextProcessor = None
+
 
 class CorrectScoringExtractor:
     """正确的评分规则提取器"""
@@ -34,6 +43,8 @@ class CorrectScoringExtractor:
         """
         self.pdf_path = pdf_path
         self.logger = logging.getLogger(__name__)
+        # 初始化文本处理器
+        self.text_processor = TextProcessor() if TextProcessor else None
 
     def extract_scoring_rules(self) -> List[Dict[str, Any]]:
         """
@@ -834,7 +845,7 @@ class CorrectScoringExtractor:
 
     def _clean_text(self, text: str) -> str:
         """
-        清理文本，移除多余的空格和特殊字符
+        使用textacy清理文本，移除多余的空格和特殊字符
 
         Args:
             text: 原始文本
@@ -845,6 +856,15 @@ class CorrectScoringExtractor:
         if not text:
             return ''
 
+        # 如果textacy可用，使用textacy清洗文本
+        if self.text_processor:
+            try:
+                return self.text_processor.clean_text(text)
+            except Exception as e:
+                self.logger.warning(f'使用textacy清洗文本时出错: {e}')
+                # 回退到基本方法
+
+        # 基本文本清洗方法（textacy不可用时的回退方案）
         # 移除首尾空格
         text = text.strip()
 
@@ -855,7 +875,7 @@ class CorrectScoringExtractor:
 
     def _clean_description(self, description: str) -> str:
         """
-        清理描述文本
+        使用textacy清理描述文本
 
         Args:
             description: 原始描述
@@ -866,6 +886,15 @@ class CorrectScoringExtractor:
         if not description:
             return ''
 
+        # 如果textacy可用，使用textacy清洗文本
+        if self.text_processor:
+            try:
+                description = self.text_processor.clean_text(description)
+            except Exception as e:
+                self.logger.warning(f'使用textacy清洗描述文本时出错: {e}')
+                # 回退到基本方法
+
+        # 基本清理方法
         # 移除首尾空格
         description = description.strip()
 

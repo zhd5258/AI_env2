@@ -4,6 +4,25 @@ let pollingActive = false;
 let progressInterval = null;
 let lastProgressData = null; // 保存最后一次进度数据
 
+// 从localStorage恢复项目ID（如果存在）
+function restoreProjectId () {
+    const savedProjectId = localStorage.getItem('currentProjectId');
+    if (savedProjectId) {
+        currentProjectId = parseInt(savedProjectId);
+        console.log('恢复项目ID:', currentProjectId);
+    }
+}
+
+// 保存项目ID到localStorage
+function saveProjectId (projectId) {
+    localStorage.setItem('currentProjectId', projectId.toString());
+}
+
+// 清除保存的项目ID
+function clearProjectId () {
+    localStorage.removeItem('currentProjectId');
+}
+
 // 轮询分析进度
 async function pollAnalysisStatus (projectId) {
     // 设置当前项目ID
@@ -48,6 +67,8 @@ async function pollAnalysisStatus (projectId) {
                     const summaryData = await summaryResponse.json();
                     displaySummary(summaryData);
                     pollingActive = false;
+                    // 清除保存的项目ID
+                    clearProjectId();
                     return; // 结束轮询
                 }
             } catch (summaryError) {
@@ -59,6 +80,8 @@ async function pollAnalysisStatus (projectId) {
             const resultData = await resultResponse.json();
             displayResults(resultData);
             pollingActive = false;
+            // 清除保存的项目ID
+            clearProjectId();
             return; // 结束轮询
         }
 
@@ -149,10 +172,14 @@ function startProgressPolling () {
                                     if (summaryResponse.ok) {
                                         const summaryData = await summaryResponse.json();
                                         displaySummary(summaryData);
+                                        // 清除保存的项目ID
+                                        clearProjectId();
                                     } else {
                                         const resultResponse = await fetch(`/api/projects/${currentProjectId}/results`);
                                         const resultData = await resultResponse.json();
                                         displayResults(resultData);
+                                        // 清除保存的项目ID
+                                        clearProjectId();
                                     }
                                 } catch (error) {
                                     console.error('获取结果失败:', error);
@@ -186,6 +213,9 @@ document.addEventListener('visibilitychange', function () {
 
 // 页面加载完成后检查是否需要启动轮询
 document.addEventListener('DOMContentLoaded', function () {
+    // 恢复项目ID
+    restoreProjectId();
+
     // 如果页面加载时进度界面是显示的，则启动轮询
     const progressSection = document.getElementById('progressSection');
     if (progressSection && progressSection.style.display !== 'none' && currentProjectId) {
@@ -568,3 +598,6 @@ window.stopProgressPolling = stopProgressPolling;
 window.updateProgress = updateProgress;
 window.displaySummary = displaySummary;
 window.displayResults = displayResults;
+window.saveProjectId = saveProjectId;
+window.restoreProjectId = restoreProjectId;
+window.clearProjectId = clearProjectId;

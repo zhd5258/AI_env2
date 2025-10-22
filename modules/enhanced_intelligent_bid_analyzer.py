@@ -1,8 +1,30 @@
 #!/usr/bin/env python
 # -*- coding:utf-8 -*-
+#
+# 作者           : KingFreeDom
+# 创建时间         : 2025-10-21 20:05:53
+# 最近一次编辑者      : KingFreeDom
+# 最近一次编辑时间     : 2025-10-21 20:07:28
+# 文件相对于项目的路径   : \AI_ENV2\modules\enhanced_intelligent_bid_analyzer_fixed.py
+#
+# Copyright (c) 2025 by 中车眉山车辆有限公司/KingFreeDom, All Rights Reserved.
+#
+#!/usr/bin/env python
+# -*- coding:utf-8 -*-
+#
+# 作者           : KingFreeDom
+# 创建时间         : 2025-10-21 18:49:28
+# 最近一次编辑者      : KingFreeDom
+# 最近一次编辑时间     : 2025-10-21 18:49:30
+# 文件相对于项目的路径   : \AI_ENV2\modules\enhanced_intelligent_bid_analyzer.py
+#
+# Copyright (c) 2025 by 中车眉山车辆有限公司/KingFreeDom, All Rights Reserved.
+#
+#!/usr/bin/env python
+# -*- coding:utf-8 -*-
 """
-智能投标分析器模块
-负责分析投标文件并生成评分
+增强版智能投标分析器模块
+负责分析投标文件并生成评分，采用整合规则一次性分析的方式
 """
 
 import json
@@ -17,7 +39,7 @@ from models.database import BidDocument, ScoringRule, AnalysisResult
 from modules.bid_analyzer_helpers import BidAnalyzerHelpers
 
 
-class IntelligentBidAnalyzer(BidAnalyzerHelpers):
+class EnhancedIntelligentBidAnalyzer(BidAnalyzerHelpers):
     def __init__(
         self,
         tender_file_path: str,
@@ -34,8 +56,6 @@ class IntelligentBidAnalyzer(BidAnalyzerHelpers):
         self.bid_document_id = bid_document_id
         self.project_id = project_id
         self.ai_analyzer = LocalAIAnalyzer()
-        # 移除价格管理器，价格提取将在统一流程中处理
-        # self.price_manager = PriceManager()
         self.logger = logging.getLogger(__name__)
         self.total_rules_to_analyze = 0  # 初始化实例变量
 
@@ -46,7 +66,7 @@ class IntelligentBidAnalyzer(BidAnalyzerHelpers):
                     .filter(BidDocument.id == self.bid_document_id)
                     .first()
                 )
-                # 修复：确保即使数据库中没有投标人名称，也使用文件名作为默认值
+                # 确保即使数据库中没有投标人名称，也使用文件名作为默认值
                 if bid_doc and bid_doc.bidder_name and bid_doc.bidder_name.strip():
                     self.bidder_name = bid_doc.bidder_name
                 else:
@@ -68,7 +88,7 @@ class IntelligentBidAnalyzer(BidAnalyzerHelpers):
             self.bid_pages = extracted_text
             self.bid_processor = None  # 不需要再创建PDF处理器
             self.logger.info(
-                f'IntelligentBidAnalyzer initialized with pre-extracted text for {self.bid_file_path}.'
+                f'EnhancedIntelligentBidAnalyzer initialized with pre-extracted text for {self.bid_file_path}.'
             )
         else:
             # 保持旧的兼容性，如果未提供文本，则初始化处理器以便后续提取
@@ -92,7 +112,7 @@ class IntelligentBidAnalyzer(BidAnalyzerHelpers):
             if bid_doc:
                 bid_doc.progress_total_rules = total
                 bid_doc.progress_completed_rules = completed
-                # 修复：确保投标人名称不为空时才使用，否则使用文件名
+                # 确保投标人名称不为空时才使用，否则使用文件名
                 if self.bidder_name and self.bidder_name.strip():
                     progress_info = f'{self.bidder_name} - {current_rule}'
                 else:
@@ -114,35 +134,6 @@ class IntelligentBidAnalyzer(BidAnalyzerHelpers):
         except Exception as e:
             self.logger.error(f'更新进度时出错: {e}')
             self.db.rollback()
-
-    def _build_rules_tree_from_db(
-        self, rules_from_db: List[Any]
-    ) -> List[Dict[str, Any]]:
-        """将从数据库获取的扁平化评分规则列表转换为树形结构。"""
-        # 修复：正确构建树形结构，包含所有子项规则
-        rule_map = {}
-        for rule in rules_from_db:
-            # 只处理有Child_Item_Name的子项规则
-            if rule.Child_Item_Name is not None and rule.Child_Item_Name.strip():
-                rule_map[rule.id] = {
-                    'id': rule.id,
-                    'criteria_name': rule.Child_Item_Name,
-                    'max_score': rule.Child_max_score,
-                    'description': rule.description,
-                    'is_price_criteria': rule.is_price_criteria,
-                    'is_veto': rule.is_veto,
-                    'is_qualitative': rule.is_qualitative,
-                    'is_quantitative': rule.is_quantitative,
-                    'needs_comprehensive_analysis': getattr(
-                        rule, 'needs_comprehensive_analysis', False
-                    ),  # 添加综合分析标记
-                    'parent_id': None,  # 简化处理
-                    'children': [],
-                }
-
-        # 转换为列表格式
-        tree = list(rule_map.values())
-        return tree
 
     def _get_bid_pages(self) -> List[str]:
         """获取投标文件页面内容，优先使用已加载的文本。"""
@@ -215,71 +206,10 @@ class IntelligentBidAnalyzer(BidAnalyzerHelpers):
             self.logger.error(f'从MD文件加载内容时出错: {e}')
             return None
 
-    def analyze_rule_parallel(self, rule, bid_pages):
-        """并行分析单个评分规则"""
-        try:
-            self.logger.info(
-                f'正在为投标人 {self.bidder_name} 分析子项规则: {rule.Child_Item_Name}'
-            )
-
-            # 查找相关上下文（使用从MD文件读取的内容）
-            relevant_context = self._find_relevant_context_for_child_rule(
-                rule, bid_pages
-            )
-
-            # 创建prompt
-            prompt = self._create_prompt_for_child_rule(rule, relevant_context)
-
-            # 记录发送给AI的prompt
-            self.logger.info(
-                f"--- Prompt for rule '{rule.Child_Item_Name}' ---\n{prompt}\n--- End of Prompt ---"
-            )
-
-            # 提交AI分析
-            ai_response = self.ai_analyzer.analyze_text(prompt)
-            if 'Error:' in ai_response:
-                self.logger.error(
-                    f"AI analysis failed for rule '{rule.Child_Item_Name}': {ai_response}"
-                )
-                score, reason = 0, f'AI分析失败: {ai_response}'
-            else:
-                score, reason = self._parse_ai_score_response(
-                    ai_response, rule.Child_max_score
-                )
-
-            # 返回分析结果
-            return {
-                'Child_Item_Name': rule.Child_Item_Name,
-                'max_score': rule.Child_max_score,
-                'score': score,
-                'reason': reason,
-                'Parent_Item_Name': rule.Parent_Item_Name,
-                'is_qualitative': rule.is_qualitative,
-                'is_quantitative': rule.is_quantitative,
-                'is_veto': rule.is_veto,
-                'needs_comprehensive_analysis': getattr(
-                    rule, 'needs_comprehensive_analysis', False
-                ),  # 添加综合分析标记
-            }
-        except Exception as e:
-            self.logger.error(f'分析规则 {rule.Child_Item_Name} 时出错: {e}')
-            return {
-                'Child_Item_Name': rule.Child_Item_Name,
-                'max_score': rule.Child_max_score,
-                'score': 0,
-                'reason': f'分析失败: {str(e)}',
-                'Parent_Item_Name': rule.Parent_Item_Name,
-                'is_qualitative': rule.is_qualitative,
-                'is_quantitative': rule.is_quantitative,
-                'is_veto': rule.is_veto,
-                'needs_comprehensive_analysis': getattr(
-                    rule, 'needs_comprehensive_analysis', False
-                ),  # 添加综合分析标记
-            }
-
     def analyze_bidding_document(self):
         """
         分析投标文件并生成评分，包含质量评估和重新转换逻辑
+        采用整合规则一次性分析的方式
         """
         try:
             self.logger.info(f'开始分析投标文件: {self.bid_file_path}')
@@ -350,7 +280,6 @@ class IntelligentBidAnalyzer(BidAnalyzerHelpers):
             if not rules_from_db:
                 return {'error': f'项目 {self.project_id} 在数据库中没有找到评分规则。'}
 
-            # 修复：直接使用数据库中的规则，不需要转换为树形结构
             self.logger.info(f'成功从数据库加载了 {len(rules_from_db)} 条评分规则。')
 
             # 2. 提取投标文件内容（优先从MD文件读取）
@@ -407,7 +336,7 @@ class IntelligentBidAnalyzer(BidAnalyzerHelpers):
             veto_passed = True
             for rule in veto_rules:
                 try:
-                    result = self.analyze_rule_parallel(rule, bid_pages)
+                    result = self._analyze_single_rule(rule, bid_pages)
                     # 检查否决项是否通过（得分大于0表示通过）
                     if result['score'] <= 0:
                         veto_passed = False
@@ -488,23 +417,8 @@ class IntelligentBidAnalyzer(BidAnalyzerHelpers):
                 and rule.is_qualitative  # 使用is_qualitative字段而不是分数来判断
             ]
 
-            # 分离需要综合分析的规则
-            regular_quantitative_rules = [
-                rule
-                for rule in quantitative_rules
-                if not getattr(rule, 'needs_comprehensive_analysis', False)
-            ]
-
-            comprehensive_analysis_rules = [
-                rule
-                for rule in quantitative_rules
-                if getattr(rule, 'needs_comprehensive_analysis', False)
-            ]
-
             self.progress_counter = 0
-            self.total_rules_to_analyze = (
-                len(regular_quantitative_rules) + len(comprehensive_analysis_rules) + 1
-            )  # 定性规则作为一个整体
+            self.total_rules_to_analyze = 2  # 定性规则和定量规则各作为一个整体
             self._update_progress(
                 0,
                 self.total_rules_to_analyze,
@@ -512,24 +426,22 @@ class IntelligentBidAnalyzer(BidAnalyzerHelpers):
                 [],
             )
 
-            # 先分析普通定量规则
+            # 先分析定量规则（组合为一个prompt进行分析）
             completed_count = 0
-            for rule in regular_quantitative_rules:
+            if quantitative_rules:
                 try:
-                    result = self.analyze_rule_parallel(rule, bid_pages)
-                    self.logger.info(
-                        f"定量规则分析结果 - '{rule.Child_Item_Name}': "
-                        f'得分 {result.get("score", 0)}/{result.get("max_score", 0)}, '
-                        f'原因: {result.get("reason", "N/A")}'
+                    # 组合所有定量规则为一个prompt进行分析
+                    result = self._analyze_quantitative_rules_combined(
+                        quantitative_rules, bid_pages
                     )
-                    analyzed_scores.append(result)
-                    analyzed_scores_for_progress.append(result)
+                    analyzed_scores.extend(result['detailed_scores'])
+                    analyzed_scores_for_progress.extend(result['detailed_scores'])
                     # 存储定量规则分析结果
-                    quantitative_results[rule.Child_Item_Name] = result
+                    quantitative_results = result['quantitative_results']
 
                     # 更新进度
                     completed_count += 1
-                    current_rule_name = f'分析定量规则 {completed_count}/{len(regular_quantitative_rules)}: {rule.Child_Item_Name}'
+                    current_rule_name = '分析定量规则 (组合分析)'
                     self._update_progress(
                         completed_count,
                         self.total_rules_to_analyze,
@@ -538,94 +450,66 @@ class IntelligentBidAnalyzer(BidAnalyzerHelpers):
                     )
 
                 except Exception as e:
-                    self.logger.error(
-                        f'分析定量规则 {rule.Child_Item_Name} 时发生异常: {e}'
-                    )
-                    # 添加一个默认的失败结果
-                    failed_result = {
-                        'Child_Item_Name': rule.Child_Item_Name,
-                        'max_score': rule.Child_max_score,
-                        'score': 0,
-                        'reason': f'分析失败: {str(e)}',
-                        'Parent_Item_Name': rule.Parent_Item_Name,
-                        'is_qualitative': False,  # 定量规则
-                        'is_quantitative': True,  # 定量规则
-                        'is_veto': rule.is_veto,
-                        'needs_comprehensive_analysis': False,  # 普通定量规则
-                    }
-                    analyzed_scores.append(failed_result)
-                    analyzed_scores_for_progress.append(failed_result)
-                    quantitative_results[rule.Child_Item_Name] = failed_result
+                    self.logger.error(f'分析定量规则组合时发生异常: {e}')
+                    # 如果组合分析失败，回退到逐条分析
+                    for rule in quantitative_rules:
+                        try:
+                            result = self._analyze_single_rule(rule, bid_pages)
+                            self.logger.info(
+                                f"定量规则分析结果 - '{rule.Child_Item_Name}': "
+                                f'得分 {result.get("score", 0)}/{result.get("max_score", 0)}, '
+                                f'原因: {result.get("reason", "N/A")}'
+                            )
+                            analyzed_scores.append(result)
+                            analyzed_scores_for_progress.append(result)
+                            # 存储定量规则分析结果
+                            quantitative_results[rule.Child_Item_Name] = result
 
-                    # 更新进度
-                    completed_count += 1
-                    current_rule_name = f'分析定量规则 {completed_count}/{len(regular_quantitative_rules)}: {rule.Child_Item_Name} (失败)'
-                    self._update_progress(
-                        completed_count,
-                        self.total_rules_to_analyze,
-                        current_rule_name,
-                        analyzed_scores_for_progress,
-                    )
+                            # 更新进度
+                            completed_count += 1
+                            current_rule_name = f'分析定量规则: {rule.Child_Item_Name}'
+                            self._update_progress(
+                                completed_count,
+                                self.total_rules_to_analyze,
+                                current_rule_name,
+                                analyzed_scores_for_progress,
+                            )
+                        except Exception as inner_e:
+                            self.logger.error(
+                                f'分析定量规则 {rule.Child_Item_Name} 时发生异常: {inner_e}'
+                            )
+                            # 添加一个默认的失败结果
+                            failed_result = {
+                                'Child_Item_Name': rule.Child_Item_Name,
+                                'max_score': rule.Child_max_score,
+                                'score': 0,
+                                'reason': f'分析失败: {str(inner_e)}',
+                                'Parent_Item_Name': rule.Parent_Item_Name,
+                                'is_qualitative': False,  # 定量规则
+                                'is_quantitative': True,  # 定量规则
+                                'is_veto': rule.is_veto,
+                            }
+                            analyzed_scores.append(failed_result)
+                            analyzed_scores_for_progress.append(failed_result)
+                            quantitative_results[rule.Child_Item_Name] = failed_result
 
-            # 分析需要综合分析的规则（只返回预评价数据）
-            for rule in comprehensive_analysis_rules:
-                try:
-                    result = self.analyze_rule_parallel(rule, bid_pages)
-                    self.logger.info(
-                        f"需要综合分析的规则预评价结果 - '{rule.Child_Item_Name}': "
-                        f'预评分 {result.get("score", 0)}/{result.get("max_score", 0)}, '
-                        f'原因: {result.get("reason", "N/A")}'
-                    )
-                    analyzed_scores.append(result)
-                    analyzed_scores_for_progress.append(result)
-                    # 存储定量规则分析结果
-                    quantitative_results[rule.Child_Item_Name] = result
-
-                    # 更新进度
-                    completed_count += 1
-                    current_rule_name = f'预评价综合分析规则 {completed_count - len(regular_quantitative_rules)}/{len(comprehensive_analysis_rules)}: {rule.Child_Item_Name}'
-                    self._update_progress(
-                        completed_count,
-                        self.total_rules_to_analyze,
-                        current_rule_name,
-                        analyzed_scores_for_progress,
-                    )
-
-                except Exception as e:
-                    self.logger.error(
-                        f'预评价综合分析规则 {rule.Child_Item_Name} 时发生异常: {e}'
-                    )
-                    # 添加一个默认的失败结果
-                    failed_result = {
-                        'Child_Item_Name': rule.Child_Item_Name,
-                        'max_score': rule.Child_max_score,
-                        'score': 0,
-                        'reason': f'预评价失败: {str(e)}',
-                        'Parent_Item_Name': rule.Parent_Item_Name,
-                        'is_qualitative': False,  # 定量规则
-                        'is_quantitative': True,  # 定量规则
-                        'is_veto': rule.is_veto,
-                        'needs_comprehensive_analysis': True,  # 需要综合分析
-                    }
-                    analyzed_scores.append(failed_result)
-                    analyzed_scores_for_progress.append(failed_result)
-                    quantitative_results[rule.Child_Item_Name] = failed_result
-
-                    # 更新进度
-                    completed_count += 1
-                    current_rule_name = f'预评价综合分析规则 {completed_count - len(regular_quantitative_rules)}/{len(comprehensive_analysis_rules)}: {rule.Child_Item_Name} (失败)'
-                    self._update_progress(
-                        completed_count,
-                        self.total_rules_to_analyze,
-                        current_rule_name,
-                        analyzed_scores_for_progress,
-                    )
+                            # 更新进度
+                            completed_count += 1
+                            current_rule_name = (
+                                f'分析定量规则: {rule.Child_Item_Name} (失败)'
+                            )
+                            self._update_progress(
+                                completed_count,
+                                self.total_rules_to_analyze,
+                                current_rule_name,
+                                analyzed_scores_for_progress,
+                            )
 
             # 再分析定性规则（组合为一个prompt进行分析）
             if qualitative_rules:
                 try:
                     # 组合所有定性规则为一个prompt进行分析
-                    result = self.analyze_qualitative_rules_combined(
+                    result = self._analyze_qualitative_rules_combined(
                         qualitative_rules, bid_pages
                     )
                     analyzed_scores.extend(result['detailed_scores'])
@@ -648,7 +532,7 @@ class IntelligentBidAnalyzer(BidAnalyzerHelpers):
                     # 如果组合分析失败，回退到逐条分析
                     for rule in qualitative_rules:
                         try:
-                            result = self.analyze_rule_parallel(rule, bid_pages)
+                            result = self._analyze_single_rule(rule, bid_pages)
                             analyzed_scores.append(result)
                             analyzed_scores_for_progress.append(result)
                             # 存储定性规则分析结果
@@ -656,7 +540,7 @@ class IntelligentBidAnalyzer(BidAnalyzerHelpers):
 
                             # 更新进度
                             completed_count += 1
-                            current_rule_name = f'分析定性规则 {completed_count - len(regular_quantitative_rules) - len(comprehensive_analysis_rules)}/{len(qualitative_rules)}: {rule.Child_Item_Name}'
+                            current_rule_name = f'分析定性规则: {rule.Child_Item_Name}'
                             self._update_progress(
                                 completed_count,
                                 self.total_rules_to_analyze,
@@ -670,14 +554,13 @@ class IntelligentBidAnalyzer(BidAnalyzerHelpers):
                             # 添加一个默认的失败结果
                             failed_result = {
                                 'Child_Item_Name': rule.Child_Item_Name,
-                                'max_score': rule.Child_max_score,
+                                'max_score': 0,  # 定性规则没有最高分
                                 'score': 0,
                                 'reason': f'分析失败: {str(inner_e)}',
                                 'Parent_Item_Name': rule.Parent_Item_Name,
                                 'is_qualitative': True,  # 定性规则
                                 'is_quantitative': False,  # 定性规则
                                 'is_veto': rule.is_veto,
-                                'needs_comprehensive_analysis': False,  # 定性规则不需要综合分析
                             }
                             analyzed_scores.append(failed_result)
                             analyzed_scores_for_progress.append(failed_result)
@@ -685,7 +568,9 @@ class IntelligentBidAnalyzer(BidAnalyzerHelpers):
 
                             # 更新进度
                             completed_count += 1
-                            current_rule_name = f'分析定性规则 {completed_count - len(regular_quantitative_rules) - len(comprehensive_analysis_rules)}/{len(qualitative_rules)}: {rule.Child_Item_Name} (失败)'
+                            current_rule_name = (
+                                f'分析定性规则: {rule.Child_Item_Name} (失败)'
+                            )
                             self._update_progress(
                                 completed_count,
                                 self.total_rules_to_analyze,
@@ -705,7 +590,7 @@ class IntelligentBidAnalyzer(BidAnalyzerHelpers):
             if (
                 all_scores_zero
                 and ai_errors_present
-                and (regular_quantitative_rules or comprehensive_analysis_rules)
+                and (quantitative_rules or qualitative_rules)
             ):
                 error_message = '所有评分项的AI分析均失败，请检查AI模型是否正常运行。'
                 self.logger.error(error_message)
@@ -763,9 +648,6 @@ class IntelligentBidAnalyzer(BidAnalyzerHelpers):
                 'veto_items_checked': True,  # 否决项已检查
                 'veto_items_passed': True,  # 否决项通过
                 'failed_veto_items': failed_veto_items,  # 未通过的否决项
-                'comprehensive_analysis_rules': [
-                    rule.Child_Item_Name for rule in comprehensive_analysis_rules
-                ],  # 需要综合分析的规则列表
             }
 
             # 如果有数据库会话，更新分析结果记录
@@ -823,12 +705,39 @@ class IntelligentBidAnalyzer(BidAnalyzerHelpers):
         ]
         return '\n\n'.join(context_parts)
 
-    def _create_prompt_for_child_rule(self, rule, context):
-        """为子项规则创建AI分析prompt"""
+    def _create_prompt_for_single_rule(self, rule, context):
+        """为单个规则创建AI分析prompt"""
         # 确保Child_Item_Name不为空
         child_item_name = rule.Child_Item_Name or '未知评分项'
 
-        prompt = f"""你是一个专业的评标专家，请根据以下信息对投标文件进行评分：
+        if rule.is_qualitative:
+            # 定性规则prompt
+            prompt = f"""你是一个专业的评标专家，请根据以下信息对投标文件进行定性评估：
+
+【评分项名称】
+{child_item_name}
+
+【评分标准描述】
+{rule.description or '无详细描述'}
+
+【投标文件相关内容】
+{context}
+
+【评估要求】
+1. 请根据评估规则对投标文件相关内容进行定性分析
+2. 判断投标文件是否符合要求
+3. 如果符合要求，请回答"符合"；如果不符合要求，请回答"不符合"并说明原因
+4. 评估必须基于投标文件的实际内容，不能凭空猜测
+
+【重要】请严格按照以下JSON格式返回结果，不要返回任何解释文字：
+{{"result": "符合/不符合", "reason": "判断理由"}}
+
+示例：
+{{"result": "符合", "reason": "投标文件中提供了完整的认证证书，符合评分标准要求"}}
+"""
+        else:
+            # 定量规则prompt
+            prompt = f"""你是一个专业的评标专家，请根据以下信息对投标文件进行评分：
 
 【评分项名称】
 {child_item_name}
@@ -856,180 +765,154 @@ class IntelligentBidAnalyzer(BidAnalyzerHelpers):
 """
         return prompt
 
-    def _parse_ai_score_response(self, response, max_score):
-        """解析AI返回的评分结果"""
+    def _parse_single_rule_response(self, response, rule):
+        """解析AI返回的单个规则分析结果"""
         try:
-            # 使用我们改进的JSON修复函数
-            result = self._fix_and_parse_json_response(response)
+            # 使用正则表达式提取JSON部分
+            import re
 
-            if isinstance(result, dict) and result:
-                # 提取分数和理由
-                score = float(result.get('score', 0))
-                reason = str(result.get('reason', ''))
+            json_match = re.search(r'\{.*\}', response, re.DOTALL)
+            if json_match:
+                json_str = json_match.group(0)
+                data = json.loads(json_str)
 
-                # 确保分数在合理范围内
-                if score < 0:
-                    score = 0
-                if score > max_score:
-                    score = max_score
+                if rule.is_qualitative:
+                    # 定性规则
+                    result = str(data.get('result', '未知'))
+                    reason = str(data.get('reason', ''))
+                    return result, reason
+                else:
+                    # 定量规则
+                    score = float(data.get('score', 0))
+                    reason = str(data.get('reason', ''))
 
-                return score, reason
+                    # 确保分数在合理范围内
+                    if score < 0:
+                        score = 0
+                    if score > rule.Child_max_score:
+                        score = rule.Child_max_score
+
+                    return score, reason
             else:
-                # 如果修复函数返回的不是字典或为空，返回默认值
-                return 0, '解析AI响应失败'
+                # 如果没有找到JSON，尝试直接解析整个响应
+                data = json.loads(response)
+
+                if rule.is_qualitative:
+                    # 定性规则
+                    result = str(data.get('result', '未知'))
+                    reason = str(data.get('reason', ''))
+                    return result, reason
+                else:
+                    # 定量规则
+                    score = float(data.get('score', 0))
+                    reason = str(data.get('reason', ''))
+
+                    # 确保分数在合理范围内
+                    if score < 0:
+                        score = 0
+                    if score > rule.Child_max_score:
+                        score = rule.Child_max_score
+
+                    return score, reason
         except Exception as e:
             self.logger.error(f'解析AI评分响应时出错: {e}')
             self.logger.error(f'原始响应: {response}')
-            return 0, f'解析AI响应失败: {str(e)}'
-
-    def _fix_and_parse_json_response(self, response):
-        """
-        修复并解析AI返回的JSON响应
-        """
-        try:
-            import re
-            import json
-
-            # 首先尝试清理响应，移除可能的代码块标记
-            cleaned_response = response.strip()
-            if cleaned_response.startswith('```json'):
-                cleaned_response = cleaned_response[7:]
-            if cleaned_response.startswith('```'):
-                cleaned_response = cleaned_response[3:]
-            if cleaned_response.endswith('```'):
-                cleaned_response = cleaned_response[:-3]
-            cleaned_response = cleaned_response.strip()
-
-            # 移除控制字符
-            cleaned_response = re.sub(r'[\x00-\x1f\x7f-\x9f]', '', cleaned_response)
-
-            # 使用正则表达式查找被大括号包围的JSON块
-            # re.DOTALL 使得 '.' 可以匹配包括换行在内的任意字符
-            json_match = re.search(r'\{.*\}', cleaned_response, re.DOTALL)
-            if json_match:
-                json_str = json_match.group(0)
+            if rule.is_qualitative:
+                return '未知', f'解析AI响应失败: {str(e)}'
             else:
-                # 如果没有找到JSON块，直接使用清理后的响应
-                json_str = cleaned_response
+                return 0, f'解析AI响应失败: {str(e)}'
 
-            # 尝试修复JSON格式问题
-            # 1. 确保字符串以闭合的大括号结尾
-            if not json_str.rstrip().endswith('}'):
-                # 查找最后一个闭合的大括号的位置
-                last_brace_pos = json_str.rfind('}')
-                if last_brace_pos != -1:
-                    # 在最后一个闭合大括号后添加缺失的闭合大括号
-                    json_str = json_str[: last_brace_pos + 1] + '}'
-
-            # 2. 确保所有引号都是成对出现的
-            quote_count = json_str.count('"')
-            if quote_count % 2 != 0:
-                # 如果引号数量是奇数，尝试在末尾添加一个引号
-                json_str = json_str.rstrip() + '"'
-
-            # 3. 修复缺少逗号的问题 - 在 }" 和 " 之间添加逗号（如果它们在同一行）
-            json_str = re.sub(r'(\}"\s*)\n\s*"', r'\1,\n"', json_str)
-
-            # 4. 修复多余的逗号问题 - 移除对象或数组末尾的逗号
-            json_str = re.sub(r',(\s*[}\]])', r'\1', json_str)
-
-            # 5. 移除控制字符
-            json_str = re.sub(r'[\x00-\x1f\x7f-\x9f]', '', json_str)
-
-            # 尝试解析修复后的JSON
-            data = json.loads(json_str)
-            return data
-        except Exception as e:
-            self.logger.error(f'修复JSON时出错: {e}')
-            # 如果修复失败，尝试使用更简单的修复方法
-            try:
-                import re
-
-                # 尝试提取所有的键值对
-                # 处理定性规则
-                qualitative_pattern = r'"([^"]+)"\s*:\s*\{[^}]*"result"\s*:\s*"([^"]*)"[^}]*"reason"\s*:\s*"([^"]*)"[^}]*\}'
-                qualitative_matches = re.findall(
-                    qualitative_pattern, response, re.DOTALL
-                )
-
-                # 处理定量规则
-                quantitative_pattern = r'"([^"]+)"\s*:\s*\{[^}]*"score"\s*:\s*([0-9.]+)[^}]*"reason"\s*:\s*"([^"]*)"[^}]*\}'
-                quantitative_matches = re.findall(
-                    quantitative_pattern, response, re.DOTALL
-                )
-
-                result = {}
-                # 处理定性规则匹配
-                for match in qualitative_matches:
-                    key, result_value, reason = match
-                    result[key] = {'result': result_value, 'reason': reason}
-
-                # 处理定量规则匹配
-                for match in quantitative_matches:
-                    key, score, reason = match
-                    # 只有当键不存在时才添加，避免覆盖定性规则
-                    if key not in result:
-                        result[key] = {'score': float(score), 'reason': reason}
-
-                if result:
-                    return result
-            except Exception as e2:
-                self.logger.error(f'简单修复方法也失败了: {e2}')
-
-            # 如果所有方法都失败，返回空字典
-            return {}
-
-    def _parse_combined_ai_response(self, response, rules):
-        """解析组合AI返回的评分结果"""
+    def _analyze_single_rule(self, rule, bid_pages):
+        """分析单个评分规则"""
         try:
-            # 使用我们改进的JSON修复函数
-            result = self._fix_and_parse_json_response(response)
+            self.logger.info(
+                f'正在为投标人 {self.bidder_name} 分析子项规则: {rule.Child_Item_Name}'
+            )
 
-            if isinstance(result, dict) and result:
-                results = {}
-                # 验证并处理每个规则的结果
-                for rule in rules:
-                    rule_name = rule.Child_Item_Name
-                    if rule_name in result:
-                        rule_data = result[rule_name]
-                        # 对于定性规则，我们关注的是结果而不是分数
-                        if 'result' in rule_data:
-                            result_value = str(rule_data.get('result', '未知'))
-                            reason = str(rule_data.get('reason', ''))
-                            results[rule_name] = {
-                                'result': result_value,
-                                'reason': reason,
-                            }
-                        else:
-                            # 如果没有result字段，可能是定量规则
-                            score = float(rule_data.get('score', 0))
-                            reason = str(rule_data.get('reason', ''))
-                            results[rule_name] = {'score': score, 'reason': reason}
-                    else:
-                        # 如果没有返回该规则的结果，给出默认值
-                        results[rule_name] = {'result': '未知', 'reason': '未分析'}
+            # 查找相关上下文（使用从MD文件读取的内容）
+            relevant_context = self._find_relevant_context_for_child_rule(
+                rule, bid_pages
+            )
 
-                return results
+            # 创建prompt
+            prompt = self._create_prompt_for_single_rule(rule, relevant_context)
+
+            # 记录发送给AI的prompt
+            self.logger.info(
+                f"--- Prompt for rule '{rule.Child_Item_Name}' ---\n{prompt}\n--- End of Prompt ---"
+            )
+
+            # 提交AI分析
+            ai_response = self.ai_analyzer.analyze_text(prompt)
+
+            # 初始化变量
+            result = '未知'
+            score = 0
+            reason = ''
+
+            if 'Error:' in ai_response:
+                self.logger.error(
+                    f"AI analysis failed for rule '{rule.Child_Item_Name}': {ai_response}"
+                )
+                if rule.is_qualitative:
+                    result, reason = '未知', f'AI分析失败: {ai_response}'
+                else:
+                    score, reason = 0, f'AI分析失败: {ai_response}'
             else:
-                # 如果修复函数返回的不是字典或为空，使用默认结果
-                results = {}
-                for rule in rules:
-                    results[rule.Child_Item_Name] = {
-                        'result': '未知',
-                        'reason': '解析AI响应失败',
-                    }
-                return results
-        except Exception as e:
-            self.logger.error(f'解析组合AI评分响应时出错: {e}')
-            self.logger.error(f'原始响应: {response}')
-            # 返回默认结果
-            results = {}
-            for rule in rules:
-                results[rule.Child_Item_Name] = {
-                    'result': '未知',
-                    'reason': f'解析AI响应失败: {str(e)}',
+                if rule.is_qualitative:
+                    result, reason = self._parse_single_rule_response(ai_response, rule)
+                else:
+                    score, reason = self._parse_single_rule_response(ai_response, rule)
+
+            # 返回分析结果
+            if rule.is_qualitative:
+                return {
+                    'Child_Item_Name': rule.Child_Item_Name,
+                    'max_score': 0,  # 定性规则没有最高分
+                    'score': 0,  # 定性规则不给具体分数
+                    'result': result,  # 符合/不符合
+                    'reason': reason,
+                    'Parent_Item_Name': rule.Parent_Item_Name,
+                    'is_qualitative': True,
+                    'is_quantitative': False,
+                    'is_veto': rule.is_veto,
                 }
-            return results
+            else:
+                return {
+                    'Child_Item_Name': rule.Child_Item_Name,
+                    'max_score': rule.Child_max_score,
+                    'score': score,
+                    'reason': reason,
+                    'Parent_Item_Name': rule.Parent_Item_Name,
+                    'is_qualitative': False,
+                    'is_quantitative': True,
+                    'is_veto': rule.is_veto,
+                }
+        except Exception as e:
+            self.logger.error(f'分析规则 {rule.Child_Item_Name} 时出错: {e}')
+            if rule.is_qualitative:
+                return {
+                    'Child_Item_Name': rule.Child_Item_Name,
+                    'max_score': 0,  # 定性规则没有最高分
+                    'score': 0,
+                    'result': '未知',
+                    'reason': f'分析失败: {str(e)}',
+                    'Parent_Item_Name': rule.Parent_Item_Name,
+                    'is_qualitative': True,
+                    'is_quantitative': False,
+                    'is_veto': rule.is_veto,
+                }
+            else:
+                return {
+                    'Child_Item_Name': rule.Child_Item_Name,
+                    'max_score': rule.Child_max_score,
+                    'score': 0,
+                    'reason': f'分析失败: {str(e)}',
+                    'Parent_Item_Name': rule.Parent_Item_Name,
+                    'is_qualitative': False,
+                    'is_quantitative': True,
+                    'is_veto': rule.is_veto,
+                }
 
     def _save_failed_pages_info(self, bid_processor):
         """保存PDF处理失败的页面信息"""
@@ -1192,7 +1075,170 @@ class IntelligentBidAnalyzer(BidAnalyzerHelpers):
         """
         return self.analyze_bidding_document()
 
-    def analyze_qualitative_rules_combined(self, qualitative_rules, bid_pages):
+    def _analyze_quantitative_rules_combined(self, quantitative_rules, bid_pages):
+        """组合分析所有定量规则"""
+        try:
+            self.logger.info(
+                f'正在为投标人 {self.bidder_name} 组合分析 {len(quantitative_rules)} 个定量规则'
+            )
+
+            # 构建组合prompt
+            prompt = self._create_combined_prompt_for_quantitative_rules(
+                quantitative_rules, bid_pages
+            )
+
+            # 检查是否需要分块处理
+            if isinstance(prompt, list):
+                # 分块处理
+                return self._analyze_quantitative_rules_chunked(
+                    prompt, quantitative_rules
+                )
+            else:
+                # 单个prompt处理
+                # 提交AI分析
+                ai_response = self.ai_analyzer.analyze_text(prompt)
+                if 'Error:' in ai_response:
+                    # 如果组合分析失败，返回空结果，让调用者回退到逐条分析
+                    raise Exception(f'AI分析失败: {ai_response}')
+
+                # 解析AI响应
+                results = self._parse_combined_quantitative_ai_response(
+                    ai_response, quantitative_rules
+                )
+
+                # 构造返回结果
+                detailed_scores = []
+                quantitative_results = {}
+
+                for rule in quantitative_rules:
+                    rule_name = rule.Child_Item_Name
+                    if rule_name in results:
+                        result = results[rule_name]
+                        detailed_scores.append(
+                            {
+                                'Child_Item_Name': rule_name,
+                                'max_score': rule.Child_max_score,
+                                'score': result['score'],
+                                'reason': result['reason'],
+                                'Parent_Item_Name': rule.Parent_Item_Name,
+                                'is_qualitative': False,
+                                'is_quantitative': True,
+                                'is_veto': rule.is_veto,
+                            }
+                        )
+                        quantitative_results[rule_name] = {
+                            'Child_Item_Name': rule_name,
+                            'max_score': rule.Child_max_score,
+                            'score': result['score'],
+                            'reason': result['reason'],
+                            'Parent_Item_Name': rule.Parent_Item_Name,
+                            'is_qualitative': False,
+                            'is_quantitative': True,
+                            'is_veto': rule.is_veto,
+                        }
+                    else:
+                        # 如果没有返回该规则的结果，给出默认值
+                        detailed_scores.append(
+                            {
+                                'Child_Item_Name': rule_name,
+                                'max_score': rule.Child_max_score,
+                                'score': 0,
+                                'reason': '未分析',
+                                'Parent_Item_Name': rule.Parent_Item_Name,
+                                'is_qualitative': False,
+                                'is_quantitative': True,
+                                'is_veto': rule.is_veto,
+                            }
+                        )
+                        quantitative_results[rule_name] = {
+                            'Child_Item_Name': rule_name,
+                            'max_score': rule.Child_max_score,
+                            'score': 0,
+                            'reason': '未分析',
+                            'Parent_Item_Name': rule.Parent_Item_Name,
+                            'is_qualitative': False,
+                            'is_quantitative': True,
+                            'is_veto': rule.is_veto,
+                        }
+
+                return {
+                    'detailed_scores': detailed_scores,
+                    'quantitative_results': quantitative_results,
+                }
+        except Exception as e:
+            self.logger.error(f'组合分析定量规则时出错: {e}')
+            # 重新抛出异常，让调用者决定是否回退到逐条分析
+            raise
+
+    def _analyze_quantitative_rules_chunked(self, prompts, quantitative_rules):
+        """分块分析定量规则"""
+        detailed_scores = []
+        quantitative_results = {}
+
+        # 创建规则名称到规则对象的映射，便于查找
+        rule_map = {rule.Child_Item_Name: rule for rule in quantitative_rules}
+
+        # 逐个处理每个分块
+        for i, prompt in enumerate(prompts):
+            try:
+                self.logger.info(
+                    f'正在分析第 {i + 1}/{len(prompts)} 个定量规则块 (分块处理)'
+                )
+
+                # 提交AI分析
+                ai_response = self.ai_analyzer.analyze_text(prompt)
+                if 'Error:' in ai_response:
+                    self.logger.warning(
+                        f'第 {i + 1} 个定量规则块AI分析失败: {ai_response}'
+                    )
+                    continue
+
+                # 解析AI响应
+                results = self._parse_combined_quantitative_ai_response(
+                    ai_response, quantitative_rules
+                )
+
+                # 将结果添加到总体结果中
+                for rule_name, result in results.items():
+                    if rule_name in rule_map:
+                        rule = rule_map[rule_name]
+                        detailed_scores.append(
+                            {
+                                'Child_Item_Name': rule_name,
+                                'max_score': rule.Child_max_score,
+                                'score': result['score'],
+                                'reason': result['reason'],
+                                'Parent_Item_Name': rule.Parent_Item_Name,
+                                'is_qualitative': False,
+                                'is_quantitative': True,
+                                'is_veto': rule.is_veto,
+                            }
+                        )
+                        quantitative_results[rule_name] = {
+                            'Child_Item_Name': rule_name,
+                            'max_score': rule.Child_max_score,
+                            'score': result['score'],
+                            'reason': result['reason'],
+                            'Parent_Item_Name': rule.Parent_Item_Name,
+                            'is_qualitative': False,
+                            'is_quantitative': True,
+                            'is_veto': rule.is_veto,
+                        }
+
+            except Exception as e:
+                self.logger.error(f'分析第 {i + 1} 个定量规则块时出错: {e}')
+                continue
+
+        # 如果没有成功分析任何规则，抛出异常让调用者回退到逐条分析
+        if not quantitative_results:
+            raise Exception('所有定量规则块分析都失败了')
+
+        return {
+            'detailed_scores': detailed_scores,
+            'quantitative_results': quantitative_results,
+        }
+
+    def _analyze_qualitative_rules_combined(self, qualitative_rules, bid_pages):
         """组合分析所有定性规则"""
         try:
             self.logger.info(
@@ -1219,7 +1265,7 @@ class IntelligentBidAnalyzer(BidAnalyzerHelpers):
                     raise Exception(f'AI分析失败: {ai_response}')
 
                 # 解析AI响应
-                results = self._parse_combined_ai_response(
+                results = self._parse_combined_qualitative_ai_response(
                     ai_response, qualitative_rules
                 )
 
@@ -1235,7 +1281,7 @@ class IntelligentBidAnalyzer(BidAnalyzerHelpers):
                         detailed_scores.append(
                             {
                                 'Child_Item_Name': rule_name,
-                                'max_score': rule.Child_max_score,
+                                'max_score': 0,  # 定性规则没有最高分
                                 'score': 0,  # 定性规则不给具体分数
                                 'result': result['result'],  # 符合/不符合
                                 'reason': result['reason'],
@@ -1243,12 +1289,11 @@ class IntelligentBidAnalyzer(BidAnalyzerHelpers):
                                 'is_qualitative': True,
                                 'is_quantitative': False,
                                 'is_veto': rule.is_veto,
-                                'needs_comprehensive_analysis': False,  # 定性规则不需要综合分析
                             }
                         )
                         qualitative_results[rule_name] = {
                             'Child_Item_Name': rule_name,
-                            'max_score': rule.Child_max_score,
+                            'max_score': 0,  # 定性规则没有最高分
                             'score': 0,  # 定性规则不给具体分数
                             'result': result['result'],  # 符合/不符合
                             'reason': result['reason'],
@@ -1256,35 +1301,32 @@ class IntelligentBidAnalyzer(BidAnalyzerHelpers):
                             'is_qualitative': True,
                             'is_quantitative': False,
                             'is_veto': rule.is_veto,
-                            'needs_comprehensive_analysis': False,  # 定性规则不需要综合分析
                         }
                     else:
                         # 如果没有返回该规则的结果，给出默认值
                         detailed_scores.append(
                             {
                                 'Child_Item_Name': rule_name,
-                                'max_score': rule.Child_max_score,
+                                'max_score': 0,  # 定性规则没有最高分
                                 'score': 0,
-                                'result': '未知',
+                                'result': '未分析',
                                 'reason': '未分析',
                                 'Parent_Item_Name': rule.Parent_Item_Name,
                                 'is_qualitative': True,
                                 'is_quantitative': False,
                                 'is_veto': rule.is_veto,
-                                'needs_comprehensive_analysis': False,  # 定性规则不需要综合分析
                             }
                         )
                         qualitative_results[rule_name] = {
                             'Child_Item_Name': rule_name,
-                            'max_score': rule.Child_max_score,
+                            'max_score': 0,  # 定性规则没有最高分
                             'score': 0,
-                            'result': '未知',
+                            'result': '未分析',
                             'reason': '未分析',
                             'Parent_Item_Name': rule.Parent_Item_Name,
                             'is_qualitative': True,
                             'is_quantitative': False,
                             'is_veto': rule.is_veto,
-                            'needs_comprehensive_analysis': False,  # 定性规则不需要综合分析
                         }
 
                 return {
@@ -1307,7 +1349,9 @@ class IntelligentBidAnalyzer(BidAnalyzerHelpers):
         # 逐个处理每个分块
         for i, prompt in enumerate(prompts):
             try:
-                self.logger.info(f'正在分析第 {i + 1}/{len(prompts)} 个定性规则块')
+                self.logger.info(
+                    f'正在分析第 {i + 1}/{len(prompts)} 个定性规则块 (分块处理)'
+                )
 
                 # 提交AI分析
                 ai_response = self.ai_analyzer.analyze_text(prompt)
@@ -1318,7 +1362,7 @@ class IntelligentBidAnalyzer(BidAnalyzerHelpers):
                     continue
 
                 # 解析AI响应
-                results = self._parse_combined_ai_response(
+                results = self._parse_combined_qualitative_ai_response(
                     ai_response, qualitative_rules
                 )
 
@@ -1330,7 +1374,7 @@ class IntelligentBidAnalyzer(BidAnalyzerHelpers):
                         detailed_scores.append(
                             {
                                 'Child_Item_Name': rule_name,
-                                'max_score': rule.Child_max_score,
+                                'max_score': 0,  # 定性规则没有最高分
                                 'score': 0,  # 定性规则不给具体分数
                                 'result': result['result'],  # 符合/不符合
                                 'reason': result['reason'],
@@ -1338,12 +1382,11 @@ class IntelligentBidAnalyzer(BidAnalyzerHelpers):
                                 'is_qualitative': True,
                                 'is_quantitative': False,
                                 'is_veto': rule.is_veto,
-                                'needs_comprehensive_analysis': False,  # 定性规则不需要综合分析
                             }
                         )
                         qualitative_results[rule_name] = {
                             'Child_Item_Name': rule_name,
-                            'max_score': rule.Child_max_score,
+                            'max_score': 0,  # 定性规则没有最高分
                             'score': 0,  # 定性规则不给具体分数
                             'result': result['result'],  # 符合/不符合
                             'reason': result['reason'],
@@ -1351,7 +1394,6 @@ class IntelligentBidAnalyzer(BidAnalyzerHelpers):
                             'is_qualitative': True,
                             'is_quantitative': False,
                             'is_veto': rule.is_veto,
-                            'needs_comprehensive_analysis': False,  # 定性规则不需要综合分析
                         }
 
             except Exception as e:
@@ -1367,8 +1409,75 @@ class IntelligentBidAnalyzer(BidAnalyzerHelpers):
             'qualitative_results': qualitative_results,
         }
 
-    def _create_combined_prompt_for_qualitative_rules(self, rules, bid_pages):
-        """为定性规则组合创建AI分析prompt"""
+    def _create_combined_prompt_for_quantitative_rules(self, rules, bid_pages):
+        """为定量规则组合创建AI分析prompt"""
+        # 收集所有相关上下文
+        all_context = []
+        for rule in rules:
+            relevant_context = self._find_relevant_context_for_child_rule(
+                rule, bid_pages
+            )
+            all_context.append(f'【{rule.Child_Item_Name}】\n{relevant_context}')
+
+        # 组合所有上下文
+        combined_context = '\n\n'.join(all_context)
+
+        # 构建规则描述 - 按照定量规则的格式，包含最高分信息
+        rule_descriptions = []
+        for rule in rules:
+            rule_descriptions.append(
+                f'{{"规则名称": "{rule.Child_Item_Name}", "该规则最高分": "{rule.Child_max_score}分", "规则描述": "{rule.description or "无详细描述"}"}}'
+            )
+
+        rules_text = '[' + ', '.join(rule_descriptions) + ']'
+
+        prompt = f"""你是一个资深的专业评标专家，现有如下一些定量规则：{rules_text}，投标文件内容为：{{{combined_context}}}，请根据规则逐项分析标书内容，根据每个规则的描述方法和最高分进行打分，返回格式为：[规则名称１：得分１，规则名称２：得分２，．．．]"""
+
+        # 获取Ollama的上下文长度限制（预留一些余量）
+        context_length_limit = self.ai_analyzer.context_length - 500
+
+        # 检查prompt长度，如果超出限制则进行分块处理
+        if len(prompt) > context_length_limit:
+            # 如果prompt太长，需要分块处理
+            return self._create_chunked_prompts_for_quantitative_rules(
+                rules, bid_pages, context_length_limit
+            )
+
+        return prompt
+
+    def _create_chunked_prompts_for_quantitative_rules(
+        self, rules, bid_pages, context_length_limit
+    ):
+        """为过长的定量规则创建分块prompts"""
+        # 将规则分组，每组规则创建一个prompt
+        chunked_prompts = []
+        chunk_size = max(1, len(rules) // 3)  # 大概分成3组
+
+        for i in range(0, len(rules), chunk_size):
+            chunk_rules = rules[i : i + chunk_size]
+            prompt = self._create_combined_prompt_for_quantitative_rules_chunk(
+                chunk_rules, bid_pages
+            )
+
+            # 如果单个chunk仍然太长，则进一步细分
+            if len(prompt) > context_length_limit:
+                # 进一步细分规则
+                sub_chunk_size = max(1, len(chunk_rules) // 2)
+                for j in range(0, len(chunk_rules), sub_chunk_size):
+                    sub_chunk_rules = chunk_rules[j : j + sub_chunk_size]
+                    sub_prompt = (
+                        self._create_combined_prompt_for_quantitative_rules_chunk(
+                            sub_chunk_rules, bid_pages
+                        )
+                    )
+                    chunked_prompts.append(sub_prompt)
+            else:
+                chunked_prompts.append(prompt)
+
+        return chunked_prompts
+
+    def _create_combined_prompt_for_quantitative_rules_chunk(self, rules, bid_pages):
+        """为定量规则块创建AI分析prompt"""
         # 收集所有相关上下文
         all_context = []
         for rule in rules:
@@ -1384,41 +1493,65 @@ class IntelligentBidAnalyzer(BidAnalyzerHelpers):
         rule_descriptions = []
         for rule in rules:
             rule_descriptions.append(
-                f'- {rule.Child_Item_Name}: {rule.description or "无详细描述"}'
+                f'- {rule.Child_Item_Name} (满分{rule.Child_max_score}分): {rule.description or "无详细描述"}'
             )
 
         rules_text = '\n'.join(rule_descriptions)
 
-        prompt = f"""你是一个专业的评标专家，请根据以下信息对投标文件进行定性评估：
+        prompt = f"""你是一个专业的评标专家，请根据以下信息对投标文件进行定量评分：
 
 【投标人名称】
 {self.bidder_name}
 
-【评估规则列表】
+【评分规则列表】
 {rules_text}
 
 【投标文件相关内容】
 {combined_context}
 
-【评估要求】
-1. 请根据评估规则对投标文件相关内容进行定性分析
-2. 对于每个评估规则，判断投标文件是否符合要求
-3. 如果符合要求，请回答"符合"；如果不符合要求，请回答"不符合"并说明原因
-4. 评估必须基于投标文件的实际内容，不能凭空猜测
+【评分要求】
+1. 请根据评分规则对投标文件相关内容进行评分
+2. 对于每个评分规则，给出具体的评分（0-满分）和评分理由
+3. 评分必须基于投标文件的实际内容，不能凭空猜测
+4. 如果投标文件中没有相关内容，请给出0分并说明原因
 
 【重要】请严格按照以下JSON格式返回结果，不要返回任何解释文字：
 {{
-  "规则名称1": {{"result": "符合/不符合", "reason": "判断理由"}},
-  "规则名称2": {{"result": "符合/不符合", "reason": "判断理由"}},
+  "规则名称1": {{"score": 得分, "reason": "评分理由"}},
+  "规则名称2": {{"score": 得分, "reason": "评分理由"}},
   ...
 }}
 
 示例：
 {{
-  "企业证书，认证体系": {{"result": "符合", "reason": "投标文件中提供了完整的认证证书，符合评分标准要求"}},
-  "标书的完整性": {{"result": "不符合", "reason": "标书缺少技术方案部分"}}
-}}
-"""
+  "技术方案完整性": {{"score": 8.5, "reason": "投标文件中提供了详细的技术方案，符合评分标准要求"}},
+  "项目实施计划": {{"score": 7.0, "reason": "实施计划较为完整，但缺少风险控制措施"}}
+}}"""
+        return prompt
+
+    def _create_combined_prompt_for_qualitative_rules(self, rules, bid_pages):
+        """为定性规则组合创建AI分析prompt"""
+        # 收集所有相关上下文
+        all_context = []
+        for rule in rules:
+            relevant_context = self._find_relevant_context_for_child_rule(
+                rule, bid_pages
+            )
+            all_context.append(f'【{rule.Child_Item_Name}】\n{relevant_context}')
+
+        # 组合所有上下文
+        combined_context = '\n\n'.join(all_context)
+
+        # 构建规则描述 - 按照定性规则的格式
+        rule_descriptions = []
+        for rule in rules:
+            rule_descriptions.append(
+                f'{{"规则名称": "{rule.Child_Item_Name}", "规则描述": "{rule.description or "无详细描述"}"}}'
+            )
+
+        rules_text = '[' + ', '.join(rule_descriptions) + ']'
+
+        prompt = f"""你是一个资深的专业评标专家，现有如下一些定性规则：{rules_text}，投标文件内容为：{{{combined_context}}}，请根据规则逐项分析标书内容，判断每项规则是否符合要求，返回格式为：[规则名称１：符合/不符合，规则名称２：符合/不符合，．．．]"""
 
         # 获取Ollama的上下文长度限制（预留一些余量）
         context_length_limit = self.ai_analyzer.context_length - 500
@@ -1517,11 +1650,153 @@ class IntelligentBidAnalyzer(BidAnalyzerHelpers):
 """
         return prompt
 
+    def _parse_combined_quantitative_ai_response(self, response, rules):
+        """解析组合AI返回的定量评分结果"""
+        try:
+            import re
+
+            # 使用正则表达式提取方括号内的内容
+            bracket_match = re.search(r'$$[^$$]*$$', response)
+            if bracket_match:
+                bracket_content = bracket_match.group(0)[1:-1]  # 去掉方括号
+
+                # 分割每个规则得分项
+                rule_items = bracket_content.split('，')
+
+                results = {}
+                for item in rule_items:
+                    # 匹配"规则名称：得分"格式
+                    match = re.search(r'(.+?)\s*[:：]\s*([0-9.]+)', item.strip())
+                    if match:
+                        rule_name = match.group(1).strip()
+                        score = float(match.group(2))
+
+                        # 查找对应的规则以确保分数在合理范围内
+                        for rule in rules:
+                            if rule.Child_Item_Name == rule_name:
+                                # 确保分数在合理范围内
+                                if score < 0:
+                                    score = 0
+                                if score > rule.Child_max_score:
+                                    score = rule.Child_max_score
+                                break
+
+                        results[rule_name] = {'score': score, 'reason': 'AI分析结果'}
+
+                return results
+            else:
+                # 如果没有找到方括号格式，尝试其他解析方法
+                # 使用正则表达式查找所有的"规则名称：得分"模式
+                pattern = r'(.+?)\s*[:：]\s*([0-9.]+)'
+                matches = re.findall(pattern, response)
+
+                results = {}
+                for match in matches:
+                    rule_name = match[0].strip()
+                    score = float(match[1])
+
+                    # 查找对应的规则以确保分数在合理范围内
+                    for rule in rules:
+                        if rule.Child_Item_Name == rule_name:
+                            # 确保分数在合理范围内
+                            if score < 0:
+                                score = 0
+                            if score > rule.Child_max_score:
+                                score = rule.Child_max_score
+                            break
+
+                    results[rule_name] = {'score': score, 'reason': 'AI分析结果'}
+
+                return results
+        except Exception as e:
+            self.logger.error(f'解析组合AI定量评分响应时出错: {e}')
+            self.logger.error(f'原始响应: {response}')
+            # 返回默认结果
+            results = {}
+            for rule in rules:
+                results[rule.Child_Item_Name] = {
+                    'score': 0,
+                    'reason': f'解析AI响应失败: {str(e)}',
+                }
+            return results
+
+    def _parse_combined_qualitative_ai_response(self, response, rules):
+        """解析组合AI返回的定性评估结果"""
+        try:
+            import re
+
+            # 使用正则表达式提取方括号内的内容
+            bracket_match = re.search(r'$$[^$$]*$$', response)
+            if bracket_match:
+                bracket_content = bracket_match.group(0)[1:-1]  # 去掉方括号
+
+                # 分割每个规则结果项
+                rule_items = bracket_content.split('，')
+
+                results = {}
+                for item in rule_items:
+                    # 匹配"规则名称：符合/不符合"格式
+                    match = re.search(r'(.+?)\s*[:：]\s*(符合|不符合)', item.strip())
+                    if match:
+                        rule_name = match.group(1).strip()
+                        result_value = match.group(2)
+
+                        results[rule_name] = {
+                            'result': result_value,
+                            'reason': 'AI分析结果',
+                        }
+
+                # 确保所有规则都有结果
+                for rule in rules:
+                    if rule.Child_Item_Name not in results:
+                        results[rule.Child_Item_Name] = {
+                            'result': '未知',
+                            'reason': '未分析',
+                        }
+
+                return results
+            else:
+                # 如果没有找到方括号格式，尝试其他解析方法
+                # 使用正则表达式查找所有的"规则名称：符合/不符合"模式
+                pattern = r'(.+?)\s*[:：]\s*(符合|不符合)'
+                matches = re.findall(pattern, response)
+
+                results = {}
+                for match in matches:
+                    rule_name = match[0].strip()
+                    result_value = match[1]
+
+                    results[rule_name] = {
+                        'result': result_value,
+                        'reason': 'AI分析结果',
+                    }
+
+                # 确保所有规则都有结果
+                for rule in rules:
+                    if rule.Child_Item_Name not in results:
+                        results[rule.Child_Item_Name] = {
+                            'result': '未知',
+                            'reason': '未分析',
+                        }
+
+                return results
+        except Exception as e:
+            self.logger.error(f'解析组合AI定性评估响应时出错: {e}')
+            self.logger.error(f'原始响应: {response}')
+            # 返回默认结果
+            results = {}
+            for rule in rules:
+                results[rule.Child_Item_Name] = {
+                    'result': '未知',
+                    'reason': f'解析AI响应失败: {str(e)}',
+                }
+            return results
+
 
 if __name__ == '__main__':
     import argparse
 
-    parser = argparse.ArgumentParser(description='智能投标分析器')
+    parser = argparse.ArgumentParser(description='增强版智能投标分析器')
     parser.add_argument('tender_file_path', help='招标文件路径')
     parser.add_argument('bid_file_path', help='投标文件路径')
     parser.add_argument('--db_session', help='数据库会话对象')
@@ -1531,7 +1806,7 @@ if __name__ == '__main__':
 
     args = parser.parse_args()
 
-    analyzer = IntelligentBidAnalyzer(
+    analyzer = EnhancedIntelligentBidAnalyzer(
         tender_file_path=args.tender_file_path,
         bid_file_path=args.bid_file_path,
         db_session=args.db_session,

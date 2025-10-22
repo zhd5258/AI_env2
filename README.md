@@ -2,130 +2,84 @@
 
 ## 项目简介
 
-智能投标文件评标系统是一个基于AI技术的自动化评标工具，旨在提高评标效率和准确性。系统能够自动解析招标文件和投标文件，提取评分规则，并对投标文件进行智能分析和评分。
+智能投标文件评标系统是一个基于人工智能技术的自动化评标工具，专门用于处理和分析投标文件。该系统能够自动提取投标文件中的关键信息，如投标人名称、投标价格等，并根据预设的评分规则进行自动评分。
 
-## 主要功能
+## 功能特性
 
-1. **PDF文件处理**：支持多种格式的PDF文件处理，包括图形、签名、加密等复杂内容
-2. **评分规则提取**：自动从招标文件中提取评分规则
-3. **投标文件分析**：对投标文件进行智能分析，提取关键信息
-4. **自动评分**：根据评分规则对投标文件进行自动评分
-5. **价格分特殊处理**：价格规则作为特殊定量规则独立处理
-6. **并行处理**：支持大文件的分块并行处理，提高处理速度
-7. **Web界面**：提供友好的Web操作界面
+1. **PDF文件处理** - 支持多种PDF处理引擎（PyMuPDF、MinerU、OCRmyPDF等）
+2. **文本提取与清洗** - 从PDF文件中提取结构化文本内容
+3. **关键信息提取** - 自动提取投标人名称、投标价格等关键信息
+4. **表格分析** - 智能识别和处理跨页表格
+5. **自动评分** - 根据预设规则进行自动评分
+6. **结果展示** - 提供友好的Web界面展示分析结果
 
-## 技术架构
+## 新增功能：文本处理模块
 
-- **后端**：Python + Flask
-- **前端**：HTML + CSS + JavaScript
-- **数据库**：SQLite
-- **AI引擎**：MinerU + 自研分析模块
-- **OCR**：支持多种OCR技术
+本系统新增了基于textacy库的文本处理模块，提供了以下功能：
 
-## 依赖项
+1. **文本清洗** - 移除多余的空白字符、换行符等
+2. **Markdown文本处理** - 专门处理Markdown格式的文本
+3. **关键词提取** - 使用TextRank算法提取文本关键词
+4. **文本标准化** - 统一引号、货币符号、百分比等格式
+5. **移除不需要元素** - 移除URL、邮箱、电话号码等
 
-请查看 [requirements.txt](requirements.txt) 文件获取完整的依赖列表。
+详细使用说明请参考 [docs/text_processor_usage.md](docs/text_processor_usage.md)
 
-## 安装指南
+## 安装依赖
 
-1. 克隆项目代码：
-   ```bash
-   git clone <repository-url>
-   cd tender-evaluation-system
-   ```
+```bash
+pip install -r requirements.txt
+```
 
-2. 安装依赖：
-   ```bash
-   pip install -r requirements.txt
-   ```
+## 安装可选依赖
 
-3. 安装MinerU：
-   请参考 [MinerU官方文档](https://github.com/opendatalab/MinerU) 进行安装。
+```bash
+# 安装textacy（用于文本处理）
+pip install textacy==0.12.0
 
-4. 初始化数据库：
-   ```bash
-   python migrate_db.py
-   ```
+# 安装spaCy中文模型（可选，用于更好的中文文本处理）
+python -m spacy download zh_core_web_sm
+```
 
-5. 启动应用：
-   ```bash
-   python app.py
-   ```
+## 使用方法
+
+```bash
+# 启动Web服务
+python app.py
+
+# 或者使用命令行工具
+tender-eval
+```
 
 ## 项目结构
 
 ```
 .
-├── app.py                 # 主应用文件
-├── config/                # 配置文件
-├── controllers/           # 控制器
-├── middleware/            # 中间件
-├── models/                # 数据库模型
-├── modules/               # 核心功能模块
-├── routes/                # 路由
-├── static/                # 静态资源
-├── templates/             # 模板文件
-├── tools/                 # 工具脚本
-├── requirements.txt       # 依赖清单
-└── README.md             # 项目说明
+├── app.py                 # 主应用入口
+├── requirements.txt       # 项目依赖
+├── setup.py              # 安装配置
+├── config/               # 配置文件
+├── controllers/          # 控制器
+├── middleware/           # 中间件
+├── models/               # 数据模型
+├── modules/              # 核心功能模块
+├── routes/               # 路由
+├── static/               # 静态文件
+├── tasks/                # 定时任务
+├── templates/            # 模板文件
+├── tools/                # 工具脚本
+└── docs/                 # 文档
 ```
 
 ## 核心模块
 
-### PDF处理器
-- `advanced_pdf_processor.py`：高级PDF处理器，支持多种OCR技术
-- `chunked_parallel_processor.py`：分块并行PDF处理器，支持大文件并行处理
-
-### 分析管理器
-- `analysis_manager.py`：分析管理器，统一处理项目分析流程
-- `intelligent_bid_analyzer.py`：智能投标文件分析器（排除价格规则）
-- `scoring_rules_manager.py`：评分规则管理器
-
-### 数据提取器
-- `bidder_name_extractor.py`：投标人名称提取器
-- `price_score_calculator.py`：价格分计算器（价格规则特殊处理）
-- `price_calculation_workflow.py`：价格计算工作流
-- `correct_scoring_extractor.py`：评分规则提取器
-
-### 规则处理模块
-- `scoring_rules_manager.py`：评分规则管理（正确标识价格规则）
-- `intelligent_bid_analyzer.py`：智能分析（排除价格规则）
-- `price_calculation_workflow.py`：价格计算工作流（专门处理价格规则）
-- `price_score_calculator.py`：价格分计算（AI计算和默认方法）
-
-## 评分规则分类处理
-
-系统将评分规则分为三类进行特殊处理：
-
-1. **价格规则**：
-   - 标识：`is_price_criteria=true`
-   - 特点：包含价格公式，独立处理
-   - 处理：由价格计算工作流专门处理，不参与普通AI分析
-
-2. **定量规则**：
-   - 标识：`is_price_criteria=false` 且 `Child_max_score>0`
-   - 特点：有具体分数，需要打分
-   - 处理：逐条AI分析，给出具体分数
-
-3. **定性规则**：
-   - 标识：`is_price_criteria=false` 且 `Child_max_score=0或null`
-   - 特点：无具体分数，判断符合/不符合
-   - 处理：组合AI分析，判断符合/不符合
-
-## 使用说明
-
-1. 访问 `http://localhost:8000`
-2. 上传招标文件和投标文件
-3. 系统自动分析并生成评分结果
-4. 可在界面中查看和导出评分结果
-
-## 注意事项
-
-1. 请确保已正确安装MinerU及其依赖
-2. 大文件处理可能需要较长时间，请耐心等待
-3. 系统需要足够的内存和存储空间
-4. 价格规则作为特殊规则独立处理，不与普通规则混合分析
+- `pdf_processor.py` - PDF文件处理模块
+- `bidder_name_extractor.py` - 投标人名称提取模块
+- `md_price_extractor.py` - 价格提取模块
+- `table_analyzer.py` - 表格分析模块
+- `text_processor.py` - 文本处理模块（新增）
+- `intelligent_bid_analyzer.py` - 智能评标分析模块
 
 ## 许可证
 
-本项目采用MIT许可证，详情请见 [LICENSE](LICENSE) 文件。
+MIT License

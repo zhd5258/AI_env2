@@ -11,12 +11,23 @@ import os
 from typing import Any
 from pathlib import Path
 
+# 尝试导入TextProcessor
+try:
+    from .text_processor import TextProcessor
+except ImportError:
+    try:
+        from text_processor import TextProcessor
+    except ImportError:
+        TextProcessor = None
+
 
 class MDPriceExtractor:
     """MD文件价格提取器"""
 
     def __init__(self):
         self.logger: logging.Logger = logging.getLogger(__name__)
+        # 初始化文本处理器
+        self.text_processor = TextProcessor() if TextProcessor else None
 
         # 投标一览表关键词（按优先级排序）
         self.bid_summary_keywords = [
@@ -679,7 +690,7 @@ class MDPriceExtractor:
 
     def _clean_html_text(self, html_text: str) -> str:
         """
-        清理HTML文本，移除HTML标签
+        使用textacy清理HTML文本，移除HTML标签
 
         Args:
             html_text: 包含HTML标签的文本
@@ -687,6 +698,18 @@ class MDPriceExtractor:
         Returns:
             清理后的纯文本
         """
+        # 如果textacy可用，使用textacy清洗文本
+        if self.text_processor:
+            try:
+                # 先移除HTML标签
+                clean_text = re.sub(r'<[^>]+>', '', html_text)
+                # 使用textacy进一步清洗
+                return self.text_processor.clean_text(clean_text)
+            except Exception as e:
+                self.logger.warning(f'使用textacy清洗HTML文本时出错: {e}')
+                # 回退到基本方法
+
+        # 基本清理方法（textacy不可用时的回退方案）
         # 移除HTML标签
         clean_text = re.sub(r'<[^>]+>', '', html_text)
 

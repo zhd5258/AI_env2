@@ -1,8 +1,19 @@
+#!/usr/bin/env python
+# -*- coding:utf-8 -*-
+#
+# 作者           : KingFreeDom
+# 创建时间         : 2025-10-22 18:35:51
+# 最近一次编辑者      : KingFreeDom
+# 最近一次编辑时间     : 2025-10-22 18:35:53
+# 文件相对于项目的路径   : \AI_ENV2\modules\table_analyzer_with_textacy.py
+#
+# Copyright (c) 2025 by 中车眉山车辆有限公司/KingFreeDom, All Rights Reserved.
+#
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-表格分析模块
-用于处理PDF中的表格数据，特别是跨页表格的识别和合并
+增强版表格分析模块
+使用textacy库对表格数据进行更高级的文本处理
 """
 
 import json
@@ -31,13 +42,12 @@ except ImportError:
 import pdfplumber
 
 
-class TableAnalyzer:
-    """表格分析器，用于处理PDF中的表格数据"""
+class EnhancedTableAnalyzer:
+    """增强版表格分析器，使用textacy进行文本处理"""
 
     def __init__(self, pdf_path: str):
         self.pdf_path = pdf_path
         self.logger = logging.getLogger(__name__)
-        # 初始化文本处理器
         self.text_processor = TextProcessor() if TextProcessor else None
         # 定义需要保留的表头关键词
         self.target_headers = [
@@ -295,7 +305,9 @@ class TableAnalyzer:
                 cleaned_data = []
                 for row in table['data']:
                     cleaned_row = [
-                        self._clean_text(str(cell)) if cell is not None else ''
+                        self._clean_text_with_textacy(str(cell))
+                        if cell is not None
+                        else ''
                         for cell in row
                     ]
                     cleaned_data.append(cleaned_row)
@@ -308,7 +320,9 @@ class TableAnalyzer:
                     cleaned_data = []
                     for row in data_rows:
                         cleaned_row = [
-                            self._clean_text(str(cell)) if cell is not None else ''
+                            self._clean_text_with_textacy(str(cell))
+                            if cell is not None
+                            else ''
                             for cell in row
                         ]
                         cleaned_data.append(cleaned_row)
@@ -316,7 +330,7 @@ class TableAnalyzer:
 
         # 清理表头
         cleaned_headers = [
-            self._clean_text(str(h)) if h is not None else ''
+            self._clean_text_with_textacy(str(h)) if h is not None else ''
             for h in base_table['headers']
         ]
 
@@ -402,7 +416,8 @@ class TableAnalyzer:
 
         # 清理表头文本
         cleaned_headers = [
-            self._clean_text(str(h)) if h is not None else '' for h in headers
+            self._clean_text_with_textacy(str(h)) if h is not None else ''
+            for h in headers
         ]
 
         # 检查是否包含所有目标关键词
@@ -443,9 +458,9 @@ class TableAnalyzer:
                         # 处理可能的None值并清理文本，同时去除多余空格
                         row_dict = {}
                         for i, (header, cell) in enumerate(zip(headers, row)):
-                            # 清理文本并去除多余空格
+                            # 使用textacy清理文本
                             cleaned_cell = (
-                                self._clean_text_and_spaces(str(cell))
+                                self._clean_text_with_textacy(str(cell))
                                 if cell is not None
                                 else ''
                             )
@@ -462,9 +477,9 @@ class TableAnalyzer:
                                 if i < len(headers) and headers[i]
                                 else f'column_{i}'
                             )
-                            # 清理文本并去除多余空格
+                            # 使用textacy清理文本
                             cleaned_cell = (
-                                self._clean_text_and_spaces(str(cell))
+                                self._clean_text_with_textacy(str(cell))
                                 if cell is not None
                                 else ''
                             )
@@ -481,9 +496,9 @@ class TableAnalyzer:
 
         return structured_tables
 
-    def _clean_text_and_spaces(self, text: str) -> str:
+    def _clean_text_with_textacy(self, text: str) -> str:
         """
-        使用textacy清理文本中的换行符并保留必要空格以保持可读性
+        使用textacy清洗文本
 
         Args:
             text: 需要清理的文本
@@ -501,9 +516,24 @@ class TableAnalyzer:
             except Exception as e:
                 self.logger.warning(f'使用textacy清洗文本时出错: {e}')
                 # 回退到基本方法
-                pass
+                return self._clean_text_basic(text)
+        else:
+            # 如果textacy不可用，使用基本方法
+            return self._clean_text_basic(text)
 
-        # 基本文本清洗方法（textacy不可用时的回退方案）
+    def _clean_text_basic(self, text: str) -> str:
+        """
+        基本文本清洗方法
+
+        Args:
+            text: 需要清理的文本
+
+        Returns:
+            str: 清理后的文本
+        """
+        if not text:
+            return ''
+
         # 替换各种换行符和制表符为空格
         text = (
             text.replace('\r\n', ' ')
@@ -530,18 +560,6 @@ class TableAnalyzer:
 
         return text
 
-    def _clean_text(self, text: str) -> str:
-        """
-        清理文本中的换行符和多余空白字符（兼容旧方法）
-
-        Args:
-            text: 需要清理的文本
-
-        Returns:
-            str: 清理后的文本
-        """
-        return self._clean_text_and_spaces(text)
-
     def save_tables(self, tables: List[Dict], output_path: str):
         """
         保存表格到JSON文件
@@ -556,3 +574,10 @@ class TableAnalyzer:
             self.logger.info(f'表格已保存到 {output_path}')
         except Exception as e:
             self.logger.error(f'保存表格到 {output_path} 时出错: {e}')
+
+
+# 使用示例
+if __name__ == '__main__':
+    # 示例使用增强版表格分析器
+    print('增强版表格分析器示例')
+    print('该模块展示了如何在表格分析中集成textacy文本处理功能')
