@@ -154,7 +154,9 @@ class EnhancedIntelligentBidAnalyzer(BidAnalyzerHelpers):
             else:
                 # 如果从MD文件加载失败，则使用extract_text_per_page方法
                 self.bid_pages = self.bid_processor.extract_text_per_page()
-            self._save_failed_pages_info(self.bid_processor)
+            self._save_failed_pages_info(
+                self.db, self.bid_document_id, self.bid_processor
+            )
             return self.bid_pages
 
         # 如果既没有预提取的文本，也没有处理器，则返回错误
@@ -914,22 +916,20 @@ class EnhancedIntelligentBidAnalyzer(BidAnalyzerHelpers):
                     'is_veto': rule.is_veto,
                 }
 
-    def _save_failed_pages_info(self, bid_processor):
+    def _save_failed_pages_info(self, db, bid_document_id, bid_processor):
         """保存PDF处理失败的页面信息"""
-        if not (self.db is not None and self.bid_document_id is not None):
+        if not (db is not None and bid_document_id is not None):
             return
         try:
             bid_doc = (
-                self.db.query(BidDocument)
-                .filter(BidDocument.id == self.bid_document_id)
-                .first()
+                db.query(BidDocument).filter(BidDocument.id == bid_document_id).first()
             )
             if bid_doc and hasattr(bid_processor, 'failed_pages_info'):
                 bid_doc.failed_pages_info = bid_processor.failed_pages_info
-                self.db.commit()
+                db.commit()
         except Exception as e:
             self.logger.error(f'保存失败页面信息时出错: {e}')
-            self.db.rollback()
+            db.rollback()
 
     def _retry_ocr_conversion(self):
         """重新转换PDF文件（OCR重试）"""
@@ -1073,7 +1073,52 @@ class EnhancedIntelligentBidAnalyzer(BidAnalyzerHelpers):
         """
         分析投标文件的公共接口方法
         """
+        # 先进行价格提取
+        self._extract_bid_price()
+
+        # 然后进行规则分析
         return self.analyze_bidding_document()
+
+    def _extract_bid_price(self):
+        """
+        提取投标价格并保存到数据库
+        """
+        try:
+            self.logger.info(f'开始提取投标价格: {self.bid_file_path}')
+
+            # 使用统一提取器提取价格
+            from modules.unified_extractor import UnifiedExtractor
+
+            unified_extractor = UnifiedExtractor(db_session=self.db)
+
+            # 提取价格
+            extracted_price = unified_extractor.extract_bid_price(self.bid_file_path)
+
+            if extracted_price is not None and extracted_price > 0:
+                self.logger.info(f'成功提取到投标价格: {extracted_price}')
+
+                # 保存价格到数据库
+                if self.db and self.bid_document_id:
+                    # 更新分析结果记录
+                    result_record = (
+                        self.db.query(AnalysisResult)
+                        .filter(AnalysisResult.bid_document_id == self.bid_document_id)
+                        .first()
+                    )
+                    if result_record:
+                        result_record.extracted_price = float(extracted_price)
+                        self.db.commit()
+                        self.logger.info(f'已将价格 {extracted_price} 保存到数据库')
+                    else:
+                        self.logger.warning('未找到分析结果记录，无法保存价格')
+            else:
+                self.logger.warning(f'未能提取到有效价格: {extracted_price}')
+
+        except Exception as e:
+            self.logger.error(f'提取投标价格时出错: {e}')
+            import traceback
+
+            self.logger.error(traceback.format_exc())
 
     def _analyze_quantitative_rules_combined(self, quantitative_rules, bid_pages):
         """组合分析所有定量规则"""
@@ -1422,11 +1467,11 @@ class EnhancedIntelligentBidAnalyzer(BidAnalyzerHelpers):
         # 组合所有上下文
         combined_context = '\n\n'.join(all_context)
 
-        # 构建规则描述 - 按照定量规则的格式，包含最高分信息
+        # 构建规则描述 - 按照定量规则的格式，包含最高分信息和更多详细信息
         rule_descriptions = []
         for rule in rules:
             rule_descriptions.append(
-                f'{{"规则名称": "{rule.Child_Item_Name}", "该规则最高分": "{rule.Child_max_score}分", "规则描述": "{rule.description or "无详细描述"}"}}'
+                f'{{"规则名称": "{rule.Child_Item_Name}", "该规则最高分": "{rule.Child_max_score}分", "规则描述": "{rule.description or "无详细描述"}", "是否为否决项": "{"是" if rule.is_veto else "否"}"}}'
             )
 
         rules_text = '[' + ', '.join(rule_descriptions) + ']'
@@ -1489,11 +1534,17 @@ class EnhancedIntelligentBidAnalyzer(BidAnalyzerHelpers):
         # 组合所有上下文
         combined_context = '\n\n'.join(all_context)
 
-        # 构建规则描述
+        # 构建规则描述，包含更详细的信息
         rule_descriptions = []
         for rule in rules:
+            # 使用规则描述字段，如果不存在则使用description字段
+            rule_desc = (
+                getattr(rule, 'rule_usage_description', None)
+                or rule.description
+                or '无详细描述'
+            )
             rule_descriptions.append(
-                f'- {rule.Child_Item_Name} (满分{rule.Child_max_score}分): {rule.description or "无详细描述"}'
+                f'- 规则名称: {rule.Child_Item_Name}\n  规则描述: {rule_desc}\n  满分: {rule.Child_max_score}分\n  是否为否决项: {"是" if rule.is_veto else "否"}'
             )
 
         rules_text = '\n'.join(rule_descriptions)
@@ -1542,11 +1593,17 @@ class EnhancedIntelligentBidAnalyzer(BidAnalyzerHelpers):
         # 组合所有上下文
         combined_context = '\n\n'.join(all_context)
 
-        # 构建规则描述 - 按照定性规则的格式
+        # 构建规则描述 - 按照定性规则的格式，包含更多信息
         rule_descriptions = []
         for rule in rules:
+            # 使用规则描述字段，如果不存在则使用description字段
+            rule_desc = (
+                getattr(rule, 'rule_usage_description', None)
+                or rule.description
+                or '无详细描述'
+            )
             rule_descriptions.append(
-                f'{{"规则名称": "{rule.Child_Item_Name}", "规则描述": "{rule.description or "无详细描述"}"}}'
+                f'{{"规则名称": "{rule.Child_Item_Name}", "规则描述": "{rule_desc}", "满分": "{rule.Child_max_score}分", "是否为否决项": "{"是" if rule.is_veto else "否"}"}}'
             )
 
         rules_text = '[' + ', '.join(rule_descriptions) + ']'
@@ -1654,11 +1711,48 @@ class EnhancedIntelligentBidAnalyzer(BidAnalyzerHelpers):
         """解析组合AI返回的定量评分结果"""
         try:
             import re
+            import json
 
+            # 首先尝试解析JSON格式
+            try:
+                # 查找JSON格式的响应
+                json_match = re.search(r'\{.*\}', response, re.DOTALL)
+                if json_match:
+                    json_str = json_match.group(0)
+                    result = json.loads(json_str)
+
+                    # 验证并处理每个规则的结果
+                    results = {}
+                    for rule in rules:
+                        rule_name = rule.Child_Item_Name
+                        if rule_name in result:
+                            rule_data = result[rule_name]
+                            if isinstance(rule_data, dict):
+                                score = float(rule_data.get('score', 0))
+                                reason = str(rule_data.get('reason', 'AI分析结果'))
+                            else:
+                                score = float(rule_data)
+                                reason = 'AI分析结果'
+
+                            # 确保分数在合理范围内
+                            if score < 0:
+                                score = 0
+                            if score > rule.Child_max_score:
+                                score = rule.Child_max_score
+
+                            results[rule_name] = {'score': score, 'reason': reason}
+                        else:
+                            results[rule_name] = {'score': 0, 'reason': '未分析'}
+
+                    return results
+            except (json.JSONDecodeError, ValueError, KeyError):
+                pass
+
+            # 如果JSON解析失败，尝试其他格式
             # 使用正则表达式提取方括号内的内容
-            bracket_match = re.search(r'$$[^$$]*$$', response)
+            bracket_match = re.search(r'\[([^\]]+)\]', response)
             if bracket_match:
-                bracket_content = bracket_match.group(0)[1:-1]  # 去掉方括号
+                bracket_content = bracket_match.group(1)
 
                 # 分割每个规则得分项
                 rule_items = bracket_content.split('，')
@@ -1706,6 +1800,14 @@ class EnhancedIntelligentBidAnalyzer(BidAnalyzerHelpers):
                             break
 
                     results[rule_name] = {'score': score, 'reason': 'AI分析结果'}
+
+                # 确保所有规则都有结果
+                for rule in rules:
+                    if rule.Child_Item_Name not in results:
+                        results[rule.Child_Item_Name] = {
+                            'score': 0,
+                            'reason': '未分析',
+                        }
 
                 return results
         except Exception as e:
@@ -1816,4 +1918,4 @@ if __name__ == '__main__':
     )
 
     result = analyzer.analyze()
-    print(result)
+    logger.info(f'分析结果: {result}')

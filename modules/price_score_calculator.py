@@ -1,3 +1,5 @@
+#!/usr/bin/env python
+# -*- coding:utf-8 -*-
 """
 价格分计算器模块
 负责计算投标人的价格得分
@@ -33,7 +35,7 @@ class PriceScoreCalculator(PriceScoreCalculatorHelpers):
             bool: 是否成功计算价格分
         """
         try:
-            self.logger.info(f'开始计算项目 {project_id} 的价格分')
+            self.logger.info(f'=== 开始计算项目 {project_id} 的价格分 ===')
 
             if not self.db:
                 self.logger.error('数据库会话未提供')
@@ -68,12 +70,6 @@ class PriceScoreCalculator(PriceScoreCalculatorHelpers):
                 self.logger.warning(f'项目 {project_id} 没有找到价格评分规则')
                 return False
 
-            # 构造包含公式和描述的字典
-            formula_info = {
-                'formula': price_rule.price_formula,
-                'description': price_rule.description,
-            }
-
             self.logger.info(
                 f'找到价格评分规则: 满分 {price_rule.Child_max_score}, 公式: {price_rule.price_formula}, 描述: {price_rule.description}'
             )
@@ -95,17 +91,41 @@ class PriceScoreCalculator(PriceScoreCalculatorHelpers):
                 f'提取到 {len(bidder_prices)} 个投标人的报价: {bidder_prices}'
             )
 
-            # 5. 构造发送给AI大模型的完整prompt
+            # 5. 检查并修复空价格问题
+            if not bidder_prices:
+                self.logger.error('未提取到任何投标人报价，价格分计算无法进行')
+                self.logger.error('请检查投标文件是否包含有效的价格信息')
+                # 记录详细的调试信息
+                self.logger.error('=== 价格提取失败详细信息 ===')
+                for result in analysis_results:
+                    self.logger.error(
+                        f'投标人: {result.bidder_name}, 提取价格: {result.extracted_price}'
+                    )
+                self.logger.error('=== 详细信息结束 ===')
+                return False
+
+            # 6. 构造发送给AI大模型的完整prompt
             # 格式: "投标人1：投标总价1,投标人2：投标总价2,投标人3：投标总价3,......."
             # 过滤掉无效的投标人名称
             valid_bidder_prices = {
                 name: price
                 for name, price in bidder_prices.items()
-                if name and str(name).strip() and name != 'None' and price is not None
+                if name
+                and str(name).strip()
+                and name != 'None'
+                and price is not None
+                and price > 0
             }
 
             if not valid_bidder_prices:
                 self.logger.error('没有有效的投标人报价用于价格分计算')
+                # 记录详细的调试信息
+                self.logger.error('=== 价格分计算失败详细信息 ===')
+                for result in analysis_results:
+                    self.logger.error(
+                        f'投标人: {result.bidder_name}, 提取价格: {result.extracted_price}'
+                    )
+                self.logger.error('=== 详细信息结束 ===')
                 return False
 
             bidder_info_str = ','.join(
@@ -140,7 +160,7 @@ class PriceScoreCalculator(PriceScoreCalculatorHelpers):
 示例（假设满分为40分）：
 {{"公司A": 38.2, "公司B": 40.0, "公司C": 35.3}}"""
 
-            # 简化日志记录，避免重复输出
+            # 详细日志记录
             self.logger.info(
                 f'开始计算价格分 - 投标人数量: {len(valid_bidder_prices)}, 满分: {price_max_score}分'
             )
@@ -150,17 +170,33 @@ class PriceScoreCalculator(PriceScoreCalculatorHelpers):
 
             # 6. 调用AI大模型计算价格分
             try:
+                self.logger.info('开始调用AI大模型计算价格分')
+                self.logger.debug(f'发送给AI的完整prompt: {prompt}')
+
                 ai_response = self.ai_analyzer.analyze_text(prompt)
 
-                # 简化AI响应日志记录
+                # 详细记录AI响应
                 self.logger.info('AI大模型响应接收成功')
                 self.logger.debug(f'AI响应内容: {ai_response}')
 
+                # 检查AI响应是否为空或无效
+                if not ai_response or not ai_response.strip():
+                    self.logger.error('AI大模型返回空响应')
+                    raise Exception('AI大模型返回空响应')
+
                 # 解析AI响应
                 price_scores = self._parse_price_scores_from_ai_response(ai_response)
+                self.logger.info(f'从AI响应解析出的价格分: {price_scores}')
+
+                # 检查解析结果是否为空
+                if not price_scores:
+                    self.logger.warning('从AI响应中未解析出有效价格分')
 
                 # 验证和修正价格分，确保不超过最高分
                 validated_scores = {}
+                all_scores_are_max = True  # 标记是否所有分数都是满分
+                all_scores_are_zero = True  # 标记是否所有分数都是0
+
                 for bidder_name, score in price_scores.items():
                     if score > price_max_score:
                         self.logger.warning(
@@ -174,23 +210,47 @@ class PriceScoreCalculator(PriceScoreCalculatorHelpers):
                         validated_scores[bidder_name] = 0
                     else:
                         validated_scores[bidder_name] = round(score, 2)
+                        # 如果有任何一个分数不是满分，则标记为False
+                        if score < price_max_score:
+                            all_scores_are_max = False
+                        # 如果有任何一个分数不是0，则标记为False
+                        if score > 0:
+                            all_scores_are_zero = False
 
                 price_scores = validated_scores
                 self.logger.info(f'验证和修正后的价格分计算结果: {price_scores}')
+                self.logger.info(
+                    f'所有分数都是满分: {all_scores_are_max}, 所有分数都是0: {all_scores_are_zero}'
+                )
+
+                # 如果所有投标人都得到了满分，可能是AI计算错误，需要重新使用默认方法计算
+                if all_scores_are_max and len(price_scores) > 1:
+                    self.logger.warning(
+                        '所有投标人都得到了满分，可能是AI计算错误，将使用默认计算方法重新计算'
+                    )
+                    price_scores = {}  # 清空AI计算结果，让后续逻辑使用默认方法
+
+                # 如果所有投标人都得到了0分，可能是AI计算错误，需要重新使用默认方法计算
+                if all_scores_are_zero and len(price_scores) > 1:
+                    self.logger.warning(
+                        '所有投标人都得到了0分，可能是AI计算错误，将使用默认计算方法重新计算'
+                    )
+                    price_scores = {}  # 清空AI计算结果，让后续逻辑使用默认方法
 
             except Exception as e:
-                self.logger.error(f'调用AI大模型计算价格分时出错: {e}')
-                # 修复：即使AI计算失败，也要尝试使用默认计算方法
+                self.logger.error(f'调用AI大模型计算价格分时出错: {e}', exc_info=True)
+                # 修复：即使AI计算失败，也要尝试使用默认方法计算
                 self.logger.info('AI价格分计算失败，尝试使用默认计算方法')
                 price_scores = self._calculate_price_scores_default(
                     valid_bidder_prices, price_rule
                 )
                 if not price_scores:
+                    self.logger.error('默认价格分计算也失败')
                     return False
 
-            # 7. 如果AI计算失败，使用默认计算方法
+            # 7. 如果AI计算失败或返回异常结果，使用默认计算方法
             if not price_scores:
-                self.logger.warning('AI价格分计算失败，使用默认计算方法')
+                self.logger.warning('AI价格分计算失败或返回异常结果，使用默认计算方法')
                 price_scores = self._calculate_price_scores_default(
                     valid_bidder_prices, price_rule
                 )
@@ -281,13 +341,25 @@ class PriceScoreCalculator(PriceScoreCalculatorHelpers):
                     self.logger.error(f'更新投标人 {bidder_name} 的价格分时出错: {e}')
                     continue
 
-            self.db.commit()
-            self.logger.info(f'成功更新了 {updated_count} 个投标方的价格分和总分')
-            self.logger.info('=' * 50)
-            return True
+            # 确保提交数据库更改
+            try:
+                self.db.commit()
+                self.logger.info(f'成功更新了 {updated_count} 个投标方的价格分和总分')
+                self.logger.info('=' * 50)
+                return True
+            except Exception as commit_e:
+                self.logger.error(f'提交数据库更改时出错: {commit_e}')
+                self.db.rollback()
+                return False
 
         except Exception as e:
             self.logger.error(f'计算项目 {project_id} 的价格分时出错: {e}')
+            # 确保在异常情况下回滚事务
+            if self.db:
+                try:
+                    self.db.rollback()
+                except Exception as rollback_e:
+                    self.logger.error(f'回滚数据库事务时出错: {rollback_e}')
             return False
 
     def _parse_price_scores_from_ai_response(self, ai_response):
@@ -428,7 +500,11 @@ class PriceScoreCalculator(PriceScoreCalculatorHelpers):
             Dict[str, float]: 投标人名称到价格分的映射
         """
         try:
-            self.logger.info('使用默认方法计算价格分')
+            self.logger.info('=== 使用默认方法计算价格分 ===')
+            self.logger.info(f'投标人报价: {bidder_prices}')
+            self.logger.info(
+                f'价格规则: {price_rule.Child_Item_Name}, 满分: {price_rule.Child_max_score}, 描述: {price_rule.description}'
+            )
 
             if not bidder_prices:
                 self.logger.error('没有投标人报价用于默认价格分计算')
@@ -438,8 +514,10 @@ class PriceScoreCalculator(PriceScoreCalculatorHelpers):
             valid_prices = {
                 name: price
                 for name, price in bidder_prices.items()
-                if price is not None and isinstance(price, (int, float)) and price > 0
+                if price is not None and isinstance(price, (int, float)) and price >= 0
             }
+
+            self.logger.info(f'有效投标人报价: {valid_prices}')
 
             if not valid_prices:
                 self.logger.error('没有有效的投标人报价用于默认价格分计算')
@@ -447,34 +525,62 @@ class PriceScoreCalculator(PriceScoreCalculatorHelpers):
 
             # 获取价格分满分
             max_score = price_rule.Child_max_score or 40
+            self.logger.info(f'价格分满分: {max_score}')
 
             # 根据公式计算价格分
             # 假设公式是: 投标报价得分＝(评标基准价/投标报价)×价格权重×100
-            if '评标基准价' in (price_rule.description or ''):
+            description = price_rule.description or ''
+            self.logger.info(f'价格规则描述: {description}')
+
+            if '评标基准价' in description:
                 # 如果描述中提到了评标基准价，需要先计算评标基准价
                 # 简化处理：使用最低价作为评标基准价
                 benchmark_price = min(valid_prices.values())
+                self.logger.info(f'评标基准价: {benchmark_price}')
                 price_scores = {}
 
                 for bidder_name, price in valid_prices.items():
                     try:
                         # 投标报价得分＝(评标基准价/投标报价)×价格权重×100
                         # 简化处理：假设价格权重为1
-                        score = (benchmark_price / price) * max_score
-                        price_scores[bidder_name] = round(score, 2)
+                        if price > 0:
+                            if benchmark_price == 0:
+                                # If the benchmark is 0, any positive price gets 0 score
+                                score = 0
+                            else:
+                                score = (benchmark_price / price) * max_score
+                            price_scores[bidder_name] = round(score, 2)
+                            self.logger.info(
+                                f'投标人 {bidder_name} 报价 {price}, 得分 {price_scores[bidder_name]}'
+                            )
+                        elif price == 0:
+                            # Bidder with price 0 gets max score
+                            price_scores[bidder_name] = float(max_score)
+                            self.logger.info(
+                                f'投标人 {bidder_name} 报价为0, 得满分 {max_score}'
+                            )
+                        else:  # Negative price
+                            price_scores[bidder_name] = 0
+                            self.logger.warning(
+                                f'投标人 {bidder_name} 报价为负数: {price}, 得分 0'
+                            )
                     except Exception as e:
                         self.logger.error(
                             f'计算投标人 {bidder_name} 的价格分时出错: {e}'
                         )
                         price_scores[bidder_name] = 0
 
-                self.logger.info(f'默认方法计算的价格分: {price_scores}')
+                self.logger.info(f'默认方法计算的价格分(评标基准价): {price_scores}')
                 return price_scores
-            else:
-                # 如果没有明确的公式，使用简单的低价高分规则
+            elif '最低价' in description and '最高分' in description:
+                # 如果描述中提到了最低价得最高分的规则
                 min_price = min(valid_prices.values())
                 max_price = max(valid_prices.values())
                 price_range = max_price - min_price
+
+                self.logger.info(
+                    f'价格范围: 最低价 {min_price}, 最高价 {max_price}, 范围 {price_range}'
+                )
 
                 price_scores = {}
                 for bidder_name, price in valid_prices.items():
@@ -486,15 +592,50 @@ class PriceScoreCalculator(PriceScoreCalculatorHelpers):
                             # 所有价格相同，都得满分
                             score = max_score
                         price_scores[bidder_name] = round(score, 2)
+                        self.logger.info(
+                            f'投标人 {bidder_name} 报价 {price}, 得分 {price_scores[bidder_name]}'
+                        )
                     except Exception as e:
                         self.logger.error(
                             f'计算投标人 {bidder_name} 的价格分时出错: {e}'
                         )
                         price_scores[bidder_name] = 0
 
-                self.logger.info(f'默认方法计算的价格分: {price_scores}')
+                self.logger.info(f'默认方法计算的价格分(最低价最高分): {price_scores}')
+                return price_scores
+            else:
+                # 默认使用简单的低价高分规则
+                self.logger.info('使用默认的低价高分规则')
+                min_price = min(valid_prices.values())
+                max_price = max(valid_prices.values())
+                price_range = max_price - min_price
+
+                self.logger.info(
+                    f'价格范围: 最低价 {min_price}, 最高价 {max_price}, 范围 {price_range}'
+                )
+
+                price_scores = {}
+                for bidder_name, price in valid_prices.items():
+                    try:
+                        if price_range > 0:
+                            # 线性计算：最低价得满分，最高价得0分
+                            score = ((max_price - price) / price_range) * max_score
+                        else:
+                            # 所有价格相同，都得满分
+                            score = max_score
+                        price_scores[bidder_name] = round(score, 2)
+                        self.logger.info(
+                            f'投标人 {bidder_name} 报价 {price}, 得分 {price_scores[bidder_name]}'
+                        )
+                    except Exception as e:
+                        self.logger.error(
+                            f'计算投标人 {bidder_name} 的价格分时出错: {e}'
+                        )
+                        price_scores[bidder_name] = 0
+
+                self.logger.info(f'默认方法计算的价格分(默认规则): {price_scores}')
                 return price_scores
 
         except Exception as e:
-            self.logger.error(f'默认价格分计算出错: {e}')
+            self.logger.error(f'默认价格分计算出错: {e}', exc_info=True)
             return {}

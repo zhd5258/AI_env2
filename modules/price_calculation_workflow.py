@@ -289,12 +289,65 @@ class PriceCalculationWorkflow:
                         bid_price = float(bid_doc.analysis_result.extracted_price)
                         self.logger.info(f'使用数据库中的价格: {bid_price}')
                     else:
-                        # 使用默认值0.0
-                        bid_price = 0.0
-                        self.logger.info('使用默认价格: 0.0')
+                        # 如果价格提取失败，尝试重新提取价格
+                        self.logger.warning(
+                            f'投标文件 {bid_doc.file_path} 的价格提取失败，尝试重新提取'
+                        )
+                        try:
+                            # 重新提取价格
+                            re_extracted_price = unified_extractor.extract_bid_price(
+                                bid_doc.file_path
+                            )
+                            if (
+                                re_extracted_price is not None
+                                and re_extracted_price > 0
+                            ):
+                                bid_price = float(re_extracted_price)
+                                self.logger.info(f'重新提取到价格: {bid_price}')
+
+                                # 立即保存价格到数据库
+                                if bid_doc.analysis_result:
+                                    bid_doc.analysis_result.extracted_price = bid_price
+                                    self.db.commit()
+                                    self.logger.info(
+                                        f'已将价格 {bid_price} 保存到数据库'
+                                    )
+                                else:
+                                    self.logger.warning(
+                                        '分析结果对象不存在，无法保存价格'
+                                    )
+                            else:
+                                # 如果重新提取也失败，记录错误但不使用默认值
+                                self.logger.error(
+                                    f'投标文件 {bid_doc.file_path} 的价格提取完全失败'
+                                )
+                                self.logger.error(
+                                    '这可能导致价格分计算失败，请检查文件内容'
+                                )
+                                # 不设置默认值，让后续逻辑处理
+                                continue
+                        except Exception as e:
+                            self.logger.error(f'重新提取价格时出错: {e}')
+                            self.logger.error(
+                                f'投标文件 {bid_doc.file_path} 的价格提取失败'
+                            )
+                            continue
                 else:
                     # 确保价格是float类型
                     bid_price = float(bid_price)
+                    # 验证价格是否合理
+                    if bid_price <= 0:
+                        self.logger.warning(
+                            f'投标人 {bidder_name} 的价格 {bid_price} 不合理，可能提取失败'
+                        )
+                    else:
+                        # 价格合理，保存到数据库
+                        if bid_doc.analysis_result:
+                            bid_doc.analysis_result.extracted_price = bid_price
+                            self.db.commit()
+                            self.logger.info(f'已将价格 {bid_price} 保存到数据库')
+                        else:
+                            self.logger.warning('分析结果对象不存在，无法保存价格')
 
                 # 保存到数据库
                 unified_extractor.save_bidder_info_to_db(

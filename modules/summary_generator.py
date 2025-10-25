@@ -296,14 +296,23 @@ def generate_summary_data(project_id: int, db: Session):
                             score = 0
                 scores.append(score)
 
-        # 直接使用数据库中存储的总分，避免重复计算
-        # 总分已经包含了子项得分和价格分
+        # 重新计算总分，确保总分是所有子项得分之和（包括价格分）
+        # 总分应该是所有子项得分之和，不超过100分
+        calculated_total_score = sum(
+            score
+            for score in scores
+            if score is not None and isinstance(score, (int, float))
+        )
+
+        # 确保总分不超过100分
+        calculated_total_score = min(calculated_total_score, 100.0)
+
         bidder_row = {
             'rank': rank,
             'bidder_name': result.bidder_name,
             'scores': scores,
             'price_score': result.price_score,
-            'total_score': round(float(getattr(result, 'total_score', 0) or 0), 2),
+            'total_score': round(float(calculated_total_score), 2),
         }
         rows_data.append(bidder_row)
         rank += 1
@@ -374,10 +383,17 @@ def generate_summary_data(project_id: int, db: Session):
     # 同时生成兼容旧格式的summary数据
     summary_data = []
     for result in results:
+        # 找到对应的bidder_row以获取重新计算的总分
+        calculated_total_score = 0
+        for row in rows_data:
+            if row['bidder_name'] == result.bidder_name:
+                calculated_total_score = row['total_score']
+                break
+
         summary_data.append(
             {
                 'bidder_name': result.bidder_name,
-                'total_score': result.total_score,
+                'total_score': calculated_total_score,  # 使用重新计算的总分
                 'price_score': result.price_score,
                 'rank': next(
                     (

@@ -131,6 +131,17 @@ def update_runtime_config():
             except (ValueError, TypeError):
                 return jsonify({'error': '质量不达标时重新分析配置必须是布尔值'}), 400
 
+        # 验证轮询时间间隔（1-30秒之间）
+        if 'polling_interval_sec' in updates:
+            polling_interval = updates['polling_interval_sec']
+            try:
+                polling_interval = int(polling_interval)
+                if not (1 <= polling_interval <= 30):
+                    return jsonify({'error': '轮询时间间隔必须在1-30秒之间'}), 400
+                updates['polling_interval_sec'] = polling_interval
+            except (ValueError, TypeError):
+                return jsonify({'error': '轮询时间间隔必须是整数'}), 400
+
         # 更新配置
         RUNTIME_CONFIG.update(updates)
 

@@ -12,6 +12,7 @@
 import logging
 import re
 from typing import List, Dict, Any, Optional
+from modules.logging_config import get_logger
 
 
 class ChineseNumberConverter:
@@ -100,7 +101,7 @@ class PriceExtractionManager:
     """价格提取管理器，统一处理价格提取相关功能"""
 
     def __init__(self):
-        self.logger = logging.getLogger(__name__)
+        self.logger = get_logger(__name__)
         self.converter = ChineseNumberConverter()
         # 优先匹配包含明确关键字的模式
         self.total_price_keywords = ['总价', '总报价', '投标报价', '合计', '总计']
@@ -171,6 +172,8 @@ class PriceExtractionManager:
             List[Dict[str, Any]]: 价格信息列表，每个元素包含value、confidence等字段
         """
         try:
+            self.logger.info(f'开始从{len(pages)}页内容中提取价格信息')
+
             # 使用增强的价格提取器提取价格
             prices = self.extract_enhanced_prices(pages)
 
@@ -192,7 +195,7 @@ class PriceExtractionManager:
             )
             return validated_prices
         except Exception as e:
-            self.logger.error(f'提取价格时出错: {e}')
+            self.logger.error(f'提取价格时出错: {e}', exc_info=True)
             return []
 
     def _is_price_reasonable(self, price: float, pages: List[str]) -> bool:

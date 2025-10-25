@@ -70,7 +70,7 @@ class UnifiedExtractor:
                 # 提取投标人名称和价格
                 bidder_name, bid_price = self.extract_bidder_info(bid_doc.file_path)
 
-                if bidder_name and bid_price:
+                if bidder_name:
                     # 保存到数据库
                     self.save_bidder_info_to_db(bid_doc.id, bidder_name, bid_price)
 
@@ -84,7 +84,7 @@ class UnifiedExtractor:
                         }
                     )
 
-                    self.logger.info(f'成功提取投标人信息: {bidder_name} - {bid_price}')
+                    self.logger.info(f"成功提取投标人信息: {bidder_name} - {bid_price or '未找到'}")
                 else:
                     self.logger.warning(
                         f'未能提取到有效的投标人信息: {bid_doc.file_path}'
@@ -178,6 +178,24 @@ class UnifiedExtractor:
                 return bidder_name.strip()
             return None
 
+    def _get_md_file_path(self, file_path: str) -> str:
+        """
+        获取对应的MD文件路径
+
+        Args:
+            file_path: 原始文件路径
+
+        Returns:
+            str: MD文件路径
+        """
+        # 获取文件名（不含扩展名）
+        filename = os.path.basename(file_path)
+        name_without_ext = os.path.splitext(filename)[0]
+
+        # 构造MD文件路径
+        md_file_path = os.path.join('output', f'{name_without_ext}.md')
+        return md_file_path
+
     def extract_bid_price(self, file_path: str) -> Optional[float]:
         """
         提取投标总价
@@ -192,62 +210,44 @@ class UnifiedExtractor:
             self.logger.info(f'开始提取投标总价: {file_path}')
 
             # 获取MD文件路径
-            pdf_processor = PDFProcessor(file_path)
-            md_file_path = pdf_processor.get_md_file_path()
+            md_file_path = self._get_md_file_path(file_path)
             self.logger.info(f'MD文件路径: {md_file_path}')
 
-            # 优先从MD文件提取价格（避免重复处理）
+            # 优先从MD文件提取价格
             if os.path.exists(md_file_path):
-                self.logger.info(f'MD文件存在，尝试从中提取价格: {md_file_path}')
-                # 直接使用MD价格提取器提取价格，避免通过price_manager的重复处理
+                self.logger.info(f'MD文件存在，从中提取价格: {md_file_path}')
                 from modules.md_price_extractor import MDPriceExtractor
 
                 md_extractor = MDPriceExtractor()
                 price = md_extractor.extract_price_from_md_file(md_file_path)
-                if price is not None:
-                    self.logger.info(f'从MD文件直接提取到价格: {price}')
+                if price is not None and price > 0:
+                    self.logger.info(f'从MD文件成功提取到价格: {price}')
                     return float(price)
+                else:
+                    self.logger.warning(f'从MD文件未提取到有效价格: {md_file_path}')
 
-            # 如果MD文件不存在或未提取到价格，回退到原有方法
-            self.logger.info('从MD文件未提取到价格，回退到PDF内容提取')
-            # 读取文件内容
-            content = ''
-            if os.path.exists(md_file_path):
-                self.logger.info(f'读取MD文件内容: {md_file_path}')
-                with open(md_file_path, 'r', encoding='utf-8') as f:
-                    content = f.read()
-            else:
-                # 如果MD文件不存在，处理PDF文件
-                self.logger.info(f'MD文件不存在，处理PDF文件: {file_path}')
-                pages = pdf_processor.extract_text_per_page()
-                content = '\n'.join(pages) if pages else ''
+            # 如果MD文件不存在或提取失败，则回退到从PDF提取
+            self.logger.info(f'回退到从PDF文件提取价格: {file_path}')
+            pdf_processor = PDFProcessor(file_path=file_path, file_type='bid')
+            pages = pdf_processor.extract_text_per_page()
+            if not pages:
+                self.logger.error(f'从PDF文件提取文本失败: {file_path}')
+                return None
 
-            # 使用价格提取管理器提取价格（仅处理PDF内容，不重复处理MD文件）
-            pages = [content]  # 将内容包装成页面列表格式
-            self.logger.info('使用价格提取管理器提取价格')
-
-            # 使用增强的价格提取器提取价格
-            from modules.enhanced_price_extractor import EnhancedPriceExtractor
-
-            extractor = EnhancedPriceExtractor()
-            candidate = extractor.extract_bid_price(
-                pdf_path=file_path, pages_text=pages
-            )
-
-            if candidate:
-                price = candidate.value
-                self.logger.info(f'从PDF内容提取到价格: {price}')
+            price = self.price_manager.extract_and_select_price(pages)
+            if price is not None and price > 0:
+                self.logger.info(f'从PDF文件成功提取到价格: {price}')
                 return float(price)
             else:
-                self.logger.warning('未能从PDF内容提取到价格，使用默认值0.0')
-                return 0.0  # 返回默认值而不是None，确保流程能继续
+                self.logger.warning(f'从PDF文件未提取到有效价格: {file_path}')
+                return None
 
         except Exception as e:
             self.logger.error(f'提取投标总价时出错: {e}', exc_info=True)
             return None
 
     def save_bidder_info_to_db(
-        self, bid_document_id: int, bidder_name: str, bid_price: float
+        self, bid_document_id: int, bidder_name: str, bid_price: Optional[float]
     ):
         """
         将投标人信息保存到数据库
@@ -281,7 +281,8 @@ class UnifiedExtractor:
 
             if analysis_result:
                 analysis_result.bidder_name = bidder_name
-                analysis_result.extracted_price = bid_price
+                if bid_price is not None:
+                    analysis_result.extracted_price = bid_price
             else:
                 # 创建新的分析结果记录
                 bid_document_project_id = (
@@ -293,7 +294,7 @@ class UnifiedExtractor:
                     project_id=bid_document_project_id,
                     bid_document_id=bid_document_id,
                     bidder_name=bidder_name,
-                    extracted_price=bid_price,
+                    extracted_price=bid_price if bid_price is not None else 0.0,
                     total_score=0.0,
                     price_score=0.0,
                     detailed_scores={},

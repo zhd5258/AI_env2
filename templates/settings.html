@@ -172,6 +172,12 @@
                 <small>当生成的MD文件质量不达标时，是否启用重新转换和分析功能</small>
             </div>
             
+            <div class="form-group">
+                <label for="polling_interval_sec">前端轮询时间间隔(秒):</label>
+                <input type="number" id="polling_interval_sec" name="polling_interval_sec" min="1" max="30" required>
+                <small>前端页面轮询分析进度的间隔时间（1-30秒）</small>
+            </div>
+            
             <button type="submit" id="runtimeConfigSubmitBtn">保存设置</button>
         </form>
     </div>
@@ -309,6 +315,8 @@
                     document.getElementById('auto_delete_md_files').checked = runtimeConfig.auto_delete_md_files || false;
                     // 设置质量不达标时重新分析的复选框状态
                     document.getElementById('enable_retry_on_quality_issue').checked = runtimeConfig.enable_retry_on_quality_issue !== false; // 默认为true
+                    // 设置轮询时间间隔
+                    document.getElementById('polling_interval_sec').value = runtimeConfig.polling_interval_sec || 3;
                 }
             } catch (error) {
                 console.error('获取运行时配置失败:', error);
@@ -393,6 +401,7 @@
             config.pdf_page_max_workers = parseInt(config.pdf_page_max_workers);
             config.pdf_page_timeout_sec = parseInt(config.pdf_page_timeout_sec);
             config.pdf_overall_min_timeout_sec = parseInt(config.pdf_overall_min_timeout_sec);
+            config.polling_interval_sec = parseInt(config.polling_interval_sec);
             // 获取复选框的值
             config.auto_delete_md_files = document.getElementById('auto_delete_md_files').checked;
             config.enable_retry_on_quality_issue = document.getElementById('enable_retry_on_quality_issue').checked;

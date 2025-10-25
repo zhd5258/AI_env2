@@ -4,8 +4,8 @@
 # 作者           : KingFreeDom
 # 创建时间         : 2025-10-18 08:22:38
 #最近一次编辑者      : KingFreeDom
-#最近一次编辑时间     : 2025-10-21 21:30:32
-#文件相对于项目的路径   : \AI_ENV2\app.py
+#最近一次编辑时间     : 2025-10-25 09:49:15
+#文件相对于项目的路径   : \AI_env2\app.py
 #
 # Copyright (c) 2025 by 中车眉山车辆有限公司/KingFreeDom, All Rights Reserved.
 #
@@ -19,55 +19,21 @@ from config.app_config import Config
 
 from middleware.cors_middleware import setup_cors
 from modules.runtime_config import load_config
+from modules.logging_config import setup_logging
 
 # 配置日志
-import os
-import logging.handlers
-
-# 确保logs目录存在
-log_dir = 'logs'
-if not os.path.exists(log_dir):
-    os.makedirs(log_dir)
-
-# 创建formatter
-formatter = logging.Formatter('%(asctime)s - %(levelname)s - %(message)s')
-
-# 配置根logger
-root_logger = logging.getLogger()
-root_logger.setLevel(logging.INFO)
-
-# 清除现有的处理器
-for handler in root_logger.handlers[:]:
-    root_logger.removeHandler(handler)
-
-# 创建控制台处理器
-console_handler = logging.StreamHandler()
-console_handler.setLevel(logging.INFO)
-console_handler.setFormatter(formatter)
-
-# 创建文件处理器
-file_handler = logging.handlers.RotatingFileHandler(
-    os.path.join(log_dir, 'application.log'),
-    maxBytes=10 * 1024 * 1024,  # 10MB
-    backupCount=5,
-)
-file_handler.setLevel(logging.INFO)
-file_handler.setFormatter(formatter)
-
-# 添加处理器到根logger
-root_logger.addHandler(console_handler)
-root_logger.addHandler(file_handler)
+logger = setup_logging()
 
 # 检查系统维护锁定文件
 LOCK_FILE = Path('system_maintenance.lock')
 if LOCK_FILE.exists():
-    print('=' * 50)
-    print('系统维护锁定中！')
-    print('检测到系统维护锁定文件，禁止自动启动主程序。')
-    print('请在确认系统优化或纠错完成后手动移除锁定文件：')
-    print(f'  {LOCK_FILE.absolute()}')
-    print('或使用命令：python tools/system_maintenance_lock.py unlock')
-    print('=' * 50)
+    logger.error('=' * 50)
+    logger.error('系统维护锁定中！')
+    logger.error('检测到系统维护锁定文件，禁止自动启动主程序。')
+    logger.error('请在确认系统优化或纠错完成后手动移除锁定文件：')
+    logger.error(f'  {LOCK_FILE.absolute()}')
+    logger.error('或使用命令：python tools/system_maintenance_lock.py unlock')
+    logger.error('=' * 50)
     sys.exit(1)
 
 # 创建Flask应用
@@ -122,25 +88,32 @@ def index():
     return render_template('index.html')
 
 
-@app.route('/static/<path:filename>')
-def static_files(filename):
-    """提供静态文件服务"""
-    return send_from_directory('static', filename)
+# 移除手动定义的静态文件路由，让Flask自动处理
+# @app.route('/static/<path:filename>')
+# def static_files(filename):
+#     """提供静态文件服务"""
+#     return send_from_directory('static', filename)
+
+
+@app.route('/favicon.ico')
+def favicon():
+    """提供favicon服务"""
+    return send_from_directory('static/favicon', 'favicon.ico')
 
 
 if __name__ == '__main__':
     # 记录应用启动日志
-    logging.info('应用启动中...')
+    logger.info('应用启动中...')
 
     # 再次检查锁定文件（双重保险）
     if LOCK_FILE.exists():
-        print('=' * 50)
-        print('系统维护锁定中！')
-        print('检测到系统维护锁定文件，禁止自动启动主程序。')
-        print('请在确认系统优化或纠错完成后手动移除锁定文件：')
-        print(f'  {LOCK_FILE.absolute()}')
-        print('或使用命令：python tools/system_maintenance_lock.py unlock')
-        print('=' * 50)
+        logger.error('=' * 50)
+        logger.error('系统维护锁定中！')
+        logger.error('检测到系统维护锁定文件，禁止自动启动主程序。')
+        logger.error('请在确认系统优化或纠错完成后手动移除锁定文件：')
+        logger.error(f'  {LOCK_FILE.absolute()}')
+        logger.error('或使用命令：python tools/system_maintenance_lock.py unlock')
+        logger.error('=' * 50)
         sys.exit(1)
 
     app.run(host='0.0.0.0', port=8000, debug=False)

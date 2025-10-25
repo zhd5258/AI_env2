@@ -163,7 +163,9 @@ class IntelligentBidAnalyzer(BidAnalyzerHelpers):
             else:
                 # 如果从MD文件加载失败，则使用extract_text_per_page方法
                 self.bid_pages = self.bid_processor.extract_text_per_page()
-            self._save_failed_pages_info(self.bid_processor)
+            self._save_failed_pages_info(
+                self.db, self.bid_document_id, self.bid_processor
+            )
             return self.bid_pages
 
         # 如果既没有预提取的文本，也没有处理器，则返回错误
@@ -1031,22 +1033,20 @@ class IntelligentBidAnalyzer(BidAnalyzerHelpers):
                 }
             return results
 
-    def _save_failed_pages_info(self, bid_processor):
+    def _save_failed_pages_info(self, db, bid_document_id, bid_processor):
         """保存PDF处理失败的页面信息"""
-        if not (self.db is not None and self.bid_document_id is not None):
+        if not (db is not None and bid_document_id is not None):
             return
         try:
             bid_doc = (
-                self.db.query(BidDocument)
-                .filter(BidDocument.id == self.bid_document_id)
-                .first()
+                db.query(BidDocument).filter(BidDocument.id == bid_document_id).first()
             )
             if bid_doc and hasattr(bid_processor, 'failed_pages_info'):
                 bid_doc.failed_pages_info = bid_processor.failed_pages_info
-                self.db.commit()
+                db.commit()
         except Exception as e:
             self.logger.error(f'保存失败页面信息时出错: {e}')
-            self.db.rollback()
+            db.rollback()
 
     def _retry_ocr_conversion(self):
         """重新转换PDF文件（OCR重试）"""
@@ -1380,11 +1380,11 @@ class IntelligentBidAnalyzer(BidAnalyzerHelpers):
         # 组合所有上下文
         combined_context = '\n\n'.join(all_context)
 
-        # 构建规则描述
+        # 构建规则描述，包含更详细的信息
         rule_descriptions = []
         for rule in rules:
             rule_descriptions.append(
-                f'- {rule.Child_Item_Name}: {rule.description or "无详细描述"}'
+                f'- 规则名称: {rule.Child_Item_Name}\n  规则描述: {rule.description or "无详细描述"}\n  满分: {rule.Child_max_score or 0}分\n  是否为否决项: {"是" if rule.is_veto else "否"}'
             )
 
         rules_text = '\n'.join(rule_descriptions)
@@ -1476,11 +1476,11 @@ class IntelligentBidAnalyzer(BidAnalyzerHelpers):
         # 组合所有上下文
         combined_context = '\n\n'.join(all_context)
 
-        # 构建规则描述
+        # 构建规则描述，包含更详细的信息
         rule_descriptions = []
         for rule in rules:
             rule_descriptions.append(
-                f'- {rule.Child_Item_Name}: {rule.description or "无详细描述"}'
+                f'- 规则名称: {rule.Child_Item_Name}\n  规则描述: {rule.description or "无详细描述"}\n  满分: {rule.Child_max_score or 0}分\n  是否为否决项: {"是" if rule.is_veto else "否"}'
             )
 
         rules_text = '\n'.join(rule_descriptions)

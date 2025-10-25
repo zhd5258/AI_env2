@@ -26,18 +26,50 @@ class PriceScoreCalculatorHelpers:
         bidder_prices = {}
         for result in analysis_results:
             try:
+                # 确保投标人名称不为空
+                bidder_name = result.bidder_name
+                if (
+                    not bidder_name
+                    or not str(bidder_name).strip()
+                    or bidder_name == 'None'
+                ):
+                    bidder_name = f'未知投标人_{result.id}'
+
+                # 优先使用extracted_price字段
+                if result.extracted_price is not None and result.extracted_price > 0:
+                    price_value = result.extracted_price
+                    bidder_prices[bidder_name] = float(price_value)
+                    self.logger.info(
+                        f'使用extracted_price提取到投标人 {bidder_name} 的价格: {price_value}'
+                    )
+                    continue
+
                 # 从detailed_scores中查找价格分项
                 price_info = self._extract_price_from_result(result)
                 if price_info and price_info.get('price') is not None:
-                    bidder_prices[result.bidder_name] = price_info['price']
-                elif result.extracted_price is not None:
-                    # 使用直接提取的价格
-                    bidder_prices[result.bidder_name] = result.extracted_price
+                    price_value = price_info['price']
+                    # 确保价格是有效的正数
+                    if isinstance(price_value, (int, float)) and price_value > 0:
+                        bidder_prices[bidder_name] = float(price_value)
+                        self.logger.info(
+                            f'从detailed_scores提取到投标人 {bidder_name} 的价格: {price_value}'
+                        )
+                        continue
+
+                # 如果所有方法都失败，记录错误
+                self.logger.error(
+                    f'投标人 {bidder_name} 的价格提取失败，无法进行价格分计算'
+                )
+                self.logger.error(f'  extracted_price: {result.extracted_price}')
+                self.logger.error(f'  detailed_scores: {result.detailed_scores}')
+
             except Exception as e:
                 self.logger.error(
                     f'提取投标人 {result.bidder_name} 的价格信息时出错: {e}'
                 )
                 continue
+                
+        self.logger.info(f'成功提取到 {len(bidder_prices)} 个投标人的价格: {bidder_prices}')
         return bidder_prices
 
     def _extract_price_from_result(self, result) -> Optional[Dict[str, Any]]:
@@ -84,7 +116,9 @@ class PriceScoreCalculatorHelpers:
             elif 'score' in price_item:
                 price = price_item['score']
 
-            return {'price': price, 'details': price_item}
+            # 确保价格是有效的正数
+            if price is not None and isinstance(price, (int, float)) and price >= 0:
+                return {'price': float(price), 'details': price_item}
 
         return None
 
@@ -113,16 +147,20 @@ class PriceScoreCalculatorHelpers:
                 if 'extracted_price' in score and isinstance(
                     score['extracted_price'], (int, float)
                 ):
-                    return float(score['extracted_price'])
+                    price_value = float(score['extracted_price'])
+                    if price_value > 0:  # 确保是正数
+                        return price_value
 
                 # 如果extracted_price不存在，尝试从score字段获取价格
                 if 'score' in score and isinstance(score['score'], (int, float)):
-                    return float(score['score'])
+                    price_value = float(score['score'])
+                    if price_value > 0:  # 确保是正数
+                        return price_value
 
                 # 递归检查子项
                 if 'children' in score and score['children']:
                     child_price = self._find_price_in_scores(score['children'])
-                    if child_price is not None:
+                    if child_price is not None and child_price > 0:
                         return child_price
 
         return None
@@ -168,9 +206,19 @@ class PriceScoreCalculatorHelpers:
                 )
             else:
                 # 按照评标规则公式计算：投标报价得分＝（评标基准价/投标报价）*满分
-                score = (min_price / price) * max_score
-                scores[bidder] = round(score, 2)
-                self.logger.info(f'投标人 {bidder} 报价 {price}，得分 {scores[bidder]}')
+                try:
+                    if price > 0:  # 防止除零错误
+                        score = (min_price / price) * max_score
+                        scores[bidder] = round(score, 2)
+                        self.logger.info(
+                            f'投标人 {bidder} 报价 {price}，得分 {scores[bidder]}'
+                        )
+                    else:
+                        scores[bidder] = 0
+                        self.logger.warning(f'投标人 {bidder} 报价为0或负数: {price}')
+                except Exception as e:
+                    scores[bidder] = 0
+                    self.logger.error(f'计算投标人 {bidder} 的价格分时出错: {e}')
 
         return scores
 
@@ -286,6 +334,9 @@ class PriceScoreCalculatorHelpers:
         """
         total = 0
         try:
+            if not isinstance(detailed_scores, list):
+                return total
+
             for item in detailed_scores:
                 # 跳过价格分项 - 支持多种字段名检查
                 item_name = (
@@ -294,7 +345,7 @@ class PriceScoreCalculatorHelpers:
                     or item.get('name', '')
                 )
 
-                if item.get('is_price_criteria') or '价格' in item_name:
+                if item.get('is_price_criteria') or '价格' in str(item_name):
                     continue
 
                 # 累加分数

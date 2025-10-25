@@ -3,6 +3,27 @@ let currentProjectId = null;
 let pollingActive = false;
 let progressInterval = null;
 let lastProgressData = null; // 保存最后一次进度数据
+let selectedTenderFile = null;
+let selectedBidFiles = [];
+let startTime = null;
+
+// 页面加载时获取轮询间隔配置
+async function loadPollingConfig () {
+    try {
+        const response = await fetch('/api/runtime-config');
+        if (response.ok) {
+            const config = await response.json();
+            window.pollingIntervalSec = config.polling_interval_sec || 3;
+            console.log('轮询间隔配置已加载:', window.pollingIntervalSec + '秒');
+        } else {
+            console.warn('获取轮询配置失败，使用默认值3秒');
+            window.pollingIntervalSec = 3;
+        }
+    } catch (error) {
+        console.error('获取轮询配置出错:', error);
+        window.pollingIntervalSec = 3;
+    }
+}
 
 // 从localStorage恢复项目ID（如果存在）
 function restoreProjectId () {
@@ -22,6 +43,211 @@ function saveProjectId (projectId) {
 function clearProjectId () {
     localStorage.removeItem('currentProjectId');
 }
+
+// 更新文件列表显示
+function updateFileList () {
+    const fileList = document.getElementById('fileList');
+    if (!fileList) return;
+
+    let html = '<ul>';
+
+    if (selectedTenderFile) {
+        html += `<li><strong>招标文件:</strong> ${selectedTenderFile.name}</li>`;
+    }
+
+    if (selectedBidFiles.length > 0) {
+        html += '<li><strong>投标文件:</strong><ul>';
+        selectedBidFiles.forEach(file => {
+            html += `<li>${file.name}</li>`;
+        });
+        html += '</ul></li>';
+    }
+
+    html += '</ul>';
+    fileList.innerHTML = html;
+}
+
+// 清除之前的结果显示
+function clearPreviousResults () {
+    // 隐藏结果区域
+    const resultDiv = document.getElementById('result');
+    if (resultDiv) {
+        resultDiv.style.display = 'none';
+        resultDiv.innerHTML = ''; // 清空结果内容
+        resultDiv.className = 'result'; // 重置类名
+    }
+
+    // 隐藏进度区域
+    const progressSection = document.getElementById('progressSection');
+    if (progressSection) {
+        progressSection.style.display = 'none';
+    }
+
+    // 显示上传表单
+    const uploadSection = document.querySelector('.upload-section');
+    if (uploadSection) {
+        uploadSection.style.display = 'block';
+    }
+
+    // 清除保存的项目ID
+    clearProjectId();
+
+    // 停止任何正在进行的轮询
+    stopProgressPolling();
+
+    // 重置项目ID变量
+    currentProjectId = null;
+
+    // 清除项目ID显示
+    const projectIdElement = document.getElementById('projectId');
+    if (projectIdElement) {
+        projectIdElement.textContent = '-';
+    }
+}
+
+// 文件选择事件处理
+document.addEventListener('DOMContentLoaded', function () {
+    // 加载轮询配置
+    loadPollingConfig();
+
+    const tenderFileInput = document.getElementById('tender_file');
+    const bidFilesInput = document.getElementById('bid_files');
+
+    if (tenderFileInput) {
+        tenderFileInput.addEventListener('change', function (e) {
+            selectedTenderFile = e.target.files[0];
+            updateFileList();
+            clearPreviousResults();
+        });
+    }
+
+    if (bidFilesInput) {
+        bidFilesInput.addEventListener('change', function (e) {
+            selectedBidFiles = [];
+            if (e.target.files.length > 0) {
+                for (let i = 0; i < e.target.files.length; i++) {
+                    selectedBidFiles.push(e.target.files[i]);
+                }
+            }
+            updateFileList();
+            clearPreviousResults();
+        });
+    }
+
+    // 表单提交处理
+    const uploadForm = document.getElementById('uploadForm');
+    if (uploadForm) {
+        uploadForm.addEventListener('submit', async function (e) {
+            e.preventDefault();
+
+            // 检查是否有文件被选中
+            if (!selectedTenderFile && selectedBidFiles.length === 0) {
+                alert('请至少选择一个文件');
+                return;
+            }
+
+            // 停止任何正在进行的轮询
+            stopProgressPolling();
+
+            const formData = new FormData();
+            if (selectedTenderFile) {
+                formData.append('tender_file', selectedTenderFile);
+            }
+
+            selectedBidFiles.forEach(file => {
+                formData.append('bid_files', file);
+            });
+
+            const resultDiv = document.getElementById('result');
+            const progressSection = document.getElementById('progressSection');
+            const fileListSection = document.getElementById('fileListSection');
+            if (resultDiv) resultDiv.style.display = 'none';
+
+            // 隐藏上传表单和文件列表，显示进度界面
+            const uploadSection = document.querySelector('.upload-section');
+            if (uploadSection) uploadSection.style.display = 'none';
+            if (fileListSection) fileListSection.style.display = 'none';
+            if (progressSection) progressSection.style.display = 'block';
+
+            // 隐藏符合性审查按钮
+            const complianceBtn = document.getElementById('complianceReviewBtn');
+            if (complianceBtn) {
+                complianceBtn.style.display = 'none';
+            }
+
+            // 重置用时显示和开始时间
+            const timeDisplay = document.getElementById('timeDisplay');
+            if (timeDisplay) {
+                timeDisplay.className = 'time-display processing';
+                document.getElementById('elapsedTime').textContent = '0';
+            }
+            startTime = new Date(); // 重置开始时间
+
+            try {
+                const response = await fetch('/api/init-upload', {
+                    method: 'POST',
+                    body: formData
+                });
+
+                const data = await response.json();
+
+                if (response.ok) {
+                    // 上传成功，更新项目ID
+                    currentProjectId = data.project_id;
+                    document.getElementById('projectId').textContent = currentProjectId;
+
+                    // 保存项目ID到localStorage
+                    saveProjectId(currentProjectId);
+
+                    // 确保进度界面显示
+                    if (progressSection) {
+                        progressSection.style.display = 'block';
+                    }
+
+                    // 现在开始轮询进度
+                    startProgressPolling();
+                } else {
+                    // 特别处理413错误（文件大小超出限制）
+                    if (response.status === 413) {
+                        if (resultDiv) {
+                            resultDiv.className = 'result error';
+                            if (data.error && data.error.includes('招标文件大小超出限制')) {
+                                resultDiv.innerHTML = `<h3>上传失败!</h3><p>招标文件大小超出限制，请检查系统设置中的单个文件大小限制。</p>`;
+                            } else if (data.error && data.error.includes('投标文件大小超出限制')) {
+                                resultDiv.innerHTML = `<h3>上传失败!</h3><p>投标文件大小超出限制，请检查系统设置中的单个文件大小限制。</p>`;
+                            } else if (data.error && data.error.includes('文件大小超出限制')) {
+                                resultDiv.innerHTML = `<h3>上传失败!</h3><p>文件大小超出限制，请检查系统设置中的单个文件大小限制。</p>`;
+                            } else {
+                                resultDiv.innerHTML = `<h3>上传失败!</h3><p>${data.error || '文件大小超出限制'}</p>`;
+                            }
+                            resultDiv.style.display = 'block';
+                        }
+                    } else {
+                        if (resultDiv) {
+                            resultDiv.className = 'result error';
+                            resultDiv.innerHTML = `<h3>上传失败!</h3><p>${data.error}</p>`;
+                            resultDiv.style.display = 'block';
+                        }
+                    }
+
+                    // 恢复上传表单
+                    if (uploadSection) uploadSection.style.display = 'block';
+                    if (progressSection) progressSection.style.display = 'none';
+                }
+            } catch (error) {
+                if (resultDiv) {
+                    resultDiv.className = 'result error';
+                    resultDiv.innerHTML = `<h3>请求失败!</h3><p>${error.message}</p>`;
+                    resultDiv.style.display = 'block';
+                }
+
+                // 恢复上传表单
+                if (uploadSection) uploadSection.style.display = 'block';
+                if (progressSection) progressSection.style.display = 'none';
+            }
+        });
+    }
+});
 
 // 轮询分析进度
 async function pollAnalysisStatus (projectId) {
@@ -134,12 +360,15 @@ function startProgressPolling () {
 
     // 检查是否应该启动轮询
     const progressSection = document.getElementById('progressSection');
-    if (progressSection && progressSection.style.display !== 'none' && currentProjectId) {
+    // 修改条件判断，确保在有currentProjectId时启动轮询，而不依赖progressSection的显示状态
+    if (currentProjectId) {
         pollingActive = true;
         // 使用定时器而不是递归调用
         if (progressInterval) {
             clearInterval(progressInterval);
         }
+        // 获取轮询间隔配置，默认3秒
+        const pollingInterval = window.pollingIntervalSec || 3;
         progressInterval = setInterval(() => {
             if (currentProjectId && shouldContinuePolling()) {
                 fetch(`/api/projects/${currentProjectId}/progress`)
@@ -193,7 +422,7 @@ function startProgressPolling () {
             } else {
                 stopProgressPolling();
             }
-        }, 2000); // 每2秒轮询一次
+        }, pollingInterval * 1000); // 使用配置的轮询间隔
     }
 }
 
@@ -226,20 +455,9 @@ document.addEventListener('DOMContentLoaded', function () {
 // 更新进度显示 - 实现每个投标文件的动态进展
 function updateProgress (data) {
     // 确保详细进度容器存在
-    let detailedProgressContainer = document.getElementById('detailedProgressContainer');
+    let detailedProgressContainer = document.getElementById('detailedProgress');
     const progressBar = document.getElementById('progressFill'); // 在index.html中是progressFill
     const progressText = document.getElementById('progressText');
-
-    if (!detailedProgressContainer) {
-        // 创建详细进度显示区域
-        const progressContainer = document.getElementById('progressSection');
-        if (progressContainer) {
-            detailedProgressContainer = document.createElement('div');
-            detailedProgressContainer.id = 'detailedProgressContainer';
-            detailedProgressContainer.className = 'mt-3';
-            progressContainer.appendChild(detailedProgressContainer);
-        }
-    }
 
     // 更新总体进度
     let overallProgress = 0;
@@ -284,6 +502,32 @@ function updateProgress (data) {
 
     if (progressText) {
         progressText.textContent = `总体进度: ${data.processing_status} (${completedBids}/${totalBids} 个文件完成)${phaseInfo}`;
+    }
+
+    // 更新用时显示
+    const timeDisplay = document.getElementById('timeDisplay');
+    const elapsedTimeElement = document.getElementById('elapsedTime');
+
+    if (data.total_time !== null) {
+        // 分析已完成，显示总用时
+        if (timeDisplay) {
+            timeDisplay.className = 'time-display completed';
+        }
+        const minutes = Math.floor(data.total_time / 60);
+        const seconds = Math.floor(data.total_time % 60);
+        if (elapsedTimeElement) {
+            elapsedTimeElement.textContent = `${minutes}分${seconds}秒`;
+        }
+    } else if (data.elapsed_time !== null) {
+        // 分析进行中，显示已用时
+        if (timeDisplay) {
+            timeDisplay.className = 'time-display processing';
+        }
+        const minutes = Math.floor(data.elapsed_time / 60);
+        const seconds = Math.floor(data.elapsed_time % 60);
+        if (elapsedTimeElement) {
+            elapsedTimeElement.textContent = `${minutes}分${seconds}秒`;
+        }
     }
 
     // 显示每个投标文件的详细进度
@@ -417,68 +661,113 @@ function displaySummary (summaryData) {
         return;
     }
 
-    // 构建汇总结果显示
+    // 构建汇总结果显示 - 支持动态表头
     let html = `
             <div class="card">
                 <div class="card-header">
                     <h3 class="card-title">项目汇总结果 - ${summaryData.project_name || '未知项目'}</h3>
                 </div>
                 <div class="card-body">
-                    <div class="table-responsive">
+                    <div class="table-responsive" style="max-height: 600px; overflow: auto;">
                         <table class="table table-bordered table-hover">
                             <thead class="table-light">
-                                <tr>
-                                    <th>投标人</th>
-                                    <th>投标总价</th>
-                                    <th>评标基准价</th>
-                                    <th>价格得分</th>
-                                    <th>技术得分</th>
-                                    <th>总分</th>
-                                    <th>排名</th>
-                                </tr>
-                            </thead>
-                            <tbody>
-        `;
+    `;
 
-    // 处理汇总数据
-    let summaryItems = [];
+    // 检查是否有动态表头数据
+    if (summaryData.header_rows && summaryData.rows) {
+        // 使用动态表头
+        html += '<tr>';
+        // 第一行表头
+        summaryData.header_rows[0].forEach(headerCell => {
+            const colspan = headerCell.colspan ? `colspan="${headerCell.colspan}"` : '';
+            const rowspan = headerCell.rowspan ? `rowspan="${headerCell.rowspan}"` : '';
+            html += `<th ${colspan} ${rowspan}>${headerCell.name}</th>`;
+        });
+        html += '</tr>';
 
-    // 检查是否是动态汇总数据格式
-    if (summaryData.rows) {
-        // 动态汇总数据格式
-        summaryItems = summaryData.rows.map(row => ({
-            bidder_name: row.bidder_name,
-            bid_price: null, // 动态汇总数据中没有这个字段
-            benchmark_price: null, // 动态汇总数据中没有这个字段
-            price_score: row.price_score,
-            technical_score: null, // 动态汇总数据中没有这个字段
-            total_score: row.total_score,
-            rank: row.rank
-        }));
-    } else if (summaryData.summary) {
-        // 普通汇总数据格式
-        summaryItems = summaryData.summary;
-    }
+        // 第二行表头（如果有）
+        if (summaryData.header_rows.length > 1) {
+            html += '<tr>';
+            summaryData.header_rows[1].forEach(headerCell => {
+                html += `<th>${headerCell.name}</th>`;
+            });
+            html += '</tr>';
+        }
 
-    if (summaryItems && summaryItems.length > 0) {
-        summaryItems.forEach((item, index) => {
-            // 如果没有排名，根据排序位置生成排名
-            const rank = item.rank || (index + 1);
+        html += '</thead><tbody>';
 
-            html += `
-                    <tr>
-                        <td>${item.bidder_name || 'N/A'}</td>
-                        <td>${item.bid_price ? item.bid_price.toFixed(2) : 'N/A'}</td>
-                        <td>${item.benchmark_price ? item.benchmark_price.toFixed(2) : 'N/A'}</td>
-                        <td>${item.price_score ? item.price_score.toFixed(2) : 'N/A'}</td>
-                        <td>${item.technical_score ? item.technical_score.toFixed(2) : 'N/A'}</td>
-                        <td>${item.total_score ? item.total_score.toFixed(2) : 'N/A'}</td>
-                        <td>${rank}</td>
-                    </tr>
-                `;
+        // 渲染数据行
+        summaryData.rows.forEach(rowData => {
+            html += '<tr>';
+            html += `<td>${rowData.rank}</td>`;
+            html += `<td>${rowData.bidder_name}</td>`;
+
+            // 渲染子项得分
+            rowData.scores.forEach(score => {
+                const cellValue = (typeof score === 'number') ? score.toFixed(2) : (score === null ? 'N/A' : score);
+                html += `<td>${cellValue}</td>`;
+            });
+
+            // 渲染价格分和总分
+            const priceScore = (typeof rowData.price_score === 'number') ? rowData.price_score.toFixed(2) : 'N/A';
+            const totalScore = (typeof rowData.total_score === 'number') ? rowData.total_score.toFixed(2) : 'N/A';
+            html += `<td>${priceScore}</td>`;
+            html += `<td>${totalScore}</td>`;
+            html += '</tr>';
         });
     } else {
-        html += '<tr><td colspan="7">无汇总数据</td></tr>';
+        // 回退到旧的显示方式
+        html += `
+                            <tr>
+                                <th>排名</th>
+                                <th>投标人</th>
+                                <th>价格得分</th>
+                                <th>总分</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+        `;
+
+        // 处理汇总数据
+        let summaryItems = [];
+
+        // 检查是否是动态汇总数据格式
+        if (summaryData.rows) {
+            // 动态汇总数据格式
+            summaryItems = summaryData.rows.map(row => ({
+                bidder_name: row.bidder_name,
+                price_score: row.price_score,
+                total_score: row.total_score,
+                rank: row.rank
+            }));
+        } else if (summaryData.summary) {
+            // 普通汇总数据格式
+            summaryItems = summaryData.summary;
+        }
+
+        if (summaryItems && summaryItems.length > 0) {
+            // 按总分降序排列
+            summaryItems.sort((a, b) => (b.total_score || 0) - (a.total_score || 0));
+
+            summaryItems.forEach((item, index) => {
+                // 如果没有排名，根据排序位置生成排名
+                const rank = item.rank || (index + 1);
+
+                const priceScore = (typeof item.price_score === 'number') ? item.price_score.toFixed(2) : 'N/A';
+                const totalScore = (typeof item.total_score === 'number') ? item.total_score.toFixed(2) : 'N/A';
+
+                html += `
+                    <tr>
+                        <td>${rank}</td>
+                        <td>${item.bidder_name || 'N/A'}</td>
+                        <td>${priceScore}</td>
+                        <td>${totalScore}</td>
+                    </tr>
+                `;
+            });
+        } else {
+            html += '<tr><td colspan="4">无汇总数据</td></tr>';
+        }
     }
 
     html += `
@@ -601,3 +890,4 @@ window.displayResults = displayResults;
 window.saveProjectId = saveProjectId;
 window.restoreProjectId = restoreProjectId;
 window.clearProjectId = clearProjectId;
+window.loadPollingConfig = loadPollingConfig;

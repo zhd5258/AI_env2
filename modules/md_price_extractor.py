@@ -137,7 +137,8 @@ class MDPriceExtractor:
             for i, section in enumerate(target_sections):
                 self.logger.info(f'正在处理第 {i + 1} 个投标一览表区域')
                 price = self._extract_price_from_section(section)
-                if price is not None and price > 1000:  # 过滤过小的价格
+                # 修改过滤条件，允许更小的价格值
+                if price is not None and price > 0:  # 改为 price > 0
                     self.logger.info(
                         f'从第 {i + 1} 个投标一览表区域提取到价格: {price}'
                     )
@@ -146,7 +147,8 @@ class MDPriceExtractor:
         # 3. 如果投标一览表区域未找到，从全文提取
         self.logger.info('从全文提取价格')
         price = self._extract_price_from_full_content(content)
-        if price is not None and price > 1000:  # 过滤过小的价格
+        # 修改过滤条件，允许更小的价格值
+        if price is not None and price > 0:  # 改为 price > 0
             self.logger.info(f'从全文提取到价格: {price}')
             return price
 
@@ -1042,7 +1044,8 @@ class MDPriceExtractor:
             for match in matches:
                 price_str = match if isinstance(match, str) else match[0]
                 price = self._str_to_float(price_str)
-                if price is not None and price > 1000:
+                # 修改过滤条件，允许更小的价格值
+                if price is not None and price > 0:  # 改为 price > 0
                     self.logger.info(f'从全文中找到价格: {price} (通过模式: {pattern})')
                     return price
 
@@ -1252,16 +1255,21 @@ class MDPriceExtractor:
         """
         # 查找特殊格式的价格
         special_patterns = [
+            # =================================================================
+            # 新增一个更通用的模式，放在最前面，希望能捕获更多情况
+            # 支持 "小写" 和 "大写" 之间有或没有其他文本
+            # =================================================================
+            r'(?:小写|报价|价格)[）\)]?\s*[:：]?\s*[（(]?\s*[￥¥]?\s*([\d,]+\.?\d*)\s*[)）]?\s*(?:元|万元)?.*?大写[）\)]?\s*[:：]?\s*[（(]?\s*([壹贰叁肆伍陆柒捌玖拾佰仟万亿零一二三四五六七八九十百千万亿元万元整\s]+)\s*[)）]?\s*(?:元|圆|整)?',
             # 江苏鑫桥文件中的格式（放在最前面）
             r'（小写）[￥¥]?([\d,]+\.?\d*)元（写）([壹贰叁肆伍陆柒捌玖拾佰仟万亿零一二三四五六七八九十百千万亿\s]+)元整。含[\d%]*增值税',
-            # 博达科技文件中的确切格式
-            r'（小写）[￥¥]([\d,]+\.?\d*)\s*元（含[\d%]+税）\s*（大写）(.+?)\s*元整',
-            # 博达科技文件中的另一种格式
-            r'（小写）[￥¥]([\d,]+\.?\d*)\s*元（含[\d%]+税）\s*（大写）(.+)',
+            # 博达科技文件中的确切格式 - 增加对空格和可选“元”的容忍度
+            r'（小写）\s*[￥¥]\s*([\d,]+\.?\d*)\s*元?\s*（含[\d%]+税）\s*（大写）\s*(.+?)\s*元整',
+            # 博达科技文件中的另一种格式 - 增加对空格的容忍度
+            r'（小写）\s*[￥¥]\s*([\d,]+\.?\d*)\s*元?\s*（含[\d%]+税）\s*（大写）\s*(.+)',
             # 江苏鑫桥文件中的格式
             r'（小写）[￥¥]?([\d,]+\.?\d*)元（写）([壹贰叁肆伍陆柒捌玖拾佰仟万亿零一二三四五六七八九十百千万亿元整\s]+)。含[\d%]+增值税。',
-            # 广东创智文件中的格式（部分匹配）
-            r'（小写）[￥¥]?([\d,]+\.?\d*)元（写）([壹贰叁肆伍陆柒捌玖拾佰仟万亿零一二三四五六七八九十百千万亿元整\s]+)',
+            # 广东创智文件中的格式（部分匹配）- 增加对空格和可选“元”的容忍度
+            r'（小写）\s*[￥¥]?\s*([\d,]+\.?\d*)\s*元?\s*（写）\s*([壹贰叁肆伍陆柒捌玖拾佰仟万亿零一二三四五六七八九十百千万亿元整\s]+)',
             # 湖北三江博力智能装备有限公司的格式
             r'\(小写\)([\d,]+\.?\d+)\(大写\)([壹贰叁肆伍陆柒捌玖拾佰仟万亿零一二三四五六七八九十百千万亿元整]+)',
             # 盐城大德涂装环保设备有限公司的格式
@@ -1315,15 +1323,14 @@ class MDPriceExtractor:
 
                 # 如果两个价格都提取成功且相差不大，则返回小写价格
                 if small_number_price is not None and large_number_price is not None:
-                    if (
-                        abs(small_number_price - large_number_price) < 10000
-                    ):  # 允许一定误差
+                    # 允许1%的误差
+                    if abs(small_number_price - large_number_price) / max(small_number_price, large_number_price, 1) < 0.01:
                         self.logger.info(
                             f'特殊格式价格验证通过，返回小写价格: {small_number_price}'
                         )
                         return small_number_price
                 # 如果只有小写价格提取成功，且在合理范围内，也返回小写价格
-                elif small_number_price is not None and small_number_price > 1000:
+                elif small_number_price is not None and small_number_price > 0:
                     self.logger.info(
                         f'特殊格式只有小写价格提取成功，返回小写价格: {small_number_price}'
                     )

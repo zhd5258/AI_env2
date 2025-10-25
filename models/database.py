@@ -9,6 +9,8 @@
 #
 # Copyright (c) 2025 by 中车眉山车辆有限公司/KingFreeDom, All Rights Reserved.
 #
+import json
+import codecs
 from sqlalchemy import (
     create_engine,
     Column,
@@ -19,6 +21,7 @@ from sqlalchemy import (
     JSON,
     Boolean,
     ForeignKey,
+    TypeDecorator,
 )
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import sessionmaker, relationship, Mapped, mapped_column
@@ -32,6 +35,44 @@ LOCAL_TZ = datetime.timezone(datetime.timedelta(hours=8))
 def get_local_time():
     """获取本地时间"""
     return datetime.datetime.now(LOCAL_TZ).replace(tzinfo=None)
+
+
+class GB18030JSONType(TypeDecorator):
+    """自定义JSON类型，使用GB18030编码格式"""
+
+    impl = String
+    cache_ok = True
+
+    def process_bind_param(self, value, dialect):
+        """将Python对象转换为数据库存储格式"""
+        if value is not None:
+            # 使用GB18030编码将JSON转换为字符串
+            json_str = json.dumps(value, ensure_ascii=False)
+            # 确保字符串可以被正确编码为GB18030
+            try:
+                # 测试编码
+                json_str.encode('gb18030')
+                return json_str
+            except UnicodeEncodeError:
+                # 如果无法编码为GB18030，使用Unicode转义
+                return json_str.encode('unicode_escape').decode('utf-8')
+        return None
+
+    def process_result_value(self, value, dialect):
+        """将数据库存储格式转换为Python对象"""
+        if value is not None:
+            try:
+                # 尝试直接解析
+                return json.loads(value)
+            except json.JSONDecodeError:
+                try:
+                    # 尝试使用GB18030解码
+                    decoded_value = value.encode('utf-8').decode('gb18030')
+                    return json.loads(decoded_value)
+                except (UnicodeDecodeError, json.JSONDecodeError):
+                    # 如果都失败了，返回原始值
+                    return value
+        return None
 
 
 DATABASE_URL = 'sqlite:///' + os.path.abspath(
@@ -50,7 +91,7 @@ class TenderProject(Base):
     name: Mapped[str] = mapped_column(String, index=True)
     description: Mapped[str] = mapped_column(String)
     tender_file_path: Mapped[str] = mapped_column(String, nullable=True)
-    scoring_rules_summary: Mapped[dict] = mapped_column(JSON)
+    scoring_rules_summary: Mapped[dict] = mapped_column(GB18030JSONType)
     created_at: Mapped[datetime.datetime] = mapped_column(
         DateTime, default=get_local_time
     )
@@ -116,10 +157,10 @@ class AnalysisResult(Base):
     total_score: Mapped[float] = mapped_column(Float)
     price_score: Mapped[float] = mapped_column(Float)  # Adding price score field
     extracted_price: Mapped[float] = mapped_column(Float)  # Extracted bid price
-    detailed_scores: Mapped[dict] = mapped_column(JSON)
+    detailed_scores: Mapped[dict] = mapped_column(GB18030JSONType)
     # 添加动态评分项字段，用于存储各评分项的得分
     dynamic_scores: Mapped[dict] = mapped_column(
-        JSON, default=dict
+        GB18030JSONType, default=dict
     )  # 存储动态评分项得分，key为评分项简称，value为得分
     analysis_summary: Mapped[str] = mapped_column(String)
     analyzed_at: Mapped[datetime.datetime] = mapped_column(
@@ -130,7 +171,7 @@ class AnalysisResult(Base):
         String, nullable=True
     )  # To store the AI model name
     is_modified: Mapped[bool] = mapped_column(Boolean, default=False)
-    original_scores: Mapped[dict] = mapped_column(JSON)
+    original_scores: Mapped[dict] = mapped_column(GB18030JSONType)
     modification_count: Mapped[int] = mapped_column(Integer, default=0)
     last_modified_at: Mapped[datetime.datetime] = mapped_column(
         DateTime, default=get_local_time
@@ -139,10 +180,10 @@ class AnalysisResult(Base):
 
     # 添加定性规则和定量规则分析结果字段
     qualitative_analysis_results: Mapped[dict] = mapped_column(
-        JSON, default=dict
+        GB18030JSONType, default=dict
     )  # 定性规则分析结果
     quantitative_analysis_results: Mapped[dict] = mapped_column(
-        JSON, default=dict
+        GB18030JSONType, default=dict
     )  # 定量规则分析结果
     # 添加否决项检查结果字段
     veto_items_checked: Mapped[bool] = mapped_column(
@@ -152,7 +193,7 @@ class AnalysisResult(Base):
         Boolean, default=True
     )  # 否决项是否通过
     failed_veto_items: Mapped[dict] = mapped_column(
-        JSON, default=dict
+        GB18030JSONType, default=dict
     )  # 未通过的否决项列表
 
     project = relationship('TenderProject', back_populates='analysis_results')
@@ -179,6 +220,9 @@ class ScoringRule(Base):
     description: Mapped[str] = mapped_column(
         String(500), nullable=True
     )  # 增加描述字段长度
+    rule_usage_description: Mapped[str] = mapped_column(
+        String(1000), nullable=True
+    )  # 规则使用描述字段，用于AI分析时的完整规则说明
     is_veto: Mapped[bool] = mapped_column(Boolean, default=False)
     is_price_criteria: Mapped[bool] = mapped_column(Boolean, default=False)
     price_formula: Mapped[str] = mapped_column(
@@ -231,7 +275,7 @@ class ProjectAuditLog(Base):
     id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
     project_id: Mapped[int] = mapped_column(Integer, ForeignKey('tender_project.id'))
     operation_type: Mapped[str] = mapped_column(String)
-    operation_details: Mapped[dict] = mapped_column(JSON)
+    operation_details: Mapped[dict] = mapped_column(GB18030JSONType)
     operator: Mapped[str] = mapped_column(String)
     operation_time: Mapped[datetime.datetime] = mapped_column(
         DateTime, default=get_local_time

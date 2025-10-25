@@ -170,6 +170,16 @@ class IntelligentRulesClassifier:
             else:
                 self.logger.warning('AI大模型未返回有效的分类结果')
 
+            # 5. 特殊处理：确保所有价格规则都被标记为需要综合分析
+            price_rules = [
+                rule for rule in quantitative_rules if rule.is_price_criteria
+            ]
+            for rule in price_rules:
+                rule_name = rule.Child_Item_Name or rule.Parent_Item_Name
+                if not rule.needs_comprehensive_analysis:
+                    rule.needs_comprehensive_analysis = True
+                    self.logger.info(f'强制标记价格规则 "{rule_name}" 需要综合计算')
+
         except Exception as e:
             self.logger.error(f'对定量规则进行智能分类时出错: {e}')
 

@@ -48,6 +48,7 @@ class RuntimeConfig:
             'single_file_max_size': 100 * 1024 * 1024,  # 单个文件大小限制，默认100MB
             'auto_delete_md_files': False,  # 分析完成后是否自动删除MD文件，默认不删除
             'enable_retry_on_quality_issue': True,  # 当MD质量不达标时是否启用重新分析，默认启用
+            'polling_interval_sec': 3,  # 前端轮询时间间隔（秒），默认3秒
         }
 
     def _load_base_config(self) -> Dict[str, Any]:

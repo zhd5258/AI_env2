@@ -141,8 +141,10 @@ def cleanup_before_upload():
 
 if __name__ == "__main__":
     # 测试函数
-    print("系统维护模块测试")
-    print("1. 清空数据库:", clear_database())
-    print("2. 清理上传目录:", cleanup_uploads_directory())
-    print("3. 清理临时目录:", cleanup_temp_directory())
-    print("4. 清理所有临时目录:", cleanup_all_temp_directories())
+    import logging
+    logger = logging.getLogger(__name__)
+    logger.info("系统维护模块测试")
+    logger.info(f"1. 清空数据库: {clear_database()}")
+    logger.info(f"2. 清理上传目录: {cleanup_uploads_directory()}")
+    logger.info(f"3. 清理临时目录: {cleanup_temp_directory()}")
+    logger.info(f"4. 清理所有临时目录: {cleanup_all_temp_directories()}")

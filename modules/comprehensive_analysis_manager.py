@@ -123,24 +123,53 @@ class ComprehensiveAnalysisManager:
         """
         try:
             self.logger.info(f'开始对规则 "{rule.Child_Item_Name}" 进行综合分析')
+            self.logger.debug(
+                f'规则详细信息: ID={rule.id}, 满分={rule.Child_max_score}, 描述={rule.description}'
+            )
+
+            # 检查预评价数据是否有效
+            if not preliminary_data:
+                self.logger.warning(f'规则 "{rule.Child_Item_Name}" 没有预评价数据')
+                return {}
+
+            self.logger.info(f'预评价数据数量: {len(preliminary_data)}')
+            for i, data in enumerate(preliminary_data):
+                self.logger.debug(f'预评价数据[{i}]: {data}')
 
             # 构造发送给AI的prompt
             prompt = self._create_comprehensive_analysis_prompt(rule, preliminary_data)
+            self.logger.debug(f'发送给AI的prompt: {prompt}')
 
             # 调用AI大模型进行综合分析
+            self.logger.info('开始调用AI大模型进行综合分析')
             ai_response = self.ai_analyzer.analyze_text(prompt)
+            self.logger.info('AI大模型响应接收成功')
+            self.logger.debug(f'AI响应内容: {ai_response}')
+
+            # 检查AI响应是否为空
+            if not ai_response or not ai_response.strip():
+                self.logger.error(f'规则 "{rule.Child_Item_Name}" AI返回空响应')
+                raise Exception('AI返回空响应')
 
             # 解析AI响应
             final_scores = self._parse_comprehensive_analysis_response(
                 ai_response, preliminary_data
             )
+            self.logger.info(f'解析后的最终得分: {final_scores}')
+
+            # 再次检查解析结果是否有效
+            if not final_scores:
+                self.logger.warning(
+                    f'规则 "{rule.Child_Item_Name}" AI分析返回异常结果，使用回退排名计算方法'
+                )
+                return self._fallback_ranking_calculation(rule, preliminary_data)
 
             self.logger.info(
                 f'规则 "{rule.Child_Item_Name}" 综合分析完成，结果: {final_scores}'
             )
             return final_scores
         except Exception as e:
-            self.logger.error(f'执行综合分析时出错: {e}')
+            self.logger.error(f'执行综合分析时出错: {e}', exc_info=True)
             # 回退到简单的排名计算
             return self._fallback_ranking_calculation(rule, preliminary_data)
 
@@ -242,25 +271,42 @@ class ComprehensiveAnalysisManager:
                 else 10
             )
             validated_scores = {}
+            all_scores_are_max = True  # 标记是否所有分数都是满分
+
             for bidder_name, score in data.items():
                 if not isinstance(score, (int, float)):
                     self.logger.warning(f'投标人 {bidder_name} 的得分不是数字: {score}')
                     validated_scores[bidder_name] = 0
+                    all_scores_are_max = False  # 不是满分
                 elif score < 0:
                     validated_scores[bidder_name] = 0
+                    all_scores_are_max = False  # 不是满分
                 elif score > max_score:
                     validated_scores[bidder_name] = max_score
+                    # 如果满分等于最大分数，则标记为满分
+                    if max_score == score:
+                        pass  # 保持all_scores_are_max为True
+                    else:
+                        all_scores_are_max = False  # 不是满分
                 else:
                     validated_scores[bidder_name] = round(float(score), 2)
+                    # 如果有任何一个分数不是满分，则标记为False
+                    if score < max_score:
+                        all_scores_are_max = False
+
+            # 如果所有投标人都得到了满分，可能是AI计算错误
+            if all_scores_are_max and len(validated_scores) > 1:
+                self.logger.warning(
+                    '所有投标人都得到了满分，可能是AI计算错误，将使用回退排名计算方法'
+                )
+                # 返回空字典，让调用方使用回退方法
+                return {}
 
             return validated_scores
         except Exception as e:
             self.logger.error(f'解析综合分析响应时出错: {e}')
-            # 返回默认值
-            return {
-                data['bidder_name']: data['preliminary_score']
-                for data in preliminary_data
-            }
+            # 返回空字典，让调用方使用回退方法
+            return {}
 
     def _fallback_ranking_calculation(
         self, rule: ScoringRule, preliminary_data: List[Dict[str, Any]]
@@ -277,34 +323,102 @@ class ComprehensiveAnalysisManager:
         """
         try:
             self.logger.info(f'使用回退排名计算方法处理规则 "{rule.Child_Item_Name}"')
+            self.logger.debug(
+                f'规则详细信息: ID={rule.id}, 满分={rule.Child_max_score}, 描述={rule.description}'
+            )
+            self.logger.debug(f'预评价数据: {preliminary_data}')
+
+            # 检查输入数据是否有效
+            if not preliminary_data:
+                self.logger.warning(
+                    f'规则 "{rule.Child_Item_Name}" 没有预评价数据，无法进行回退计算'
+                )
+                return {}
+
+            # 过滤掉无效的预评价数据
+            valid_data = [
+                data
+                for data in preliminary_data
+                if data.get('preliminary_score') is not None
+            ]
+            if not valid_data:
+                self.logger.warning(
+                    f'规则 "{rule.Child_Item_Name}" 没有有效的预评价数据，无法进行回退计算'
+                )
+                return {}
+
+            self.logger.info(f'有效预评价数据数量: {len(valid_data)}')
 
             # 按预评分排序
             sorted_data = sorted(
-                preliminary_data, key=lambda x: x['preliminary_score'], reverse=True
+                valid_data, key=lambda x: x['preliminary_score'], reverse=True
             )
 
+            self.logger.info(f'排序后的数据: {sorted_data}')
+
             max_score = rule.Child_max_score or 10
+            self.logger.info(f'规则满分: {max_score}')
             scores = {}
 
             # 简单的线性排名得分计算
             total_bidders = len(sorted_data)
-            for i, data in enumerate(sorted_data):
-                # 线性分配得分：第一名满分，最后一名0分
-                score = (
-                    max_score * (total_bidders - i - 1) / (total_bidders - 1)
-                    if total_bidders > 1
-                    else max_score
-                )
-                scores[data['bidder_name']] = round(score, 2)
+            self.logger.info(f'投标人总数: {total_bidders}')
 
+            if total_bidders == 0:
+                self.logger.warning('没有投标人数据，返回空结果')
+                return {}
+            elif total_bidders == 1:
+                # 只有一个投标人，直接给满分
+                bidder_name = sorted_data[0]['bidder_name']
+                scores[bidder_name] = max_score
+                self.logger.info(
+                    f'只有一个投标人 {bidder_name}，直接给满分 {max_score}'
+                )
+            else:
+                # 多个投标人，按排名分配得分
+                for i, data in enumerate(sorted_data):
+                    bidder_name = data['bidder_name']
+                    preliminary_score = data['preliminary_score']
+                    # 线性分配得分：第一名满分，最后一名0分
+                    # 注意：这里是 (total_bidders - i - 1) 是为了第一名得满分
+                    score = (
+                        max_score * (total_bidders - i - 1) / (total_bidders - 1)
+                        if total_bidders > 1
+                        else max_score
+                    )
+                    scores[bidder_name] = round(score, 2)
+                    self.logger.debug(
+                        f'投标人 {bidder_name} 预评分 {preliminary_score}, 排名 {i + 1}, 最终得分 {scores[bidder_name]}'
+                    )
+
+            self.logger.info(f'回退计算结果: {scores}')
             return scores
         except Exception as e:
-            self.logger.error(f'回退排名计算失败: {e}')
-            # 返回预评分作为最终得分
-            return {
-                data['bidder_name']: data['preliminary_score']
-                for data in preliminary_data
-            }
+            self.logger.error(f'回退排名计算失败: {e}', exc_info=True)
+            # 返回预评分作为最终得分（作为最后的备选方案）
+            try:
+                result = {}
+                for data in preliminary_data:
+                    bidder_name = data.get('bidder_name')
+                    preliminary_score = data.get('preliminary_score', 0)
+                    if bidder_name is not None:
+                        # 确保分数在合理范围内
+                        if isinstance(preliminary_score, (int, float)):
+                            if preliminary_score < 0:
+                                result[bidder_name] = 0
+                            elif preliminary_score > (rule.Child_max_score or 10):
+                                result[bidder_name] = rule.Child_max_score or 10
+                            else:
+                                result[bidder_name] = round(float(preliminary_score), 2)
+                        else:
+                            result[bidder_name] = 0
+                self.logger.info(f'使用预评分作为最终得分: {result}')
+                return result
+            except Exception as fallback_e:
+                self.logger.error(
+                    f'使用预评分作为最终得分也失败了: {fallback_e}', exc_info=True
+                )
+                return {}
 
     def update_analysis_results(
         self, project_id: int, rule: ScoringRule, final_scores: Dict[str, float]

@@ -13,10 +13,12 @@ import requests
 import logging
 import time
 import os
-from typing import List
+from typing import List, Optional
+from .ai_connection_manager import get_ai_connection_manager
+from modules.logging_config import get_logger
 
 # 设置日志
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 
 class LocalAIAnalyzer:
@@ -24,63 +26,104 @@ class LocalAIAnalyzer:
         self, model='qwen3:30b-a3b-instruct-2507-q4_K_M', host='http://localhost:11434'
     ):
         self.model = model
-        self.api_url = f'{host}/api/generate'
         self.host = host
         # 从环境变量获取上下文长度，默认为8192
         self.context_length = int(os.environ.get('OLLAMA_CONTEXT_LENGTH', '8192'))
 
+        # 使用连接管理器
+        self.connection_manager = get_ai_connection_manager()
+
     def analyze_text(self, prompt):
-        # 优化AI分析速度的参数设置
-        options = {
-            'temperature': 0.7,  # 降低随机性以提高一致性
-            'top_p': 0.9,  # 限制词汇选择范围
-            'stop': ['\n\n'],  # 设置停止条件
-            'num_predict': 500,  # 限制生成长度
-            'num_ctx': self.context_length,  # 设置上下文长度
-        }
+        """
+        分析文本，使用连接管理器进行优化
 
-        payload = {
-            'model': self.model,
-            'prompt': prompt,
-            'stream': False,
-            'options': options,
-        }
+        Args:
+            prompt: 输入提示词
 
-        # 增加重试逻辑和更长的超时时间
-        max_retries = 3
-        retry_delay = 5  # seconds
-        request_timeout = 600  # 10分钟超时
+        Returns:
+            AI分析结果
+        """
+        # 使用连接管理器进行分析
+        return self.connection_manager.analyze_text(prompt)
 
-        for attempt in range(max_retries):
-            try:
-                # 添加超时设置，避免长时间等待
-                response = requests.post(
-                    self.api_url, json=payload, timeout=request_timeout
-                )
-                response.raise_for_status()
+    def analyze_bid_document(
+        self, rule_description: str, document_text: str, max_score: float
+    ) -> Optional[float]:
+        """
+        分析投标文件并根据评分规则给出分数
 
-                # The response from Ollama is a JSON object
-                result = response.json()
-                return self.parse_ai_response(result)
+        Args:
+            rule_description: 评分规则描述
+            document_text: 投标文件文本
+            max_score: 最高分数
 
-            except requests.exceptions.Timeout:
-                logger.warning(f'AI模型请求超时 (尝试 {attempt + 1}/{max_retries})')
-                if attempt + 1 == max_retries:
-                    logger.error('AI模型请求在多次重试后仍然超时')
-                    return 'Error: AI model request timeout. Please try again.'
-            except requests.exceptions.ConnectionError:
-                logger.error('无法连接到AI模型服务')
-                return f"Error: Could not connect to the AI model service. Please ensure Ollama is running and the model '{self.model}' is available."
-            except requests.exceptions.RequestException as e:
-                logger.error(f'AI模型请求失败: {e}')
-                return f'Error: AI model request failed: {str(e)}'
+        Returns:
+            Optional[float]: 分数，如果失败则返回None
+        """
+        try:
+            # 构造分析提示
+            prompt = f"""
+            根据以下评分规则对投标文件进行评分：
+            
+            评分规则：{rule_description}
+            满分：{max_score}
+            
+            投标文件内容：
+            {document_text[:2000]}  # 限制文本长度
+            
+            请根据评分规则对投标文件进行评分，只返回一个0到{max_score}之间的数字，不要包含其他文字。
+            """
 
-            # 如果不是最后一次尝试，则等待后重试
-            if attempt + 1 < max_retries:
-                logger.info(f'将在 {retry_delay} 秒后重试...')
-                time.sleep(retry_delay)
+            logger.info(f'分析投标文件，规则: {rule_description[:50]}...')
 
-        return 'Error: AI model request failed after multiple retries.'
+            # 发送请求到AI模型
+            response = self.analyze_text(prompt)
+
+            # 尝试提取分数
+            score = self._extract_score_from_response(response, max_score)
+
+            if score is not None:
+                logger.info(f'成功分析投标文件，得分为: {score}')
+            else:
+                logger.warning(f'无法从AI响应中提取分数，响应内容: {response}')
+
+            return score
+        except Exception as e:
+            logger.error(f'分析投标文件时出错: {e}', exc_info=True)
+            return None
+
+    def _extract_score_from_response(
+        self, response: str, max_score: float
+    ) -> Optional[float]:
+        """
+        从AI响应中提取分数
+
+        Args:
+            response: AI响应文本
+            max_score: 最大分数
+
+        Returns:
+            Optional[float]: 提取的分数，如果无法提取则返回None
+        """
+        try:
+            # 尝试直接转换为浮点数
+            score = float(response.strip())
+            if 0 <= score <= max_score:
+                return score
+            else:
+                logger.warning(f'提取的分数 {score} 超出有效范围 [0, {max_score}]')
+                return None
+        except ValueError:
+            # 如果直接转换失败，尝试从文本中提取数字
+            import re
+
+            numbers = re.findall(r'\d+\.?\d*', response)
+            if numbers:
+                score = float(numbers[0])
+                if 0 <= score <= max_score:
+                    return score
+            logger.warning(f"无法从响应 '{response}' 中提取有效分数")
+            return None
 
     def get_embeddings(
         self, texts: List[str], embedding_model: str = 'qwen3-embedding:latest'

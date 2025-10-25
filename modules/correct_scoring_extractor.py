@@ -392,7 +392,9 @@ class CorrectScoringExtractor:
                             'description': price_description
                             if '价格' in first_info['name']
                             else '',
-                            'is_price_criteria': '价格' in first_info['name'],
+                            'is_price_criteria': '价格' in first_info['name']
+                            or '报价' in first_info['name']
+                            or '投标总价' in first_info['name'],
                             'is_veto': is_veto,
                             'is_parent': is_parent,
                             'is_qualitative': is_qualitative,
@@ -715,6 +717,7 @@ class CorrectScoringExtractor:
                                     'is_parent': False,
                                     'is_qualitative': is_qualitative,
                                     'is_quantitative': is_quantitative,
+                                    'rule_usage_description': f'规则名称：{clean_name}，规则描述：{child_description}，满分：{second_info["score"]}分，是否为否决项：{"是" if is_veto else "否"}，规则类型：{"定性规则" if is_qualitative else "定量规则"}',
                                 }
                             )
                     elif second_info and not self._should_ignore_item(
@@ -740,6 +743,7 @@ class CorrectScoringExtractor:
                                 'is_parent': False,
                                 'is_qualitative': is_qualitative,
                                 'is_quantitative': is_quantitative,
+                                'rule_usage_description': f'规则名称：{clean_name}，规则描述：{self._clean_description(third_col)}，满分：{second_info["score"]}分，是否为否决项：{"是" if is_veto else "否"}，规则类型：{"定性规则" if is_qualitative else "定量规则"}',
                             }
                         )
 

@@ -17,6 +17,8 @@
 import logging
 import asyncio
 import traceback
+import json
+import codecs
 from typing import List, Dict, Any
 from sqlalchemy.orm import Session
 from typing import Optional
@@ -25,7 +27,6 @@ import os
 import threading
 import glob
 import datetime
-import json
 
 from modules.workflow_status import (
     WorkflowStatus,
@@ -508,12 +509,9 @@ class AnalysisManager:
                                     validated_scores.append(item)
                             detailed_scores_data = validated_scores
 
-                        # 将detailed_scores转换为JSON字符串存储
-                        setattr(
-                            result_record,
-                            'detailed_scores',
-                            detailed_scores_data,
-                        )
+                        # 直接存储detailed_scores数据，让GB18030JSONType处理编码
+                        setattr(result_record, 'detailed_scores', detailed_scores_data)
+
                         setattr(
                             result_record,
                             'analysis_summary',
@@ -524,11 +522,9 @@ class AnalysisManager:
                             'ai_model',
                             str(analysis_result.get('ai_model', '')),
                         )
-                        setattr(
-                            result_record,
-                            'original_scores',
-                            detailed_scores_data,
-                        )
+                        # 直接存储original_scores数据，让GB18030JSONType处理编码
+                        setattr(result_record, 'original_scores', detailed_scores_data)
+
                         setattr(
                             result_record,
                             'last_modified_at',
@@ -556,9 +552,7 @@ class AnalysisManager:
                             f'成功保存分析结果到数据库: {bid_document.bidder_name}'
                         )
                         # 记录保存的详细评分信息
-                        self.logger.info(
-                            f'保存的详细评分: {json.dumps(detailed_scores_data, ensure_ascii=False)}'
-                        )
+                        self.logger.info(f'保存的详细评分: {detailed_scores_data}')
                     except Exception as e:
                         self.logger.error(f'保存分析结果到数据库时出错: {e}')
                         db.rollback()
@@ -583,6 +577,12 @@ class AnalysisManager:
                                     validated_scores.append(item)
                             detailed_scores_data = validated_scores
 
+                        # 直接使用detailed_scores数据，让GB18030JSONType处理编码
+                        detailed_scores_json = detailed_scores_data
+
+                        # 直接使用original_scores数据，让GB18030JSONType处理编码
+                        original_scores_json = detailed_scores_data
+
                         # 将detailed_scores转换为JSON字符串存储
                         new_result_record = AnalysisResult(
                             project_id=project_id,
@@ -592,12 +592,12 @@ class AnalysisManager:
                             # 不再设置price_score，因为价格分将在价格计算工作流中计算
                             price_score=0.0,  # 价格分将在后续计算
                             extracted_price=0.0,  # 设置默认值以满足数据库非空约束
-                            detailed_scores=detailed_scores_data,
+                            detailed_scores=detailed_scores_json,
                             analysis_summary=str(
                                 analysis_result.get('analysis_summary', '')
                             ),
                             ai_model=str(analysis_result.get('ai_model', '')),
-                            original_scores=detailed_scores_data,
+                            original_scores=original_scores_json,
                             last_modified_at=datetime.datetime.now(),
                             last_modified_by='system',
                             dynamic_scores={},
@@ -608,9 +608,7 @@ class AnalysisManager:
                             f'成功创建新的分析结果记录: {bid_document.bidder_name}'
                         )
                         # 记录保存的详细评分信息
-                        self.logger.info(
-                            f'保存的详细评分: {json.dumps(detailed_scores_data, ensure_ascii=False)}'
-                        )
+                        self.logger.info(f'保存的详细评分: {detailed_scores_data}')
                     except Exception as e:
                         self.logger.error(f'创建新的分析结果记录时出错: {e}')
                         db.rollback()
@@ -859,6 +857,19 @@ class AnalysisManager:
                     self.db.commit()
                 return
 
+        # 新增步骤: 在非价格项分析之前，统一提取所有投标人的名称和价格
+        self.logger.info(
+            f'项目 {project_id}: 开始统一提取所有投标人的信息（名称和价格）...'
+        )
+        if not self._extract_all_bidders_info(project_id):
+            self.logger.error(
+                f'项目 {project_id}: 统一提取投标人信息失败，终止分析流程。'
+            )
+            if self.db is not None:
+                project.status = 'error'
+                self.db.commit()
+            return
+
         # 步骤3: 为每个投标文件创建并执行分析任务
         self.logger.info(f'项目 {project_id}: 开始执行所有投标文件的非价格项分析...')
         for bid_info in bid_files_info:
@@ -902,6 +913,12 @@ class AnalysisManager:
 
             if success:
                 self.logger.info(f'项目 {project_id}: 统一综合计算执行成功。')
+                # 更新项目状态为完成
+                if self.db is not None:
+                    project.status = 'completed'
+                    project.updated_at = datetime.datetime.now()
+                    self.db.commit()
+                    self.logger.info(f'项目 {project_id} 状态已更新为已完成')
             else:
                 self.logger.error(f'项目 {project_id}: 统一综合计算执行失败。')
                 if self.db is not None:
@@ -917,6 +934,44 @@ class AnalysisManager:
 
         # 步骤4: 清理临时文件
         self._cleanup_md_files(project_id)
+
+    def _extract_all_bidders_info(self, project_id: int) -> bool:
+        """
+        在分析开始前，统一提取所有投标人的名称和价格
+
+        Args:
+            project_id: 项目ID
+
+        Returns:
+            bool: 是否提取成功
+        """
+        try:
+            from modules.unified_extractor import UnifiedExtractor
+
+            if self.db is None:
+                self.logger.error('数据库会话未初始化')
+                return False
+
+            unified_extractor = UnifiedExtractor(db_session=self.db)
+            bidders_info = unified_extractor.extract_all_bidders_info(project_id)
+
+            if not bidders_info:
+                self.logger.warning(
+                    f'项目 {project_id}: 未能从任何文件中提取到有效的投标人信息。'
+                )
+                # 即使没有提取到信息，也可能不是一个致命错误，流程可以继续
+                return True
+
+            self.logger.info(
+                f'项目 {project_id}: 成功提取了 {len(bidders_info)} 个投标人的信息。'
+            )
+            return True
+        except Exception as e:
+            self.logger.error(
+                f'项目 {project_id}: 在统一提取投标人信息时发生严重错误: {e}',
+                exc_info=True,
+            )
+            return False
 
     def _log_price_calculation_failure_details(self, project_id: int):
         """记录价格分计算失败的详细信息，用于调试"""
