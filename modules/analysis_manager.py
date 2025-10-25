@@ -900,8 +900,9 @@ class AnalysisManager:
         )
 
         # 使用force_continue=True允许在超时后继续处理
+        # 增加等待时间以确保投标文件完整处理（投标文件分析阶段不应有严格时间限制）
         analysis_completed = self._wait_for_all_analysis_completed(
-            project_id, max_wait_time=10, force_continue=True
+            project_id, max_wait_time=600, force_continue=True
         )
 
         # 获取完成统计
@@ -1290,7 +1291,7 @@ class AnalysisManager:
                             try:
                                 result = status_manager.wait_and_update_project_status_when_all_completed(
                                     project_id,
-                                    max_wait_time=30,
+                                    max_wait_time=60,  # 最后阶段综合计算前的等待时间
                                     force_complete_after_timeout=True,
                                 )
                                 if result:
