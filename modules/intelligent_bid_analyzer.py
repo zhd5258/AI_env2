@@ -578,6 +578,17 @@ class IntelligentBidAnalyzer(BidAnalyzerHelpers):
                         f'预评分 {result.get("score", 0)}/{result.get("max_score", 0)}, '
                         f'原因: {result.get("reason", "N/A")}'
                     )
+
+                    # 输出预评价的详细信息
+                    self.logger.info(f'规则 "{rule.Child_Item_Name}" 预评价详细信息:')
+                    self.logger.info(f'  规则ID: {rule.id}')
+                    self.logger.info(f'  规则描述: {rule.description}')
+                    self.logger.info(f'  满分: {rule.Child_max_score}')
+                    self.logger.info(f'  是否价格规则: {rule.is_price_criteria}')
+                    self.logger.info(f'  投标人: {self.bidder_name}')
+                    self.logger.info(f'  预评分: {result.get("score", 0)}')
+                    self.logger.info(f'  评分理由: {result.get("reason", "N/A")}')
+
                     analyzed_scores.append(result)
                     analyzed_scores_for_progress.append(result)
                     # 存储定量规则分析结果

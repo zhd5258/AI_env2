@@ -139,9 +139,19 @@ class IntelligentRulesClassifier:
 
             self.logger.info('构造AI prompt完成，开始调用AI大模型进行分类')
 
+            # 输出发送给AI大模型的完整prompt
+            self.logger.info('=== 发送给AI大模型的完整prompt ===')
+            self.logger.info(prompt)
+            self.logger.info('=== prompt结束 ===')
+
             # 2. 调用AI大模型进行分类
             ai_response = self.ai_analyzer.analyze_text(prompt)
             self.logger.info('AI大模型响应接收成功')
+
+            # 输出AI大模型的完整响应
+            self.logger.info('=== AI大模型的完整响应 ===')
+            self.logger.info(ai_response)
+            self.logger.info('=== 响应结束 ===')
 
             # 3. 解析AI响应
             classification_result = self._parse_classification_response(ai_response)
@@ -153,6 +163,10 @@ class IntelligentRulesClassifier:
                 ]
                 reasons = classification_result.get('理由', {})
 
+                self.logger.info(
+                    f'AI大模型识别出需要综合计算的规则: {rules_needing_comprehensive_analysis}'
+                )
+
                 for rule in quantitative_rules:
                     rule_name = rule.Child_Item_Name or rule.Parent_Item_Name
                     if rule_name in rules_needing_comprehensive_analysis:
@@ -161,8 +175,13 @@ class IntelligentRulesClassifier:
                         self.logger.info(
                             f'标记规则 "{rule_name}" 需要综合计算: {reason}'
                         )
+                        # 输出规则的详细信息
+                        self.logger.info(
+                            f'规则详细信息 - 名称: {rule_name}, 描述: {rule.description}, 满分: {rule.Child_max_score}, 是否价格规则: {rule.is_price_criteria}'
+                        )
                     else:
                         rule.needs_comprehensive_analysis = False
+                        self.logger.info(f'规则 "{rule_name}" 不需要综合计算')
 
                 self.logger.info(
                     f'成功标记 {len(rules_needing_comprehensive_analysis)} 条规则需要综合计算'
@@ -244,6 +263,11 @@ class IntelligentRulesClassifier:
 }}"""
 
             self.logger.info('构造AI prompt完成，开始调用AI大模型进行筛选')
+
+            # 输出发送给AI大模型的prompt（略去标书的文本）
+            self.logger.info(
+                f'发送给AI大模型的prompt: {prompt[:500]}...'
+            )  # 只显示前500个字符避免日志过长
 
             # 2. 调用AI大模型进行筛选
             ai_response = self.ai_analyzer.analyze_text(prompt)

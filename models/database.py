@@ -123,6 +123,11 @@ class BidDocument(Base):
     processing_status: Mapped[str] = mapped_column(String, default='pending')
     error_message: Mapped[str] = mapped_column(String, nullable=True)
 
+    # 添加updated_at字段
+    updated_at: Mapped[datetime.datetime] = mapped_column(
+        DateTime, default=get_local_time, onupdate=get_local_time
+    )
+
     # Fields for progress tracking
     progress_total_rules: Mapped[int] = mapped_column(Integer, default=0)
     progress_completed_rules: Mapped[int] = mapped_column(Integer, default=0)

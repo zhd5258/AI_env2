@@ -304,6 +304,10 @@ def generate_summary_data(project_id: int, db: Session):
             if score is not None and isinstance(score, (int, float))
         )
 
+        # 添加价格分到总分计算中
+        if result.price_score is not None:
+            calculated_total_score += result.price_score
+
         # 确保总分不超过100分
         calculated_total_score = min(calculated_total_score, 100.0)
 

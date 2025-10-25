@@ -138,13 +138,21 @@ class ComprehensiveAnalysisManager:
 
             # 构造发送给AI的prompt
             prompt = self._create_comprehensive_analysis_prompt(rule, preliminary_data)
-            self.logger.debug(f'发送给AI的prompt: {prompt}')
+
+            # 输出发送给AI的完整prompt
+            self.logger.info('=== 发送给AI大模型的综合分析prompt ===')
+            self.logger.info(prompt)
+            self.logger.info('=== prompt结束 ===')
 
             # 调用AI大模型进行综合分析
             self.logger.info('开始调用AI大模型进行综合分析')
             ai_response = self.ai_analyzer.analyze_text(prompt)
             self.logger.info('AI大模型响应接收成功')
-            self.logger.debug(f'AI响应内容: {ai_response}')
+
+            # 输出AI大模型的完整响应
+            self.logger.info('=== AI大模型的完整响应 ===')
+            self.logger.info(ai_response)
+            self.logger.info('=== 响应结束 ===')
 
             # 检查AI响应是否为空
             if not ai_response or not ai_response.strip():
@@ -323,10 +331,10 @@ class ComprehensiveAnalysisManager:
         """
         try:
             self.logger.info(f'使用回退排名计算方法处理规则 "{rule.Child_Item_Name}"')
-            self.logger.debug(
+            self.logger.info(
                 f'规则详细信息: ID={rule.id}, 满分={rule.Child_max_score}, 描述={rule.description}'
             )
-            self.logger.debug(f'预评价数据: {preliminary_data}')
+            self.logger.info(f'预评价数据: {preliminary_data}')
 
             # 检查输入数据是否有效
             if not preliminary_data:

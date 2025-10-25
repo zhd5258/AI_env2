@@ -91,17 +91,21 @@ class UnifiedComprehensiveCalculator:
         self, project_id: int
     ) -> bool:
         """
-        使用专门的价格分计算器计算价格分
+        使用专用的价格分计算器计算价格分
 
         Args:
             project_id: 项目ID
 
         Returns:
-            bool: 是否成功计算价格分
+            bool: 计算是否成功
         """
         try:
-            self.logger.info(f'使用专门的价格分计算器计算项目 {project_id} 的价格分')
-
+            # 获取项目信息用于日志记录
+            project = self.db.query(TenderProject).filter(TenderProject.id == project_id).first()
+            project_name = project.name if project and hasattr(project, 'name') else f"项目{project_id}"
+            
+            self.logger.info(f'项目 [{project_name}]: 使用专用价格分计算器计算价格分')
+            
             # 创建价格分计算器实例
             price_calculator = PriceScoreCalculator(db_session=self.db)
 
@@ -109,13 +113,13 @@ class UnifiedComprehensiveCalculator:
             success = price_calculator.calculate_project_price_scores(project_id)
 
             if success:
-                self.logger.info(f'项目 {project_id} 的价格分计算成功')
+                self.logger.info(f'项目 [{project_name}]: 价格分计算成功')
             else:
-                self.logger.error(f'项目 {project_id} 的价格分计算失败')
+                self.logger.error(f'项目 [{project_name}]: 价格分计算失败')
 
             return success
         except Exception as e:
-            self.logger.error(f'使用专门的价格分计算器时出错: {e}', exc_info=True)
+            self.logger.error(f'项目 {project_id}: 价格分计算出错: {str(e)}', exc_info=True)
             return False
 
     def _calculate_price_scores(

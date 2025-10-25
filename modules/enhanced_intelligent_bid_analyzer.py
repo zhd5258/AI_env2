@@ -32,6 +32,7 @@ import re
 import logging
 import traceback
 import os
+import datetime
 from typing import List, Dict, Any, Optional
 from modules.local_ai_analyzer import LocalAIAnalyzer
 from modules.pdf_processor import PDFProcessor
@@ -58,6 +59,145 @@ class EnhancedIntelligentBidAnalyzer(BidAnalyzerHelpers):
         self.ai_analyzer = LocalAIAnalyzer()
         self.logger = logging.getLogger(__name__)
         self.total_rules_to_analyze = 0  # 初始化实例变量
+
+        # 初始化预处理器
+        from modules.bid_document_preprocessor import BidDocumentPreprocessor
+
+        self.preprocessor = BidDocumentPreprocessor(self.ai_analyzer)
+
+        # 缓存预处理结果
+        self._preprocessed_result = None
+
+        # 初始化缺失的属性
+        self.bidder_name = None
+        self.bid_pages = None
+
+        # 尝试从数据库获取投标人名称
+        if self.db and self.bid_document_id:
+            try:
+                bid_doc = (
+                    self.db.query(BidDocument)
+                    .filter(BidDocument.id == self.bid_document_id)
+                    .first()
+                )
+                if bid_doc and bid_doc.bidder_name:
+                    self.bidder_name = bid_doc.bidder_name
+            except Exception as e:
+                self.logger.warning(f'获取投标人名称失败: {e}')
+
+        # 如果仍然没有投标人名称，从文件路径提取
+        if not self.bidder_name:
+            filename = os.path.basename(self.bid_file_path)
+            self.bidder_name = os.path.splitext(filename)[0]
+
+    def _preprocess_bid_document(self, scoring_rules: List[Any]) -> Dict[str, Any]:
+        """
+        预处理投标文件，生成标准化的分析文本
+
+        Args:
+            scoring_rules: 评分规则列表
+
+        Returns:
+            预处理结果
+        """
+        if self._preprocessed_result is not None:
+            return self._preprocessed_result
+
+        try:
+            self.logger.info(f'开始预处理投标文件: {self.bid_file_path}')
+
+            # 转换评分规则格式
+            rules_data = []
+            for rule in scoring_rules:
+                rules_data.append(
+                    {
+                        'Child_Item_Name': rule.Child_Item_Name,
+                        'description': rule.description or '',
+                        'Child_max_score': rule.Child_max_score,
+                        'is_veto': rule.is_veto,
+                    }
+                )
+
+            # 执行预处理
+            result = self.preprocessor.preprocess_bid_document(
+                self.bid_file_path, rules_data
+            )
+
+            # 缓存结果
+            self._preprocessed_result = result
+
+            self.logger.info(f'投标文件预处理完成: {self.bid_file_path}')
+            return result
+
+        except Exception as e:
+            self.logger.error(f'预处理投标文件时出错: {e}')
+            import traceback
+
+            self.logger.error(traceback.format_exc())
+            return {'processing_status': 'error', 'error': str(e)}
+
+    def _get_standardized_text_for_rule(self, rule: Any) -> str:
+        """
+        获取特定规则相关的标准化文本
+
+        Args:
+            rule: 评分规则对象
+
+        Returns:
+            与规则相关的标准化文本
+        """
+        try:
+            # 确保预处理已完成
+            if self._preprocessed_result is None:
+                if self.db is not None:
+                    from models.database import ScoringRule
+
+                    rules = (
+                        self.db.query(ScoringRule)
+                        .filter(ScoringRule.project_id == self.project_id)
+                        .all()
+                    )
+                    self._preprocess_bid_document(rules)
+                else:
+                    # 如果没有数据库连接，创建一个空的预处理结果
+                    self._preprocessed_result = {
+                        'processing_status': 'error',
+                        'error': 'No database connection',
+                    }
+
+            if (
+                self._preprocessed_result
+                and self._preprocessed_result.get('processing_status') != 'completed'
+            ):
+                self.logger.warning('预处理未完成，使用原始方法')
+                return self._find_relevant_context_for_child_rule(
+                    rule, self._get_bid_pages()
+                )
+
+            standardized_text = (
+                self._preprocessed_result.get('standardized_text', '')
+                if self._preprocessed_result
+                else ''
+            )
+            if not standardized_text:
+                self.logger.warning('未获取到标准化文本，使用原始方法')
+                return self._find_relevant_context_for_child_rule(
+                    rule, self._get_bid_pages()
+                )
+
+            # 获取与特定规则相关的文本
+            rule_text = self.preprocessor.get_standardized_text_for_rule(
+                standardized_text, rule.Child_Item_Name, rule.description or ''
+            )
+
+            return rule_text
+
+        except Exception as e:
+            self.logger.error(f'获取规则相关文本时出错: {e}')
+            # 回退到原始方法
+            return self._find_relevant_context_for_child_rule(
+                rule, self._get_bid_pages()
+            )
 
         if self.db is not None and self.bid_document_id is not None:
             try:
@@ -113,8 +253,13 @@ class EnhancedIntelligentBidAnalyzer(BidAnalyzerHelpers):
                 bid_doc.progress_total_rules = total
                 bid_doc.progress_completed_rules = completed
                 # 确保投标人名称不为空时才使用，否则使用文件名
-                if self.bidder_name and self.bidder_name.strip():
-                    progress_info = f'{self.bidder_name} - {current_rule}'
+                if (
+                    getattr(self, 'bidder_name', None)
+                    and getattr(self, 'bidder_name', '').strip()
+                ):
+                    progress_info = (
+                        f'{getattr(self, "bidder_name", "未知投标人")} - {current_rule}'
+                    )
                 else:
                     # 从文件路径提取文件名作为备用
                     filename = os.path.basename(self.bid_file_path)
@@ -141,29 +286,21 @@ class EnhancedIntelligentBidAnalyzer(BidAnalyzerHelpers):
         if self.bid_pages is not None:
             return self.bid_pages
 
-        # 作为后备方案，如果文本未提供，则调用PDF处理器
-        if self.bid_processor:
-            self.logger.info(
-                f'No pre-extracted text found, processing PDF for {self.bid_file_path} on demand.'
-            )
-            # 不再在这里处理PDF，因为已经在analysis_manager中处理过了
-            # 直接从PDF处理器加载内容
-            pages_content = self.bid_processor.load_content_from_md_file()
+        # 优先从MD文件加载内容
+        md_file_path = self._get_md_file_path()
+        if md_file_path:
+            pages_content = self._load_content_from_md_file(md_file_path)
             if pages_content is not None:
                 self.bid_pages = pages_content
+                self.logger.info(f'从MD文件成功加载内容: {md_file_path}')
+                return self.bid_pages
             else:
-                # 如果从MD文件加载失败，则使用extract_text_per_page方法
-                self.bid_pages = self.bid_processor.extract_text_per_page()
-            self._save_failed_pages_info(
-                self.db, self.bid_document_id, self.bid_processor
-            )
-            return self.bid_pages
+                self.logger.error(f'无法从MD文件加载内容: {md_file_path}')
 
-        # 如果既没有预提取的文本，也没有处理器，则返回错误
-        self.logger.error(
-            f'Cannot get bid pages: No pre-extracted text and no PDF processor available for {self.bid_file_path}.'
-        )
-        return []
+        # 如果从MD文件加载失败，返回空列表而不是尝试直接处理PDF
+        self.logger.error(f'无法从MD文件加载内容，返回空列表: {self.bid_file_path}')
+        self.bid_pages = []
+        return self.bid_pages
 
     def _get_md_file_path(self) -> Optional[str]:
         """
@@ -225,11 +362,14 @@ class EnhancedIntelligentBidAnalyzer(BidAnalyzerHelpers):
 
             # 记录投标人名称信息
             bidder_name_display = (
-                self.bidder_name
-                if self.bidder_name and self.bidder_name.strip()
+                getattr(self, 'bidder_name', '未知投标人')
+                if getattr(self, 'bidder_name', None)
+                and getattr(self, 'bidder_name', '').strip()
                 else os.path.splitext(os.path.basename(self.bid_file_path))[0]
             )
-            self.logger.info(f'当前投标人名称: {self.bidder_name}')
+            self.logger.info(
+                f'当前投标人名称: {getattr(self, "bidder_name", "未知投标人")}'
+            )
 
             # 获取投标文档记录
             bid_document = None
@@ -244,8 +384,9 @@ class EnhancedIntelligentBidAnalyzer(BidAnalyzerHelpers):
                         # 检查OCR重试次数
                         # 确保投标人名称不为空时才使用，否则使用文件名
                         bidder_name_display = (
-                            self.bidder_name
-                            if self.bidder_name and self.bidder_name.strip()
+                            getattr(self, 'bidder_name', '未知投标人')
+                            if getattr(self, 'bidder_name', None)
+                            and getattr(self, 'bidder_name', '').strip()
                             else os.path.splitext(os.path.basename(self.bid_file_path))[
                                 0
                             ]
@@ -323,7 +464,9 @@ class EnhancedIntelligentBidAnalyzer(BidAnalyzerHelpers):
                 if bid_doc and bid_doc.bidder_name:
                     self.bidder_name = bid_doc.bidder_name
                     bidder_name_display = bid_doc.bidder_name
-                    self.logger.info(f'使用数据库中的投标人名称: {self.bidder_name}')
+                    self.logger.info(
+                        f'使用数据库中的投标人名称: {getattr(self, "bidder_name", "未知投标人")}'
+                    )
 
             # 4. 首先检查否决项
             self.logger.info('开始检查否决项...')
@@ -344,12 +487,12 @@ class EnhancedIntelligentBidAnalyzer(BidAnalyzerHelpers):
                         veto_passed = False
                         failed_veto_items[rule.Child_Item_Name] = result
                         self.logger.warning(
-                            f'投标人 {self.bidder_name} 未通过否决项: {rule.Child_Item_Name}'
+                            f'投标人 {getattr(self, "bidder_name", "未知投标人")} 未通过否决项: {rule.Child_Item_Name}'
                         )
 
                         # 如果有任何否决项未通过，直接判定该投标方不合格
                         self.logger.error(
-                            f'投标人 {self.bidder_name} 因未通过否决项而不合格'
+                            f'投标人 {getattr(self, "bidder_name", "未知投标人")} 因未通过否决项而不合格'
                         )
 
                         # 更新分析结果记录
@@ -375,13 +518,13 @@ class EnhancedIntelligentBidAnalyzer(BidAnalyzerHelpers):
                                 analysis_result.quantitative_analysis_results = {}
                                 self.db.commit()
                                 self.logger.info(
-                                    f'已更新分析结果记录，标记投标人 {self.bidder_name} 不合格'
+                                    f'已更新分析结果记录，标记投标人 {getattr(self, "bidder_name", "未知投标人")} 不合格'
                                 )
 
                         # 返回不合格结果
                         return {
                             'status': 'veto_failed',
-                            'message': f'投标人 {self.bidder_name} 未通过否决项检查',
+                            'message': f'投标人 {getattr(self, "bidder_name", "未知投标人")} 未通过否决项检查',
                             'failed_veto_items': failed_veto_items,
                         }
                     else:
@@ -389,14 +532,16 @@ class EnhancedIntelligentBidAnalyzer(BidAnalyzerHelpers):
                         analyzed_scores.append(result)
                         analyzed_scores_for_progress.append(result)
                         self.logger.info(
-                            f'投标人 {self.bidder_name} 通过否决项: {rule.Child_Item_Name}'
+                            f'投标人 {getattr(self, "bidder_name", "未知投标人")} 通过否决项: {rule.Child_Item_Name}'
                         )
                 except Exception as e:
                     self.logger.error(f'检查否决项 {rule.Child_Item_Name} 时出错: {e}')
                     # 如果检查否决项出错，继续检查其他否决项
 
             # 如果所有否决项都通过，继续分析其他规则
-            self.logger.info(f'投标人 {self.bidder_name} 通过所有否决项检查')
+            self.logger.info(
+                f'投标人 {getattr(self, "bidder_name", "未知投标人")} 通过所有否决项检查'
+            )
 
             # 5. 执行AI分析 - 分别处理定性规则和定量规则
             # 获取所有定量规则（有分数的规则）
@@ -614,7 +759,7 @@ class EnhancedIntelligentBidAnalyzer(BidAnalyzerHelpers):
             total_score = other_scores_total
 
             self.logger.info(
-                f"===== 标书 '{self.bidder_name}' 非价格项分析完成，总得分为: {total_score} ====="
+                f"===== 标书 '{getattr(self, 'bidder_name', '未知投标人')}' 非价格项分析完成，总得分为: {total_score} ====="
             )
 
             # 记录子项分数总和，用于后续计算总分
@@ -654,20 +799,42 @@ class EnhancedIntelligentBidAnalyzer(BidAnalyzerHelpers):
 
             # 如果有数据库会话，更新分析结果记录
             if self.db and self.bid_document_id:
-                result_record = (
-                    self.db.query(AnalysisResult)
-                    .filter(AnalysisResult.bid_document_id == self.bid_document_id)
-                    .first()
+                try:
+                    result_record = (
+                        self.db.query(AnalysisResult)
+                        .filter(AnalysisResult.bid_document_id == self.bid_document_id)
+                        .first()
+                    )
+                    if result_record:
+                        # 更新分析结果记录
+                        result_record.total_score = total_score
+                        result_record.detailed_scores = analyzed_scores  # 保存详细评分
+                        result_record.qualitative_analysis_results = qualitative_results
+                        result_record.quantitative_analysis_results = (
+                            quantitative_results
+                        )
+                        result_record.veto_items_checked = True
+                        result_record.veto_items_passed = True
+                        result_record.failed_veto_items = failed_veto_items
+                        result_record.analysis_summary = '分析完成。'
+                        result_record.ai_model = self.ai_analyzer.model
+                        result_record.last_modified_at = datetime.datetime.now()
+                        result_record.last_modified_by = 'enhanced_analyzer'
+                        self.db.commit()
+                        self.logger.info(
+                            '已更新分析结果记录的详细评分和定性/定量规则分析结果'
+                        )
+                    else:
+                        self.logger.warning(
+                            f'未找到分析结果记录，无法更新: bid_document_id={self.bid_document_id}'
+                        )
+                except Exception as db_e:
+                    self.logger.error(f'更新分析结果记录时出错: {db_e}')
+                    self.db.rollback()
+            else:
+                self.logger.warning(
+                    '数据库会话或bid_document_id未提供，无法更新分析结果记录'
                 )
-                if result_record:
-                    # 更新分析结果记录
-                    result_record.qualitative_analysis_results = qualitative_results
-                    result_record.quantitative_analysis_results = quantitative_results
-                    result_record.veto_items_checked = True
-                    result_record.veto_items_passed = True
-                    result_record.failed_veto_items = failed_veto_items
-                    self.db.commit()
-                    self.logger.info('已更新分析结果记录的定性/定量规则分析结果')
 
             return analysis_result
 
@@ -712,6 +879,10 @@ class EnhancedIntelligentBidAnalyzer(BidAnalyzerHelpers):
         # 确保Child_Item_Name不为空
         child_item_name = rule.Child_Item_Name or '未知评分项'
 
+        # 优先使用预处理后的标准化文本
+        if not context or context == '提取失败':
+            context = self._get_standardized_text_for_rule(rule)
+
         if rule.is_qualitative:
             # 定性规则prompt
             prompt = f"""你是一个专业的评标专家，请根据以下信息对投标文件进行定性评估：
@@ -739,32 +910,23 @@ class EnhancedIntelligentBidAnalyzer(BidAnalyzerHelpers):
 """
         else:
             # 定量规则prompt
-            prompt = f"""你是一个专业的评标专家，请根据以下信息对投标文件进行评分：
+            prompt = f"""作为评标专家，请根据投标文件内容进行评分：
 
-【评分项名称】
-{child_item_name}
+评分项：{child_item_name}
+标准：{rule.description or '无详细描述'}
+满分：{rule.Child_max_score or 0}分
 
-【评分标准描述】
-{rule.description or '无详细描述'}
-
-【评分满分】
-{rule.Child_max_score or 0}分
-
-【投标文件相关内容】
+投标文件内容：
 {context}
 
-【评分要求】
-1. 请根据评分标准对投标文件相关内容进行评估
-2. 给出具体的评分（0-{rule.Child_max_score or 0}分）和评分理由
-3. 评分必须基于投标文件的实际内容，不能凭空猜测
-4. 如果投标文件中没有相关内容，请给出0分并说明原因
+要求：
+1. 基于实际内容评分（0-{rule.Child_max_score or 0}分）
+2. 无相关内容则0分
+3. 只返回JSON格式
 
-【重要】请严格按照以下JSON格式返回结果，不要返回任何解释文字：
-{{"score": 得分, "reason": "评分理由"}}
+格式：{{"score": 分数, "reason": "理由"}}
 
-示例：
-{{"score": 8.5, "reason": "投标文件中提供了详细的技术方案，符合评分标准要求"}}
-"""
+示例：{{"score": 3, "reason": "提供了ISO9001认证，符合质量管理体系要求"}}"""
         return prompt
 
     def _parse_single_rule_response(self, response, rule):
@@ -827,8 +989,9 @@ class EnhancedIntelligentBidAnalyzer(BidAnalyzerHelpers):
     def _analyze_single_rule(self, rule, bid_pages):
         """分析单个评分规则"""
         try:
+            bidder_name = getattr(self, 'bidder_name', '未知投标人')
             self.logger.info(
-                f'正在为投标人 {self.bidder_name} 分析子项规则: {rule.Child_Item_Name}'
+                f'正在为投标人 {bidder_name} 分析子项规则: {rule.Child_Item_Name}'
             )
 
             # 查找相关上下文（使用从MD文件读取的内容）
@@ -951,7 +1114,7 @@ class EnhancedIntelligentBidAnalyzer(BidAnalyzerHelpers):
                         bid_doc.progress_current_rule = '重新转换PDF...'
                         self.db.commit()
                         self.logger.info(
-                            f'已更新数据库状态为重新转换PDF中: {self.bidder_name}'
+                            f'已更新数据库状态为重新转换PDF中: {getattr(self, "bidder_name", "未知投标人")}'
                         )
                 except Exception as e:
                     self.logger.warning(f'更新数据库状态时出错: {e}')
@@ -1002,7 +1165,7 @@ class EnhancedIntelligentBidAnalyzer(BidAnalyzerHelpers):
                                     )
                                     self.db.commit()
                                     self.logger.info(
-                                        f'已更新数据库状态为PDF处理完成: {self.bidder_name}'
+                                        f'已更新数据库状态为PDF处理完成: {getattr(self, "bidder_name", "未知投标人")}'
                                     )
                             except Exception as e:
                                 self.logger.warning(f'更新数据库状态时出错: {e}')
@@ -1036,7 +1199,7 @@ class EnhancedIntelligentBidAnalyzer(BidAnalyzerHelpers):
                         bid_doc.progress_current_rule = 'PDF处理失败'
                         self.db.commit()
                         self.logger.info(
-                            f'已更新数据库状态为PDF处理失败: {self.bidder_name}'
+                            f'已更新数据库状态为PDF处理失败: {getattr(self, "bidder_name", "未知投标人")}'
                         )
                 except Exception as e:
                     self.logger.warning(f'更新数据库状态时出错: {e}')
@@ -1059,7 +1222,7 @@ class EnhancedIntelligentBidAnalyzer(BidAnalyzerHelpers):
                         bid_doc.progress_current_rule = 'PDF处理失败'
                         self.db.commit()
                         self.logger.info(
-                            f'已更新数据库状态为PDF处理失败: {self.bidder_name}'
+                            f'已更新数据库状态为PDF处理失败: {getattr(self, "bidder_name", "未知投标人")}'
                         )
                 except Exception as e:
                     self.logger.warning(f'更新数据库状态时出错: {e}')
@@ -1086,33 +1249,41 @@ class EnhancedIntelligentBidAnalyzer(BidAnalyzerHelpers):
         try:
             self.logger.info(f'开始提取投标价格: {self.bid_file_path}')
 
-            # 使用统一提取器提取价格
-            from modules.unified_extractor import UnifiedExtractor
+            # 只有在数据库会话存在时才使用UnifiedExtractor提取价格并保存到数据库
+            if self.db is not None:
+                # 使用统一提取器提取价格
+                from modules.unified_extractor import UnifiedExtractor
 
-            unified_extractor = UnifiedExtractor(db_session=self.db)
+                unified_extractor = UnifiedExtractor(db_session=self.db)
 
-            # 提取价格
-            extracted_price = unified_extractor.extract_bid_price(self.bid_file_path)
+                # 提取价格
+                extracted_price = unified_extractor.extract_bid_price(
+                    self.bid_file_path
+                )
 
-            if extracted_price is not None and extracted_price > 0:
-                self.logger.info(f'成功提取到投标价格: {extracted_price}')
+                if extracted_price is not None and extracted_price > 0:
+                    self.logger.info(f'成功提取到投标价格: {extracted_price}')
 
-                # 保存价格到数据库
-                if self.db and self.bid_document_id:
-                    # 更新分析结果记录
-                    result_record = (
-                        self.db.query(AnalysisResult)
-                        .filter(AnalysisResult.bid_document_id == self.bid_document_id)
-                        .first()
-                    )
-                    if result_record:
-                        result_record.extracted_price = float(extracted_price)
-                        self.db.commit()
-                        self.logger.info(f'已将价格 {extracted_price} 保存到数据库')
-                    else:
-                        self.logger.warning('未找到分析结果记录，无法保存价格')
+                    # 保存价格到数据库
+                    if self.db and self.bid_document_id:
+                        # 更新分析结果记录
+                        result_record = (
+                            self.db.query(AnalysisResult)
+                            .filter(
+                                AnalysisResult.bid_document_id == self.bid_document_id
+                            )
+                            .first()
+                        )
+                        if result_record:
+                            result_record.extracted_price = float(extracted_price)
+                            self.db.commit()
+                            self.logger.info(f'已将价格 {extracted_price} 保存到数据库')
+                        else:
+                            self.logger.warning('未找到分析结果记录，无法保存价格')
+                else:
+                    self.logger.warning(f'未能提取到有效价格: {extracted_price}')
             else:
-                self.logger.warning(f'未能提取到有效价格: {extracted_price}')
+                self.logger.info('没有数据库会话，跳过价格提取和保存步骤')
 
         except Exception as e:
             self.logger.error(f'提取投标价格时出错: {e}')
@@ -1123,14 +1294,36 @@ class EnhancedIntelligentBidAnalyzer(BidAnalyzerHelpers):
     def _analyze_quantitative_rules_combined(self, quantitative_rules, bid_pages):
         """组合分析所有定量规则"""
         try:
+            bidder_name = getattr(self, 'bidder_name', '未知投标人')
             self.logger.info(
-                f'正在为投标人 {self.bidder_name} 组合分析 {len(quantitative_rules)} 个定量规则'
+                f'正在为投标人 {bidder_name} 组合分析 {len(quantitative_rules)} 个定量规则'
             )
+
+            # 强制输出定量规则的规则名称、最大分值、规则描述
+            self.logger.info('=== 定量规则详情 ===')
+            for rule in quantitative_rules:
+                self.logger.info(f'规则名称: {rule.Child_Item_Name}')
+                self.logger.info(f'最大分值: {rule.Child_max_score}')
+                self.logger.info(f'规则描述: {rule.description or "无详细描述"}')
+                self.logger.info('---')
 
             # 构建组合prompt
             prompt = self._create_combined_prompt_for_quantitative_rules(
                 quantitative_rules, bid_pages
             )
+
+            # 输出发送给AI大模型的定量规则分析prompt（略掉投标文件部分）
+            self.logger.info('=== 发送给AI大模型的定量规则分析prompt ===')
+            # 提取prompt中规则部分，去掉投标文件内容部分
+            if isinstance(prompt, str) and '投标文件内容为：' in prompt:
+                rule_part = prompt.split('投标文件内容为：')[0]
+                self.logger.info(f'{rule_part}投标文件内容为：{{[投标文件内容略]}}')
+            elif isinstance(prompt, str):
+                self.logger.info(prompt)
+            else:
+                # 如果prompt是列表，说明是分块处理的情况
+                self.logger.info('定量规则需要分块处理，prompt为列表形式')
+            self.logger.info('=== prompt结束 ===')
 
             # 检查是否需要分块处理
             if isinstance(prompt, list):
@@ -1287,7 +1480,7 @@ class EnhancedIntelligentBidAnalyzer(BidAnalyzerHelpers):
         """组合分析所有定性规则"""
         try:
             self.logger.info(
-                f'正在为投标人 {self.bidder_name} 组合分析 {len(qualitative_rules)} 个定性规则'
+                f'正在为投标人 {getattr(self, "bidder_name", "未知投标人")} 组合分析 {len(qualitative_rules)} 个定性规则'
             )
 
             # 构建组合prompt
@@ -1456,12 +1649,25 @@ class EnhancedIntelligentBidAnalyzer(BidAnalyzerHelpers):
 
     def _create_combined_prompt_for_quantitative_rules(self, rules, bid_pages):
         """为定量规则组合创建AI分析prompt"""
-        # 收集所有相关上下文
+        # 使用预处理后的标准化文本
         all_context = []
+
         for rule in rules:
-            relevant_context = self._find_relevant_context_for_child_rule(
-                rule, bid_pages
-            )
+            # 优先使用预处理后的标准化文本
+            relevant_context = self._get_standardized_text_for_rule(rule)
+
+            # 如果预处理失败，回退到原始方法
+            if not relevant_context or relevant_context == '提取失败':
+                self.logger.warning(
+                    f'预处理失败，使用原始方法获取规则 {rule.Child_Item_Name} 的上下文'
+                )
+                relevant_context = self._find_relevant_context_for_child_rule(
+                    rule, bid_pages
+                )
+                # 限制原始方法的内容长度
+                if len(relevant_context) > 2000:
+                    relevant_context = relevant_context[:2000] + '...[内容过长，已截断]'
+
             all_context.append(f'【{rule.Child_Item_Name}】\n{relevant_context}')
 
         # 组合所有上下文
@@ -1476,7 +1682,12 @@ class EnhancedIntelligentBidAnalyzer(BidAnalyzerHelpers):
 
         rules_text = '[' + ', '.join(rule_descriptions) + ']'
 
-        prompt = f"""你是一个资深的专业评标专家，现有如下一些定量规则：{rules_text}，投标文件内容为：{{{combined_context}}}，请根据规则逐项分析标书内容，根据每个规则的描述方法和最高分进行打分，返回格式为：[规则名称１：得分１，规则名称２：得分２，．．．]"""
+        prompt = f"""你是一个资深的专业评标专家，现有如下一些定量规则：{rules_text}，投标文件内容为：{{{combined_context}}}，请根据规则逐项分析标书内容，根据每个规则的描述方法和最高分进行打分。
+
+【重要】请严格按照以下格式返回结果，不要返回任何解释文字：
+[规则名称１：得分１，规则名称２：得分２，．．．]
+
+示例：[企业证书，认证体系：3，标书的完整性：4，有同类型项目业绩：2]"""
 
         # 获取Ollama的上下文长度限制（预留一些余量）
         context_length_limit = self.ai_analyzer.context_length - 500
@@ -1523,12 +1734,25 @@ class EnhancedIntelligentBidAnalyzer(BidAnalyzerHelpers):
 
     def _create_combined_prompt_for_quantitative_rules_chunk(self, rules, bid_pages):
         """为定量规则块创建AI分析prompt"""
-        # 收集所有相关上下文
+        # 使用预处理后的标准化文本
         all_context = []
+
         for rule in rules:
-            relevant_context = self._find_relevant_context_for_child_rule(
-                rule, bid_pages
-            )
+            # 优先使用预处理后的标准化文本
+            relevant_context = self._get_standardized_text_for_rule(rule)
+
+            # 如果预处理失败，回退到原始方法
+            if not relevant_context or relevant_context == '提取失败':
+                self.logger.warning(
+                    f'预处理失败，使用原始方法获取规则 {rule.Child_Item_Name} 的上下文'
+                )
+                relevant_context = self._find_relevant_context_for_child_rule(
+                    rule, bid_pages
+                )
+                # 限制原始方法的内容长度
+                if len(relevant_context) > 2000:
+                    relevant_context = relevant_context[:2000] + '...[内容过长，已截断]'
+
             all_context.append(f'【{rule.Child_Item_Name}】\n{relevant_context}')
 
         # 组合所有上下文
@@ -1552,7 +1776,7 @@ class EnhancedIntelligentBidAnalyzer(BidAnalyzerHelpers):
         prompt = f"""你是一个专业的评标专家，请根据以下信息对投标文件进行定量评分：
 
 【投标人名称】
-{self.bidder_name}
+{getattr(self, 'bidder_name', '未知投标人')}
 
 【评分规则列表】
 {rules_text}
@@ -1566,18 +1790,10 @@ class EnhancedIntelligentBidAnalyzer(BidAnalyzerHelpers):
 3. 评分必须基于投标文件的实际内容，不能凭空猜测
 4. 如果投标文件中没有相关内容，请给出0分并说明原因
 
-【重要】请严格按照以下JSON格式返回结果，不要返回任何解释文字：
-{{
-  "规则名称1": {{"score": 得分, "reason": "评分理由"}},
-  "规则名称2": {{"score": 得分, "reason": "评分理由"}},
-  ...
-}}
+【重要】请严格按照以下格式返回结果，不要返回任何解释文字：
+[规则名称１：得分１，规则名称２：得分２，．．．]
 
-示例：
-{{
-  "技术方案完整性": {{"score": 8.5, "reason": "投标文件中提供了详细的技术方案，符合评分标准要求"}},
-  "项目实施计划": {{"score": 7.0, "reason": "实施计划较为完整，但缺少风险控制措施"}}
-}}"""
+示例：[企业证书，认证体系：3，标书的完整性：4，有同类型项目业绩：2]"""
         return prompt
 
     def _create_combined_prompt_for_qualitative_rules(self, rules, bid_pages):
@@ -1678,7 +1894,7 @@ class EnhancedIntelligentBidAnalyzer(BidAnalyzerHelpers):
         prompt = f"""你是一个专业的评标专家，请根据以下信息对投标文件进行定性评估：
 
 【投标人名称】
-{self.bidder_name}
+{getattr(self, 'bidder_name', '未知投标人')}
 
 【评估规则列表】
 {rules_text}
@@ -1762,20 +1978,56 @@ class EnhancedIntelligentBidAnalyzer(BidAnalyzerHelpers):
                     # 匹配"规则名称：得分"格式
                     match = re.search(r'(.+?)\s*[:：]\s*([0-9.]+)', item.strip())
                     if match:
-                        rule_name = match.group(1).strip()
+                        ai_rule_name = match.group(1).strip()
                         score = float(match.group(2))
 
-                        # 查找对应的规则以确保分数在合理范围内
+                        # 查找对应的规则（使用模糊匹配）
+                        matched_rule = None
                         for rule in rules:
-                            if rule.Child_Item_Name == rule_name:
-                                # 确保分数在合理范围内
-                                if score < 0:
-                                    score = 0
-                                if score > rule.Child_max_score:
-                                    score = rule.Child_max_score
+                            # 精确匹配
+                            if rule.Child_Item_Name == ai_rule_name:
+                                matched_rule = rule
+                                break
+                            # 模糊匹配：检查是否包含关键词
+                            elif (
+                                ai_rule_name in rule.Child_Item_Name
+                                or rule.Child_Item_Name in ai_rule_name
+                            ):
+                                matched_rule = rule
+                                break
+                            # 部分匹配：检查关键词
+                            elif any(
+                                keyword in rule.Child_Item_Name
+                                for keyword in ai_rule_name.split('，')
+                            ):
+                                matched_rule = rule
                                 break
 
-                        results[rule_name] = {'score': score, 'reason': 'AI分析结果'}
+                        if matched_rule:
+                            # 确保分数在合理范围内
+                            if score < 0:
+                                score = 0
+                            if score > matched_rule.Child_max_score:
+                                score = matched_rule.Child_max_score
+
+                            results[matched_rule.Child_Item_Name] = {
+                                'score': score,
+                                'reason': 'AI分析结果',
+                            }
+                        else:
+                            # 如果没有找到匹配的规则，使用AI返回的名称
+                            results[ai_rule_name] = {
+                                'score': score,
+                                'reason': 'AI分析结果',
+                            }
+
+                # 确保所有规则都有结果
+                for rule in rules:
+                    if rule.Child_Item_Name not in results:
+                        results[rule.Child_Item_Name] = {
+                            'score': 0,
+                            'reason': '未分析',
+                        }
 
                 return results
             else:
@@ -1897,6 +2149,11 @@ class EnhancedIntelligentBidAnalyzer(BidAnalyzerHelpers):
 
 if __name__ == '__main__':
     import argparse
+    import logging
+
+    # 配置日志
+    logging.basicConfig(level=logging.INFO)
+    logger = logging.getLogger(__name__)
 
     parser = argparse.ArgumentParser(description='增强版智能投标分析器')
     parser.add_argument('tender_file_path', help='招标文件路径')

@@ -860,6 +860,19 @@ class CorrectScoringExtractor:
         if not text:
             return ''
 
+        # 导入增强的文本清洗工具
+        try:
+            from tools.enhanced_text_cleaner import clean_scoring_rule_text
+
+            cleaned_text = clean_scoring_rule_text(text)
+            if cleaned_text != text:
+                self.logger.debug(
+                    f'使用增强文本清洗工具清洗文本: {text[:50]}... -> {cleaned_text[:50]}...'
+                )
+            return cleaned_text
+        except Exception as e:
+            self.logger.warning(f'使用增强文本清洗工具时出错，回退到原有方法: {e}')
+
         # 如果textacy可用，使用textacy清洗文本
         if self.text_processor:
             try:
@@ -889,6 +902,21 @@ class CorrectScoringExtractor:
         """
         if not description:
             return ''
+
+        # 导入增强的文本清洗工具
+        try:
+            from tools.enhanced_text_cleaner import clean_rule_description
+
+            cleaned_description = clean_rule_description(description)
+            if cleaned_description != description:
+                self.logger.debug(
+                    f'使用增强文本清洗工具清洗描述: {description[:50]}... -> {cleaned_description[:50]}...'
+                )
+            return cleaned_description
+        except Exception as e:
+            self.logger.warning(
+                f'使用增强文本清洗工具清洗描述时出错，回退到原有方法: {e}'
+            )
 
         # 如果textacy可用，使用textacy清洗文本
         if self.text_processor:

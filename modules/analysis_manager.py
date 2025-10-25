@@ -27,6 +27,7 @@ import os
 import threading
 import glob
 import datetime
+import time
 
 from modules.workflow_status import (
     WorkflowStatus,
@@ -153,10 +154,20 @@ class AnalysisManager:
                         '成功提取并保存 %s 条评分规则到数据库', len(scoring_rules)
                     )
 
-                    # 记录提取到的评分规则详细信息
+                    # 记录提取到的评分规则详细信息，包括规则名称、总分值、是否父项或子项以及规则描述
                     for rule_data in scoring_rules:
+                        criteria_name = rule_data.get('criteria_name', '未知规则')
+                        max_score = rule_data.get('max_score', 0)
+                        is_price_criteria = rule_data.get('is_price_criteria', False)
+                        description = rule_data.get('description', '')
+                        is_parent = rule_data.get('is_parent', False)
+                        children = rule_data.get('children', [])
+
+                        # 判断是父项还是子项
+                        item_type = '父项' if is_parent or children else '子项'
+
                         self.logger.info(
-                            f'评分规则: criteria_name={rule_data.get("criteria_name")}, max_score={rule_data.get("max_score")}, is_price_criteria={rule_data.get("is_price_criteria")}'
+                            f'评分规则: criteria_name={criteria_name}, max_score={max_score}, is_price_criteria={is_price_criteria}, type={item_type}, description={description}'
                         )
 
                     return True
@@ -555,9 +566,13 @@ class AnalysisManager:
                         self.logger.info(f'保存的详细评分: {detailed_scores_data}')
                     except Exception as e:
                         self.logger.error(f'保存分析结果到数据库时出错: {e}')
+                        self.logger.error(traceback.format_exc())
                         db.rollback()
+                # 如果没有找到分析结果记录，则创建新的记录
                 else:
-                    # 如果没有找到分析结果记录，则创建新的记录
+                    self.logger.warning(
+                        f'未找到分析结果记录，准备创建新的记录: bid_document_id={bid_document_id}'
+                    )
                     try:
                         # 获取AI分析器计算的子项分数总和
                         other_scores_total = analysis_result.get(
@@ -611,6 +626,7 @@ class AnalysisManager:
                         self.logger.info(f'保存的详细评分: {detailed_scores_data}')
                     except Exception as e:
                         self.logger.error(f'创建新的分析结果记录时出错: {e}')
+                        self.logger.error(traceback.format_exc())
                         db.rollback()
 
                 self.logger.info(f'投标文件分析完成: {bid_document.bidder_name}')
@@ -624,29 +640,11 @@ class AnalysisManager:
                     f'已将投标文件 {bid_document.bidder_name} 状态更新为 completed'
                 )
 
-                # 检查是否所有分析任务都已完成，如果完成则更新项目状态
-                try:
-                    # 创建一个新的数据库会话来检查项目状态
-                    from models.database import SessionLocal
+                # 延迟检查项目完成状态，避免竞态条件
+                self._delayed_check_and_update_project_status(
+                    project_id, delay_seconds=2
+                )
 
-                    check_db = SessionLocal()
-                    try:
-                        # 检查项目是否仍然存在
-                        project = (
-                            check_db.query(TenderProject)
-                            .filter(TenderProject.id == project_id)
-                            .first()
-                        )
-                        if project:
-                            # 创建一个新的分析管理器实例来检查状态
-                            check_manager = AnalysisManager(db_session=check_db)
-                            check_manager._update_project_status_when_all_completed(
-                                project_id
-                            )
-                    finally:
-                        check_db.close()
-                except Exception as check_e:
-                    self.logger.error(f'检查项目完成状态时出错: {check_e}')
             elif analysis_result['status'] == 'warning':
                 # 警告状态，但仍标记为完成
                 bid_document.processing_status = 'completed'  # type: ignore[assignment]
@@ -663,6 +661,9 @@ class AnalysisManager:
                 self.logger.error(f'投标文件分析失败: {analysis_result["message"]}')
 
             db.commit()
+            self.logger.info(
+                f'分析任务完成，已提交数据库更改: {bid_document.bidder_name}'
+            )
 
         except Exception as e:
             self.logger.error(f'分析任务执行过程中发生意外错误: {e}', exc_info=True)
@@ -677,6 +678,9 @@ class AnalysisManager:
                     )
                     setattr(bid_document, 'progress_current_rule', '分析失败')
                     db.commit()
+                    self.logger.info(
+                        f'已将投标文件状态更新为error: {bid_document.bidder_name}'
+                    )
                 except Exception as commit_e:
                     self.logger.error(f'提交数据库更改时出错: {commit_e}')
                     db.rollback()
@@ -888,14 +892,39 @@ class AnalysisManager:
         self.logger.info(f'项目 {project_id}: 所有非价格项分析任务已启动。')
 
         # 步骤3: 检查并等待所有分析任务完成
-        if not self._check_all_analysis_completed(project_id):
+        # 使用等待机制解决竞态条件问题，确保所有分析任务的状态都已正确更新到数据库
+        project_name = (
+            project.name
+            if project and hasattr(project, 'name')
+            else f'项目{project_id}'
+        )
+
+        # 使用force_continue=True允许在超时后继续处理
+        analysis_completed = self._wait_for_all_analysis_completed(
+            project_id, max_wait_time=10, force_continue=True
+        )
+
+        # 获取完成统计
+        completed_count, total_count = self._get_analysis_completion_stats(project_id)
+
+        if not analysis_completed:
             self.logger.error(
-                f'项目 {project_id}: 非价格项分析步骤未全部成功完成，无法进行价格计算。'
+                f'项目 [{project_name}]: 非价格项分析步骤未全部成功完成，无法进行价格计算。'
             )
             if self.db is not None:
                 project.status = 'error'
+                project.error_message = (
+                    f'分析任务完成率: {completed_count}/{total_count}，无法进行价格计算'
+                )
                 self.db.commit()
             return
+
+        # 如果有部分任务失败但允许继续，记录警告日志
+        if completed_count < total_count:
+            self.logger.warning(
+                f'项目 [{project_name}]: 部分分析任务({completed_count}/{total_count})完成，'
+                f'将尝试继续价格计算流程'
+            )
 
         # 新增步骤: 使用统一综合计算器执行价格分和综合分析规则的计算
         self.logger.info(
@@ -1102,6 +1131,247 @@ class AnalysisManager:
             self.logger.error(f'检查价格提取状态时出错: {e}')
             return False
 
+    def _wait_for_all_analysis_completed(
+        self, project_id: int, max_wait_time: int = 120, force_continue: bool = True
+    ):
+        """
+        等待所有分析任务完成
+
+        Args:
+            project_id: 项目ID
+            max_wait_time: 最大等待时间（秒）
+            force_continue: 超时后是否强制继续处理
+        """
+        try:
+            # 获取项目信息用于日志记录
+            project = None
+            if self.db is not None:
+                project = (
+                    self.db.query(TenderProject)
+                    .filter(TenderProject.id == project_id)
+                    .first()
+                )
+            project_name = (
+                project.name
+                if project and hasattr(project, 'name')
+                else f'项目{project_id}'
+            )
+
+            self.logger.info(f'等待项目 [{project_name}] 所有分析任务完成')
+
+            if not self.db:
+                self.logger.error('数据库会话未提供')
+                return False
+
+            # 等待所有分析任务完成
+            wait_time = 0
+            check_interval = 3  # 每3秒检查一次
+            progress_report_interval = 30  # 每30秒输出一次详细进度报告
+
+            last_progress_report = 0
+
+            while wait_time < max_wait_time:
+                # 获取完成和总数
+                completed_count, total_count = self._get_analysis_completion_stats(
+                    project_id
+                )
+
+                # 检查是否所有分析都已完成
+                if completed_count == total_count:
+                    self.logger.info(
+                        f'项目 [{project_name}] 所有分析任务已完成 ({completed_count}/{total_count})'
+                    )
+                    return True
+
+                # 定期输出详细进度报告
+                if wait_time - last_progress_report >= progress_report_interval:
+                    self.logger.info(
+                        f'项目 [{project_name}] 分析进度: {completed_count}/{total_count} 完成, '
+                        f'已等待 {wait_time}秒, 最大等待时间 {max_wait_time}秒'
+                    )
+                    last_progress_report = wait_time
+
+                # 简单进度日志
+                self.logger.debug(
+                    f'项目 [{project_name}] 仍有任务未完成 ({completed_count}/{total_count}), '
+                    f'已等待 {wait_time}秒, 剩余 {max_wait_time - wait_time}秒'
+                )
+
+                time.sleep(check_interval)
+                wait_time += check_interval
+
+            completed_count, total_count = self._get_analysis_completion_stats(
+                project_id
+            )
+            self.logger.warning(
+                f'项目 [{project_name}] 等待超时 ({max_wait_time}秒)，'
+                f'仍有分析任务未完成 ({completed_count}/{total_count})'
+            )
+
+            # 如果设置了超时后强制继续，则处理卡住的任务并继续
+            if force_continue:
+                from modules.project_status_manager import ProjectStatusManager
+
+                status_manager = ProjectStatusManager(db_session=self.db)
+                stuck_count = status_manager.handle_stuck_processes(project_id)
+
+                self.logger.warning(
+                    f'项目 [{project_name}] 处理了 {stuck_count} 个卡住的任务，将继续后续流程'
+                )
+                return True  # 返回True以继续后续流程
+
+            # 如果没有设置强制继续，则返回失败
+            return False
+        except Exception as e:
+            self.logger.error(f'等待分析任务完成时出错: {str(e)}')
+            try:
+                from modules.project_status_manager import ProjectStatusManager
+
+                status_manager = ProjectStatusManager(db_session=self.db)
+                status_manager.handle_stuck_processes(project_id)
+                # 返回部分成功
+                return True
+            except Exception as inner_e:
+                self.logger.error(f'处理卡住的任务时出错: {inner_e}')
+                return False
+
+    def _delayed_check_and_update_project_status(
+        self, project_id: int, delay_seconds: int = 2
+    ):
+        """
+        延迟检查并更新项目状态，避免竞态条件
+
+        Args:
+            project_id: 项目ID
+            delay_seconds: 延迟秒数
+        """
+        import threading
+        import time
+
+        def delayed_check():
+            time.sleep(delay_seconds)  # 等待指定秒数确保数据库操作完成
+
+            try:
+                # 创建新的数据库会话
+                from models.database import SessionLocal
+
+                check_db = SessionLocal()
+                try:
+                    # 刷新会话以确保获取最新数据
+                    check_db.flush()
+
+                    # 检查项目是否仍然存在
+                    project = (
+                        check_db.query(TenderProject)
+                        .filter(TenderProject.id == project_id)
+                        .first()
+                    )
+                    if project:
+                        # 检查项目当前状态
+                        current_status = project.status
+                        self.logger.info(
+                            f'检查项目 {project_id} 当前状态: {current_status}'
+                        )
+
+                        # 如果项目状态已经是completed，不需要再次更新
+                        if current_status == 'completed':
+                            self.logger.info(
+                                f'项目 {project_id} 状态已经是completed，无需再次更新'
+                            )
+                            return
+
+                        # 使用增强的状态管理器等待并更新状态
+                        from modules.project_status_manager import ProjectStatusManager
+
+                        status_manager = ProjectStatusManager(db_session=check_db)
+                        # 增加重试机制以处理临时的数据库同步问题
+                        max_retries = 3
+                        for retry in range(max_retries):
+                            try:
+                                result = status_manager.wait_and_update_project_status_when_all_completed(
+                                    project_id,
+                                    max_wait_time=30,
+                                    force_complete_after_timeout=True,
+                                )
+                                if result:
+                                    break
+                                elif retry < max_retries - 1:
+                                    # 如果不是最后一次重试，等待一段时间后重试
+                                    time.sleep(2)
+                            except Exception as retry_e:
+                                self.logger.warning(
+                                    f'第{retry + 1}次尝试更新项目状态时出错: {retry_e}'
+                                )
+                                if retry < max_retries - 1:
+                                    time.sleep(2)
+                                else:
+                                    raise
+                finally:
+                    check_db.close()
+            except Exception as check_e:
+                self.logger.error(f'延迟检查项目完成状态时出错: {check_e}')
+
+        # 在后台线程中执行延迟检查
+        check_thread = threading.Thread(target=delayed_check)
+        check_thread.daemon = True
+        check_thread.start()
+
+    def _get_analysis_completion_stats(self, project_id: int) -> tuple:
+        """
+        获取项目分析完成情况的统计信息
+
+        Args:
+            project_id: 项目ID
+
+        Returns:
+            tuple: (已完成数量, 总数量)
+        """
+        try:
+            # 获取项目下的所有投标文件
+            bid_documents = []
+            if self.db is not None:
+                bid_documents = (
+                    self.db.query(BidDocument)
+                    .filter(BidDocument.project_id == project_id)
+                    .all()
+                )
+
+            if not bid_documents:
+                self.logger.warning(f'项目 {project_id} 没有找到投标文件')
+                return 0, 0
+
+            # 统计完成和总数
+            total_count = len(bid_documents)
+            completed_count = 0
+            processing_count = 0
+            error_count = 0
+
+            # 详细状态统计
+            status_counts = {}
+
+            for doc in bid_documents:
+                status = doc.processing_status
+                status_counts[status] = status_counts.get(status, 0) + 1
+
+                if status == 'completed':
+                    completed_count += 1
+                elif status == 'processing':
+                    processing_count += 1
+                elif status == 'error':
+                    error_count += 1
+
+            # 记录详细的统计信息
+            self.logger.info(
+                f'项目 {project_id} 分析状态统计: 总数={total_count}, 已完成={completed_count}, '
+                f'处理中={processing_count}, 错误={error_count}, 详细状态={status_counts}'
+            )
+
+            return completed_count, total_count
+
+        except Exception as e:
+            self.logger.error(f'获取分析完成统计时出错: {str(e)}')
+            return 0, 0
+
     def _check_all_analysis_completed(self, project_id: int) -> bool:
         """
         检查项目中所有投标文件的分析是否都已完成
@@ -1115,53 +1385,30 @@ class AnalysisManager:
         try:
             self.logger.info(f'检查项目 {project_id} 的分析完成状态')
 
-            # 获取项目下的所有投标文件
-            bid_documents = []
-            if self.db is not None:
-                bid_documents = (
-                    self.db.query(BidDocument)
-                    .filter(BidDocument.project_id == project_id)
-                    .all()
-                )
+            # 获取完成统计
+            completed_count, total_count = self._get_analysis_completion_stats(
+                project_id
+            )
 
-            if not bid_documents:
-                self.logger.warning(f'项目 {project_id} 没有找到投标文件')
+            if total_count == 0:
                 return False
 
-            # 检查每个投标文件的分析状态
-            all_completed = True
-            completed_count = 0
+            # 检查是否全部完成
+            all_completed = completed_count == total_count
 
-            for doc in bid_documents:
-                bidder_name = doc.bidder_name or f'未知投标人_{doc.id}'
-                processing_status = doc.processing_status
-
+            if all_completed:
                 self.logger.info(
-                    f'投标人 [{bidder_name}] 分析状态: {processing_status}'
+                    f'项目 {project_id} 所有分析任务已完成 ({completed_count}/{total_count})'
                 )
-
-                # 检查状态是否为完成
-                if processing_status == 'completed':
-                    completed_count += 1
-                elif processing_status == 'error':
-                    self.logger.warning(
-                        f'投标人 [{bidder_name}] 分析出错，状态: {processing_status}'
-                    )
-                    all_completed = False
-                else:
-                    self.logger.info(
-                        f'投标人 [{bidder_name}] 分析未完成，状态: {processing_status}'
-                    )
-                    all_completed = False
-
-            self.logger.info(
-                f'项目 {project_id} 分析完成检查: {completed_count}/{len(bid_documents)} 完成'
-            )
+            else:
+                self.logger.info(
+                    f'项目 {project_id} 分析任务未全部完成 ({completed_count}/{total_count})'
+                )
 
             return all_completed
 
         except Exception as e:
-            self.logger.error(f'检查分析完成状态时出错: {e}')
+            self.logger.error(f'检查分析完成状态时出错: {str(e)}')
             return False
 
     def _update_project_status_when_all_completed(self, project_id: int):

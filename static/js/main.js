@@ -275,16 +275,33 @@ async function pollAnalysisStatus (projectId) {
         // 更新进度显示
         updateProgress(data);
 
-        // 检查项目状态
-        if (data.project_status === 'completed' || data.project_status === 'completed_with_errors' ||
-            data.processing_status === 'completed' || data.processing_status === 'completed_with_errors') {
-            // 分析完成，直接获取结果，不再显示价格分计算提示
-            // 获取结果
+        // 检查项目状态 - 增加更严格的检查
+        const projectStatus = data.project_status || data.processing_status;
+        const isCompleted = projectStatus === 'completed' || projectStatus === 'completed_with_errors';
+
+        // 额外检查：确保所有投标文件都已完成
+        let allBidsCompleted = true;
+        if (data.document_statuses) {
+            for (const doc of data.document_statuses) {
+                if (doc.processing_status !== 'completed' && doc.processing_status !== 'error') {
+                    allBidsCompleted = false;
+                    break;
+                }
+            }
+        }
+
+        if (isCompleted || (projectStatus === 'processing' && allBidsCompleted)) {
+            // 即使项目状态显示为完成，也要确保所有投标文件状态都已更新
+            console.log('项目已完成或所有投标文件已完成，准备获取结果...');
+
+            // 显示处理完成提示
             const progressTextAfter = document.getElementById('progressText');
             if (progressTextAfter) {
                 progressTextAfter.innerHTML = '处理完成，正在获取结果...';
             }
-            await new Promise(resolve => setTimeout(resolve, 300));
+
+            // 短暂延迟后获取结果
+            await new Promise(resolve => setTimeout(resolve, 500));
 
             // 首先尝试获取动态汇总数据
             try {
@@ -302,28 +319,45 @@ async function pollAnalysisStatus (projectId) {
             }
 
             // 如果获取动态汇总数据失败，获取分析结果
-            const resultResponse = await fetch(`/api/projects/${projectId}/results`);
-            const resultData = await resultResponse.json();
-            displayResults(resultData);
-            pollingActive = false;
-            // 清除保存的项目ID
-            clearProjectId();
-            return; // 结束轮询
+            try {
+                const resultResponse = await fetch(`/api/projects/${projectId}/results`);
+                const resultData = await resultResponse.json();
+                displayResults(resultData);
+                pollingActive = false;
+                // 清除保存的项目ID
+                clearProjectId();
+                return; // 结束轮询
+            } catch (resultError) {
+                console.error('获取分析结果失败:', resultError);
+                // 如果获取结果失败，继续轮询而不是终止
+                console.log('获取结果失败，继续轮询...');
+            }
         }
 
-        // 2秒后再次检查
-        await new Promise(resolve => setTimeout(resolve, 2000));
+        // 如果项目未完成，继续轮询
+        if (!isCompleted) {
+            // 2秒后再次检查
+            await new Promise(resolve => setTimeout(resolve, 2000));
 
-        // 检查是否应该继续轮询
+            // 检查是否应该继续轮询
+            if (shouldContinuePolling()) {
+                await pollAnalysisStatus(projectId); // 继续轮询
+            } else {
+                pollingActive = false;
+            }
+        } else {
+            // 项目已完成但结果获取失败，停止轮询
+            pollingActive = false;
+        }
+    } catch (error) {
+        console.error('轮询过程中出错:', error);
+        // 出错时继续轮询而不是立即停止
+        await new Promise(resolve => setTimeout(resolve, 5000)); // 等待5秒后重试
         if (shouldContinuePolling()) {
             await pollAnalysisStatus(projectId); // 继续轮询
         } else {
             pollingActive = false;
         }
-    } catch (error) {
-        console.error('Error:', error);
-        alert('分析过程中发生错误: ' + error.message);
-        pollingActive = false;
     }
 }
 
@@ -332,10 +366,23 @@ function shouldContinuePolling () {
     // 检查是否在正确的页面（动态进度界面）
     const progressSection = document.getElementById('progressSection');
 
-    // 只有在进度界面显示时才继续轮询
-    return progressSection &&
-        progressSection.style.display !== 'none' &&
-        document.visibilityState !== 'hidden';
+    // 增加额外的检查：确保currentProjectId存在且有效
+    if (!currentProjectId) {
+        return false;
+    }
+
+    // 检查页面可见性
+    if (document.visibilityState === 'hidden') {
+        return false;
+    }
+
+    // 如果进度界面存在且显示，则继续轮询
+    if (progressSection && progressSection.style.display !== 'none') {
+        return true;
+    }
+
+    // 如果没有进度界面但有项目ID，也继续轮询（处理页面刷新等情况）
+    return true;
 }
 
 // 停止轮询进度

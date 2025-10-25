@@ -4,8 +4,8 @@
 # 作者           : KingFreeDom
 # 创建时间         : 2025-10-18 08:22:38
 #最近一次编辑者      : KingFreeDom
-#最近一次编辑时间     : 2025-10-25 09:49:15
-#文件相对于项目的路径   : \AI_env2\app.py
+#最近一次编辑时间     : 2025-10-25 18:09:21
+#文件相对于项目的路径   : \AI_ENV2\app.py
 #
 # Copyright (c) 2025 by 中车眉山车辆有限公司/KingFreeDom, All Rights Reserved.
 #
