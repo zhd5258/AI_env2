@@ -1,50 +1,27 @@
 #!/usr/bin/env python
-# -*- coding:utf-8 -*-
-#
-# 作者           : KingFreeDom
-# 创建时间         : 2025-10-12 06:14:18
-# 最近一次编辑者      : KingFreeDom
-# 最近一次编辑时间     : 2025-10-12 06:25:06
-# 文件相对于项目的路径   : \AI_ENV2\modules\chunked_parallel_processor.py
-#
-# Copyright (c) 2025 by 中车眉山车辆有限公司/KingFreeDom, All Rights Reserved.
-#
-#!/usr/bin/env python
 # -*- coding: utf-8 -*-
-
 """
-分块并行PDF处理器 - 支持分块处理大文件和并行处理以大幅提高处理速度
+分块并行PDF处理器
+将大型PDF文件分割成小块并行处理，提高处理效率
 """
 
 import os
 import re
 import sys
 import json
-import argparse
 import time
-import io
+import logging
+import shutil
+import argparse
+import multiprocessing as mp
 from pathlib import Path
 from typing import List, Optional, Tuple, Dict, Any
-import logging
-from concurrent.futures import ThreadPoolExecutor, ProcessPoolExecutor, as_completed
-import multiprocessing as mp
-import tempfile
-import shutil
-import warnings
+from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor, as_completed
 
-# 忽略pynvml弃用警告
-warnings.filterwarnings(
-    'ignore',
-    message='The pynvml package is deprecated. Please install nvidia-ml-py instead.',
-)
+# 导入AdvancedPDFProcessor
+from modules.advanced_pdf_processor import AdvancedPDFProcessor
 
-# 添加项目根目录到Python路径
-sys.path.append(str(Path(__file__).parent))
-
-# 导入高级PDF处理器
-from advanced_pdf_processor import AdvancedPDFProcessor
-
-# 可选:PyMuPDF (fitz) 用于PDF处理
+# 可选依赖库
 try:
     import fitz  # PyMuPDF
 
@@ -55,10 +32,7 @@ except ImportError:
     logging.warning('PyMuPDF (fitz) 未安装, 内容预检查功能将不可用')
 
 
-# 设置日志
-logging.basicConfig(
-    level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s'
-)
+# 获取logger实例而不是重复配置
 logger = logging.getLogger(__name__)
 
 

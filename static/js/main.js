@@ -381,8 +381,14 @@ function shouldContinuePolling () {
         return true;
     }
 
-    // 如果没有进度界面但有项目ID，也继续轮询（处理页面刷新等情况）
-    return true;
+    // 如果进度界面不存在但当前页面是首页（index.html），且有项目ID，也继续轮询
+    // 这样可以处理页面切换后返回的情况
+    if (window.location.pathname === '/' || window.location.pathname === '/index.html') {
+        return true;
+    }
+
+    // 其他情况不继续轮询
+    return false;
 }
 
 // 停止轮询进度
@@ -496,8 +502,250 @@ document.addEventListener('DOMContentLoaded', function () {
     const progressSection = document.getElementById('progressSection');
     if (progressSection && progressSection.style.display !== 'none' && currentProjectId) {
         startProgressPolling();
+    } else if (currentProjectId) {
+        // 如果有保存的项目ID但进度界面未显示，检查项目状态并恢复轮询
+        checkAndRestoreProgress(currentProjectId);
     }
 });
+
+// 检查项目状态并恢复进度显示和轮询
+async function checkAndRestoreProgress(projectId) {
+    try {
+        const response = await fetch(`/api/projects/${projectId}/progress`);
+        if (!response.ok) {
+            console.warn('获取项目进度失败，清除保存的项目ID');
+            clearProjectId();
+            return;
+        }
+
+        const data = await response.json();
+        const projectStatus = data.project_status || data.processing_status;
+        
+        // 检查项目是否真的在进行中（通过检查最后更新时间）
+        const lastUpdateTime = data.last_update_time || data.updated_at;
+        const now = new Date().getTime();
+        const timeSinceUpdate = lastUpdateTime ? (now - new Date(lastUpdateTime).getTime()) : Infinity;
+        const maxStaleTime = 30 * 60 * 1000; // 30分钟
+        
+        // 如果项目状态是processing或analyzing，恢复进度显示和轮询
+        if (projectStatus === 'processing' || projectStatus === 'analyzing') {
+            // 如果项目超过30分钟没有更新，认为已卡住，允许用户取消
+            if (timeSinceUpdate > maxStaleTime) {
+                console.warn('项目可能已卡住（超过30分钟未更新），提供取消选项');
+                // 显示进度界面但添加警告和取消按钮
+                showProgressWithCancelOption(projectId, data, true);
+                return;
+            }
+            
+            console.log('检测到进行中的项目，恢复进度显示和轮询');
+            
+            // 显示进度界面
+            const progressSection = document.getElementById('progressSection');
+            const uploadSection = document.querySelector('.upload-section');
+            const fileListSection = document.getElementById('fileListSection');
+            
+            if (progressSection) {
+                progressSection.style.display = 'block';
+            }
+            if (uploadSection) {
+                uploadSection.style.display = 'none';
+            }
+            if (fileListSection) {
+                fileListSection.style.display = 'none';
+            }
+            
+            // 更新项目ID显示
+            const projectIdElement = document.getElementById('projectId');
+            if (projectIdElement) {
+                projectIdElement.textContent = projectId;
+            }
+            
+            // 更新进度显示
+            updateProgress(data);
+            
+            // 确保显示取消按钮
+            showCancelButton();
+            
+            // 启动轮询
+            startProgressPolling();
+        } else if (projectStatus === 'completed' || projectStatus === 'completed_with_errors') {
+            // 如果项目已完成，显示结果
+            console.log('项目已完成，显示结果');
+            const progressSection = document.getElementById('progressSection');
+            if (progressSection) {
+                progressSection.style.display = 'block';
+            }
+            updateProgress(data);
+            
+            // 隐藏取消按钮
+            hideCancelButton();
+            
+            // 尝试获取结果
+            try {
+                const summaryResponse = await fetch(`/api/projects/${projectId}/dynamic-summary`);
+                if (summaryResponse.ok) {
+                    const summaryData = await summaryResponse.json();
+                    displaySummary(summaryData);
+                } else {
+                    const resultResponse = await fetch(`/api/projects/${projectId}/results`);
+                    if (resultResponse.ok) {
+                        const resultData = await resultResponse.json();
+                        displayResults(resultData);
+                    }
+                }
+            } catch (error) {
+                console.error('获取结果失败:', error);
+            }
+        } else {
+            // 项目状态不是进行中或已完成，清除保存的项目ID
+            console.log('项目状态不是进行中或已完成，清除保存的项目ID');
+            clearProjectId();
+        }
+    } catch (error) {
+        console.error('检查项目状态时出错:', error);
+        clearProjectId();
+    }
+}
+
+// 显示带取消选项的进度界面
+function showProgressWithCancelOption(projectId, data, isStale) {
+    const progressSection = document.getElementById('progressSection');
+    const uploadSection = document.querySelector('.upload-section');
+    const fileListSection = document.getElementById('fileListSection');
+    
+    if (progressSection) {
+        progressSection.style.display = 'block';
+    }
+    if (uploadSection) {
+        uploadSection.style.display = 'none';
+    }
+    if (fileListSection) {
+        fileListSection.style.display = 'none';
+    }
+    
+    // 更新项目ID显示
+    const projectIdElement = document.getElementById('projectId');
+    if (projectIdElement) {
+        projectIdElement.textContent = projectId;
+    }
+    
+    // 更新进度显示
+    updateProgress(data);
+    
+    // 显示警告和取消按钮
+    if (isStale) {
+        showStaleWarning();
+    }
+    showCancelButton();
+}
+
+// 显示项目可能已卡住的警告
+function showStaleWarning() {
+    const progressSection = document.getElementById('progressSection');
+    if (!progressSection) return;
+    
+    // 检查是否已有警告
+    let warningDiv = document.getElementById('staleWarning');
+    if (!warningDiv) {
+        warningDiv = document.createElement('div');
+        warningDiv.id = 'staleWarning';
+        warningDiv.className = 'alert alert-warning';
+        warningDiv.style.marginTop = '10px';
+        warningDiv.innerHTML = `
+            <strong>警告：</strong>该项目可能已卡住（超过30分钟未更新）。
+            <button class="btn btn-sm btn-danger ms-2" onclick="cancelCurrentProject()">取消当前项目</button>
+        `;
+        progressSection.insertBefore(warningDiv, progressSection.firstChild);
+    }
+    warningDiv.style.display = 'block';
+}
+
+// 隐藏项目卡住警告
+function hideStaleWarning() {
+    const warningDiv = document.getElementById('staleWarning');
+    if (warningDiv) {
+        warningDiv.style.display = 'none';
+    }
+}
+
+// 显示取消按钮
+function showCancelButton() {
+    const progressSection = document.getElementById('progressSection');
+    if (!progressSection) return;
+    
+    // 检查是否已有取消按钮
+    let cancelBtn = document.getElementById('cancelProjectBtn');
+    if (!cancelBtn) {
+        cancelBtn = document.createElement('button');
+        cancelBtn.id = 'cancelProjectBtn';
+        cancelBtn.className = 'btn btn-danger mt-3';
+        cancelBtn.textContent = '取消当前项目，重新开始';
+        cancelBtn.onclick = cancelCurrentProject;
+        
+        // 找到进度文本区域，在它后面插入按钮
+        const progressText = document.getElementById('progressText');
+        if (progressText && progressText.parentNode) {
+            progressText.parentNode.appendChild(cancelBtn);
+        } else {
+            progressSection.appendChild(cancelBtn);
+        }
+    }
+    cancelBtn.style.display = 'block';
+}
+
+// 隐藏取消按钮
+function hideCancelButton() {
+    const cancelBtn = document.getElementById('cancelProjectBtn');
+    if (cancelBtn) {
+        cancelBtn.style.display = 'none';
+    }
+}
+
+// 取消当前项目
+function cancelCurrentProject() {
+    if (!confirm('确定要取消当前项目吗？这将清除当前进度并允许您重新开始。')) {
+        return;
+    }
+    
+    // 停止轮询
+    stopProgressPolling();
+    
+    // 清除项目ID
+    clearProjectId();
+    currentProjectId = null;
+    
+    // 隐藏进度界面
+    const progressSection = document.getElementById('progressSection');
+    if (progressSection) {
+        progressSection.style.display = 'none';
+    }
+    
+    // 显示上传表单
+    const uploadSection = document.querySelector('.upload-section');
+    if (uploadSection) {
+        uploadSection.style.display = 'block';
+    }
+    
+    const fileListSection = document.getElementById('fileListSection');
+    if (fileListSection) {
+        fileListSection.style.display = 'block';
+    }
+    
+    // 隐藏警告和取消按钮
+    hideStaleWarning();
+    hideCancelButton();
+    
+    // 清除项目ID显示
+    const projectIdElement = document.getElementById('projectId');
+    if (projectIdElement) {
+        projectIdElement.textContent = '-';
+    }
+    
+    // 清除结果显示
+    clearPreviousResults();
+    
+    console.log('已取消当前项目，可以重新开始');
+}
 
 // 更新进度显示 - 实现每个投标文件的动态进展
 function updateProgress (data) {
@@ -505,6 +753,15 @@ function updateProgress (data) {
     let detailedProgressContainer = document.getElementById('detailedProgress');
     const progressBar = document.getElementById('progressFill'); // 在index.html中是progressFill
     const progressText = document.getElementById('progressText');
+    
+    // 检查项目状态，如果是进行中状态，显示取消按钮
+    const projectStatus = data.project_status || data.processing_status;
+    if (projectStatus === 'processing' || projectStatus === 'analyzing') {
+        showCancelButton();
+    } else {
+        hideCancelButton();
+        hideStaleWarning();
+    }
 
     // 更新总体进度
     let overallProgress = 0;

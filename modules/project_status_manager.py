@@ -196,13 +196,14 @@ class ProjectStatusManager:
             self.logger.error(f'等待并更新项目状态时出错: {e}')
             return False
 
-    def handle_stuck_processes(self, project_id: int, max_retries: int = 3) -> int:
+    def handle_stuck_processes(self, project_id: int, max_retries: int = 3, force_all_processing: bool = False) -> int:
         """
         处理卡住的分析任务，将其状态更新为错误
 
         Args:
             project_id: 项目ID
             max_retries: 最大重试次数
+            force_all_processing: 是否强制处理所有processing状态的任务（用于超时情况）
 
         Returns:
             int: 处理的卡住任务数量
@@ -236,21 +237,43 @@ class ProjectStatusManager:
                 # 查找所有处于processing状态的投标文档
                 from models.database import BidDocument
 
-                # 查找处理时间超过30分钟的任务
-                time_threshold = datetime.datetime.now() - datetime.timedelta(
-                    minutes=30
-                )
-
-                stuck_docs = []
-                if self.db is not None:
-                    stuck_docs = (
-                        self.db.query(BidDocument)
-                        .filter(
-                            BidDocument.project_id == project_id,
-                            BidDocument.processing_status == 'processing',
+                if force_all_processing:
+                    # 强制处理所有processing状态的任务（用于超时情况）
+                    stuck_docs = []
+                    if self.db is not None:
+                        stuck_docs = (
+                            self.db.query(BidDocument)
+                            .filter(
+                                BidDocument.project_id == project_id,
+                                BidDocument.processing_status == 'processing',
+                            )
+                            .all()
                         )
-                        .all()
+                    self.logger.info(
+                        f'项目 [{project_name}] 强制处理所有processing状态的任务，共 {len(stuck_docs)} 个'
                     )
+                else:
+                    # 查找处理时间超过30分钟的任务
+                    time_threshold = datetime.datetime.now() - datetime.timedelta(
+                        minutes=30
+                    )
+
+                    stuck_docs = []
+                    if self.db is not None:
+                        stuck_docs = (
+                            self.db.query(BidDocument)
+                            .filter(
+                                BidDocument.project_id == project_id,
+                                BidDocument.processing_status == 'processing',
+                            )
+                            .all()
+                        )
+                    
+                    # 过滤出超过时间阈值的任务
+                    stuck_docs = [
+                        doc for doc in stuck_docs
+                        if hasattr(doc, 'updated_at') and doc.updated_at and doc.updated_at < time_threshold
+                    ]
 
                 count = len(stuck_docs)
                 if count == 0:
@@ -260,17 +283,48 @@ class ProjectStatusManager:
                 # 更新卡住的任务状态
                 for doc in stuck_docs:
                     bidder_name = doc.bidder_name or f'未知投标人_{doc.id}'
-                    doc.processing_status = 'error'
-                    doc.progress_current_rule = '分析超时，已强制终止'
+                    # 检查是否有分析结果，如果有则标记为completed，否则标记为error
+                    from models.database import AnalysisResult
+                    has_result = (
+                        self.db.query(AnalysisResult)
+                        .filter(AnalysisResult.bid_document_id == doc.id)
+                        .first()
+                    )
+                    
+                    if has_result:
+                        # 如果有分析结果，标记为completed（分析已完成，只是状态更新失败）
+                        doc.processing_status = 'completed'
+                        doc.progress_current_rule = '分析完成（状态已修复）'
+                        # 确保processing_phase也被设置
+                        if hasattr(doc, 'processing_phase'):
+                            doc.processing_phase = '分析完成'
+                        self.logger.warning(
+                            f'项目 [{project_name}] 投标人 [{bidder_name}] 分析已完成但状态未更新，'
+                            f'将状态从processing更新为completed'
+                        )
+                    else:
+                        # 如果没有分析结果，检查是否在分析过程中（通过processing_phase判断）
+                        processing_phase = getattr(doc, 'processing_phase', '')
+                        if processing_phase and '完成' in processing_phase:
+                            # 如果processing_phase显示已完成，即使没有结果也标记为completed
+                            doc.processing_status = 'completed'
+                            doc.progress_current_rule = '分析完成（状态已修复，但未找到结果记录）'
+                            self.logger.warning(
+                                f'项目 [{project_name}] 投标人 [{bidder_name}] 分析阶段显示已完成但无结果记录，'
+                                f'将状态从processing更新为completed'
+                            )
+                        else:
+                            # 真正卡住的任务，标记为error
+                            doc.processing_status = 'error'
+                            doc.progress_current_rule = '分析超时，已强制终止'
+                            self.logger.warning(
+                                f'项目 [{project_name}] 投标人 [{bidder_name}] 分析卡住，'
+                                f'将状态从processing更新为error'
+                            )
+                    
                     # 确保updated_at字段存在且正确设置
                     if hasattr(doc, 'updated_at'):
                         doc.updated_at = datetime.datetime.now()
-
-                    # 记录详细日志
-                    self.logger.warning(
-                        f'项目 [{project_name}] 投标人 [{bidder_name}] 分析卡住，'
-                        f'将状态从processing更新为error'
-                    )
 
                 if self.db is not None:
                     self.db.commit()

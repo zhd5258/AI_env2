@@ -37,9 +37,15 @@
         <div class="container mt-4">
             <div class="row">
                 <div class="col-12">
-                    <h2 class="mb-4">
-                        <i class="fas fa-history me-2"></i>历史评标项目
-                    </h2>
+                    <div class="d-flex justify-content-between align-items-center mb-4">
+                        <h2 class="mb-0">
+                            <i class="fas fa-history me-2"></i>历史评标项目
+                        </h2>
+                        <!-- 回到分析进度页面按钮 -->
+                        <button id="backToProgressBtn" class="btn btn-info" style="display: none;">
+                            <i class="fas fa-tachometer-alt me-2"></i>回到分析动态进度页面
+                        </button>
+                    </div>
                     
                     <!-- 项目列表 -->
                     <div class="card">
@@ -132,5 +138,51 @@
     <script src="/static/js/chart.min.js"></script>
     <!-- 引入自定义 JS -->
     <script src="/static/js/history.js"></script>
+    <script>
+        // 检查是否有进行中的项目并显示返回按钮
+        async function checkAndShowBackButton() {
+            try {
+                // 从localStorage获取保存的项目ID
+                const savedProjectId = localStorage.getItem('currentProjectId');
+                if (!savedProjectId) {
+                    document.getElementById('backToProgressBtn').style.display = 'none';
+                    return;
+                }
+
+                // 检查项目状态
+                const response = await fetch(`/api/projects/${savedProjectId}/progress`);
+                if (!response.ok) {
+                    document.getElementById('backToProgressBtn').style.display = 'none';
+                    return;
+                }
+
+                const data = await response.json();
+                const projectStatus = data.project_status || data.processing_status;
+                
+                // 如果项目状态是processing或analyzing，显示返回按钮
+                if (projectStatus === 'processing' || projectStatus === 'analyzing') {
+                    document.getElementById('backToProgressBtn').style.display = 'block';
+                } else {
+                    document.getElementById('backToProgressBtn').style.display = 'none';
+                }
+            } catch (error) {
+                console.error('检查项目状态时出错:', error);
+                document.getElementById('backToProgressBtn').style.display = 'none';
+            }
+        }
+
+        // 页面加载时检查
+        document.addEventListener('DOMContentLoaded', function() {
+            checkAndShowBackButton();
+            
+            // 设置定时检查（每5秒检查一次）
+            setInterval(checkAndShowBackButton, 5000);
+            
+            // 绑定按钮点击事件
+            document.getElementById('backToProgressBtn').addEventListener('click', function() {
+                window.location.href = '/';
+            });
+        });
+    </script>
 </body>
 </html>

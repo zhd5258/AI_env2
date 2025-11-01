@@ -34,26 +34,51 @@ except ImportError:
 class CorrectScoringExtractor:
     """正确的评分规则提取器"""
 
-    def __init__(self, pdf_path: str):
+    def __init__(self, pdf_path: str, use_ai_extraction: bool = False):
         """
         初始化评分规则提取器
 
         Args:
             pdf_path: PDF文件路径（直接使用原始PDF文件）
+            use_ai_extraction: 是否使用AI提取规则（默认False，使用表格解析）
         """
         self.pdf_path = pdf_path
+        self.use_ai_extraction = use_ai_extraction
         self.logger = logging.getLogger(__name__)
         # 初始化文本处理器
         self.text_processor = TextProcessor() if TextProcessor else None
+        # 如果使用AI提取，初始化AI分析器
+        if use_ai_extraction:
+            try:
+                from modules.local_ai_analyzer import LocalAIAnalyzer
+                self.ai_analyzer = LocalAIAnalyzer()
+            except ImportError:
+                self.logger.warning('无法导入LocalAIAnalyzer，将使用表格解析方式')
+                self.use_ai_extraction = False
+                self.ai_analyzer = None
+        else:
+            self.ai_analyzer = None
 
     def extract_scoring_rules(self) -> List[Dict[str, Any]]:
         """
-        直接从PDF文件中提取评分规则（严格按照用户要求）
+        提取评分规则（支持AI提取和表格解析两种方式）
 
         Returns:
             List[Dict[str, Any]]: 评分规则列表
         """
-        self.logger.info(f'开始直接从PDF文件提取评分规则: {self.pdf_path}')
+        if self.use_ai_extraction and self.ai_analyzer:
+            return self._extract_rules_with_ai()
+        else:
+            return self._extract_rules_from_table()
+    
+    def _extract_rules_from_table(self) -> List[Dict[str, Any]]:
+        """
+        从PDF表格中提取评分规则（原有方法）
+
+        Returns:
+            List[Dict[str, Any]]: 评分规则列表
+        """
+        self.logger.info(f'开始从PDF表格提取评分规则: {self.pdf_path}')
 
         try:
             # 1. 使用PyMuPDF打开PDF文件
@@ -132,6 +157,408 @@ class CorrectScoringExtractor:
 
             self.logger.error(f'错误详情: {traceback.format_exc()}')
             return []
+
+    def _extract_rules_with_ai(self) -> List[Dict[str, Any]]:
+        """
+        使用AI从招标文件中提取评分规则（优化后的方法）
+
+        Returns:
+            List[Dict[str, Any]]: 评分规则列表
+        """
+        self.logger.info(f'开始使用AI从招标文件提取评分规则: {self.pdf_path}')
+
+        try:
+            # 1. 读取招标文件内容（从PDF或MD文件）
+            import os
+            import fitz
+            
+            # 尝试读取MD文件（如果存在）
+            md_path = self.pdf_path.replace('.pdf', '.md').replace('.PDF', '.md')
+            if os.path.exists(md_path):
+                with open(md_path, 'r', encoding='utf-8') as f:
+                    tender_content = f.read()
+                self.logger.info(f'使用MD文件内容: {md_path}')
+            else:
+                # 从PDF提取文本
+                doc = fitz.open(self.pdf_path)
+                pages_text = []
+                for page_num in range(len(doc)):
+                    page = doc.load_page(page_num)
+                    pages_text.append(page.get_text())
+                doc.close()
+                tender_content = '\n\n'.join(pages_text)
+                self.logger.info('从PDF文件提取文本内容')
+
+            # 2. 构建优化的AI提取prompt
+            prompt = self._build_ai_extraction_prompt(tender_content)
+
+            # 3. 调用AI提取规则
+            self.logger.info('开始调用AI大模型提取评分规则')
+            ai_response = self.ai_analyzer.analyze_text(prompt)
+            self.logger.info('AI大模型响应接收成功')
+
+            # 4. 解析AI响应
+            rules_data = self._parse_ai_extraction_response(ai_response)
+
+            # 5. 转换为标准格式
+            hierarchy_rules = self._convert_ai_rules_to_hierarchy(rules_data)
+
+            # 6. 验证规则
+            self._validate_scoring_rules(hierarchy_rules)
+
+            self.logger.info(f'AI提取到 {len(hierarchy_rules)} 条评分规则')
+            return hierarchy_rules
+
+        except Exception as e:
+            self.logger.error(f'使用AI提取评分规则时出错: {e}')
+            import traceback
+            self.logger.error(f'错误详情: {traceback.format_exc()}')
+            # 如果AI提取失败，回退到表格解析方式
+            self.logger.info('AI提取失败，回退到表格解析方式')
+            return self._extract_rules_from_table()
+
+    def _build_ai_extraction_prompt(self, tender_content: str) -> str:
+        """
+        构建优化的AI提取规则prompt
+
+        Args:
+            tender_content: 招标文件内容
+
+        Returns:
+            str: 优化后的prompt
+        """
+        prompt = f"""你是一个专业的招标文件智能分析引擎。请对提供的招标文件进行深度解析，提取其中的所有评标规则，并按以下要求分类和结构化输出：
+
+1. **定性规则分析**：
+   - 提取所有需要定性判断的合规性、资格性或否决性规则。
+   - 每条规则应包含：规则名称、规则描述。
+   - 这些规则通常涉及资格条件、投标文件形式要求、禁止性条款、偏差处理等。
+   - **重点关注否决性规则**：如投标文件格式不符合要求、缺少必要文件、违反禁止性条款等会导致投标被否决的规则。
+   - 规则描述应清晰完整，包含判断标准和后果说明。
+
+2. **定量规则分析**：
+   - 提取所有可量化的评分规则，例如技术、商务、服务、价格等部分。
+   - 每条规则必须包含一个 `item` 子对象，结构如下：
+     - `最高分值`：该规则项的满分值（整数或浮点数）。必须准确提取，不能遗漏。
+     - `规则描述`：该评分项的完整原文描述或清晰提炼。应包含评分标准、得分条件等关键信息。
+     - `是否综合规则`：boolean 值（true/false），判断该规则是否需**综合全部有效投标文件的信息**才能完成评分。
+       - **true**：需要对比所有投标文件才能评分，例如：
+         * 价格最低者得满分（价格分）
+         * 业绩排名第一得5分
+         * 方案最优者得高分
+         * 技术方案得分最高的得满分
+       - **false**：仅根据单个投标文件自身内容即可评分，例如：
+         * 具备某项证书得5分
+         * 技术方案满足要求得10分
+         * 提供售后服务承诺得3分
+     - `是否父项规则`：boolean 值（true/false），判断该规则是否为**总分项或汇总项**。
+       - **true**：其得分由多个子规则加总而来，例如：
+         * "技术部分"（包含多个技术评分项）
+         * "商务部分"（包含多个商务评分项）
+         * "服务部分"（包含多个服务评分项）
+       - **false**：独立评分项，不包含子项，例如：
+         * "价格分"（虽然是综合规则，但不是父项）
+         * "企业资质"（单个评分项）
+         * "业绩证明"（单个评分项）
+
+3. **输出格式要求**：
+   - 使用标准 JSON 格式。
+   - 不得包含任何打分、评分、判断投标人表现的内容，**仅做规则提取，不进行评分计算**。
+   - 所有规则应去重、归一化表述，确保清晰可读。
+   - 规则名称应简洁明了，去除冗余词汇。
+   - 规则描述应完整准确，保留关键评分标准。
+
+4. **输出结构示例**：
+
+```json
+{{
+  "定性规则_result": [
+    {{
+      "规则名称": "投标人资格要求",
+      "规则描述": "投标人不得存在与招标人有利害关系、与其他投标人有相同单位负责人、存在控股或管理关系等情形，否则将导致投标被否决。"
+    }},
+    {{
+      "规则名称": "投标文件格式要求",
+      "规则描述": "投标文件必须按照招标文件要求的格式编制，缺少关键页签或签字盖章不符合要求的，将导致投标被否决。"
+    }}
+  ],
+  "定量规则_result": [
+    {{
+      "规则名称": "价格分",
+      "item": {{
+        "最高分值": 40,
+        "规则描述": "满足招标文件要求且投标价格最低的投标报价为评标基准价，其价格分为满分，其他投标人的价格分按公式计算：价格分=(评标基准价/投标报价)×价格权重×100。",
+        "是否综合规则": true,
+        "是否父项规则": false
+      }}
+    }},
+    {{
+      "规则名称": "技术部分",
+      "item": {{
+        "最高分值": 32,
+        "规则描述": "技术部分总分，包含技术方案、技术指标、技术能力等子项评分。",
+        "是否综合规则": false,
+        "是否父项规则": true
+      }}
+    }},
+    {{
+      "规则名称": "技术方案",
+      "item": {{
+        "最高分值": 15,
+        "规则描述": "技术方案合理、可行，满足招标文件要求。优秀得15分，良好得10分，一般得5分，不符合要求得0分。",
+        "是否综合规则": true,
+        "是否父项规则": false
+      }}
+    }},
+    {{
+      "规则名称": "企业资质",
+      "item": {{
+        "最高分值": 5,
+        "规则描述": "具备相关资质证书且在有效期内得5分，否则不得分。",
+        "是否综合规则": false,
+        "是否父项规则": false
+      }}
+    }}
+  ]
+}}
+```
+
+【招标文件内容】
+{tender_content}
+
+【重要提示】
+1. **仔细阅读招标文件内容**，特别关注"评标办法"、"评分标准"、"评审标准"等相关章节。
+2. **对于定量规则**：
+   - 必须准确提取最高分值，不能遗漏任何有分值的规则。
+   - 正确识别父项和子项的层级关系。如果某个规则项包含多个子评分项，应标记为父项。
+   - 正确判断"是否综合规则"：需要对比所有投标文件才能评分的规则应标记为true。
+3. **对于定性规则**：
+   - 重点关注会导致投标被否决的规则。
+   - 规则描述应包含判断标准和后果说明。
+4. **输出格式**：
+   - 严格按照JSON格式输出，不要包含任何解释文字。
+   - 确保JSON格式正确，可以使用代码块包裹。
+   - 如果某个字段无法确定，使用空字符串或合理的默认值。
+
+请开始提取规则："""
+
+        return prompt
+
+    def _parse_ai_extraction_response(self, response: str) -> Dict[str, Any]:
+        """
+        解析AI提取规则的响应
+
+        Args:
+            response: AI响应文本
+
+        Returns:
+            Dict[str, Any]: 解析后的规则数据
+        """
+        import json
+        import re
+
+        try:
+            # 清理响应，移除代码块标记
+            cleaned_response = response.strip()
+            if cleaned_response.startswith('```json'):
+                cleaned_response = cleaned_response[7:]
+            if cleaned_response.startswith('```'):
+                cleaned_response = cleaned_response[3:]
+            if cleaned_response.endswith('```'):
+                cleaned_response = cleaned_response[:-3]
+            cleaned_response = cleaned_response.strip()
+
+            # 移除控制字符
+            cleaned_response = re.sub(r'[\x00-\x1f\x7f-\x9f]', '', cleaned_response)
+
+            # 查找JSON对象
+            json_match = re.search(r'\{.*\}', cleaned_response, re.DOTALL)
+            if json_match:
+                json_str = json_match.group(0)
+            else:
+                json_str = cleaned_response
+
+            # 修复JSON格式问题
+            json_str = re.sub(r',(\s*[}\]])', r'\1', json_str)
+
+            # 解析JSON
+            data = json.loads(json_str)
+            return data
+
+        except json.JSONDecodeError as e:
+            self.logger.error(f'解析AI响应JSON时出错: {e}')
+            self.logger.error(f'响应内容: {response[:500]}...')
+            return {"定性规则_result": [], "定量规则_result": []}
+        except Exception as e:
+            self.logger.error(f'解析AI响应时出错: {e}')
+            return {"定性规则_result": [], "定量规则_result": []}
+
+    def _convert_ai_rules_to_hierarchy(self, rules_data: Dict[str, Any]) -> List[Dict[str, Any]]:
+        """
+        将AI提取的规则转换为层级结构
+
+        Args:
+            rules_data: AI提取的规则数据
+
+        Returns:
+            List[Dict[str, Any]]: 层级结构的规则列表
+        """
+        hierarchy_rules = []
+
+        # 处理定量规则
+        quantitative_rules = rules_data.get("定量规则_result", [])
+        qualitative_rules = rules_data.get("定性规则_result", [])
+
+        # 按父项分组定量规则
+        parent_rules = {}
+        child_rules = []
+
+        for rule in quantitative_rules:
+            rule_name = rule.get("规则名称", "").strip()
+            if not rule_name:
+                continue
+                
+            item = rule.get("item", {})
+            max_score = float(item.get("最高分值", 0))
+            description = item.get("规则描述", "")
+            is_parent = item.get("是否父项规则", False)
+            is_comprehensive = item.get("是否综合规则", False)
+            
+            # 判断是否为价格规则（从规则名称判断）
+            is_price_criteria = (
+                '价格' in rule_name or 
+                '报价' in rule_name or 
+                '投标总价' in rule_name or
+                '投标价' in rule_name
+            )
+            
+            # 判断是否为否决项（从规则名称判断，通常以*开头）
+            is_veto = rule_name.startswith('*')
+            if is_veto:
+                rule_name = rule_name.lstrip('*').strip()
+
+            rule_dict = {
+                "criteria_name": rule_name,
+                "max_score": max_score,
+                "description": description,
+                "is_parent": is_parent,
+                "is_comprehensive": is_comprehensive,
+                "is_price_criteria": is_price_criteria,
+                "is_qualitative": False,  # 定量规则
+                "is_quantitative": True,  # 定量规则
+                "is_veto": is_veto,
+            }
+
+            if is_parent:
+                rule_dict["children"] = []
+                parent_rules[rule_name] = rule_dict
+            else:
+                child_rules.append(rule_dict)
+
+        # 处理定性规则（转换为定量规则格式，分数为0）
+        for rule in qualitative_rules:
+            rule_name = rule.get("规则名称", "").strip()
+            if not rule_name:
+                continue
+                
+            # 判断是否为否决项
+            is_veto = rule_name.startswith('*')
+            if is_veto:
+                rule_name = rule_name.lstrip('*').strip()
+                
+            rule_dict = {
+                "criteria_name": rule_name,
+                "max_score": 0,  # 定性规则没有分数
+                "description": rule.get("规则描述", ""),
+                "is_parent": False,
+                "is_comprehensive": False,
+                "is_price_criteria": False,  # 定性规则不是价格规则
+                "is_qualitative": True,  # 标记为定性规则
+                "is_quantitative": False,  # 定性规则不是定量规则
+                "is_veto": is_veto,
+            }
+            child_rules.append(rule_dict)
+
+        # 构建层级结构：尝试匹配父子关系
+        # 策略：根据规则名称中的关键词匹配（如"技术部分"和"技术方案"）
+        # 如果无法匹配，则保持原有的父子关系标记
+        
+        # 首先处理明确的父项
+        for parent_name, parent_dict in parent_rules.items():
+            # 查找可能的子项（通过名称匹配）
+            matched_children = []
+            remaining_children = []
+            
+            for child in child_rules:
+                child_name = child.get("criteria_name", "")
+                # 如果子项名称包含父项的关键词，或者父项名称包含子项的关键词
+                # 或者子项名称与父项名称有相似性，则认为是父子关系
+                parent_keywords = self._extract_keywords(parent_name)
+                child_keywords = self._extract_keywords(child_name)
+                
+                # 如果子项不属于任何父项，且与当前父项有匹配，则添加到子项
+                is_matched = False
+                if parent_keywords and child_keywords:
+                    # 检查是否有共同关键词
+                    common_keywords = set(parent_keywords) & set(child_keywords)
+                    if common_keywords:
+                        is_matched = True
+                
+                # 特殊情况：如果父项名称包含"部分"、"项"等，且子项名称不包含这些词
+                if not is_matched:
+                    if ('部分' in parent_name or '项' in parent_name) and \
+                       ('部分' not in child_name and '项' not in child_name):
+                        # 检查子项是否可能是该父项的子项
+                        if any(keyword in child_name for keyword in parent_keywords[:2] if keyword not in ['部分', '项']):
+                            is_matched = True
+                
+                if is_matched:
+                    matched_children.append(child)
+                else:
+                    remaining_children.append(child)
+            
+            # 将匹配的子项添加到父项
+            if matched_children:
+                parent_dict["children"] = matched_children
+                hierarchy_rules.append(parent_dict)
+            else:
+                # 如果没有匹配的子项，但标记为父项，仍然保留父项结构
+                hierarchy_rules.append(parent_dict)
+            
+            # 更新child_rules，移除已匹配的子项
+            child_rules = remaining_children
+        
+        # 添加未匹配到父项的子项（独立规则）
+        hierarchy_rules.extend(child_rules)
+
+        return hierarchy_rules
+    
+    def _extract_keywords(self, text: str) -> List[str]:
+        """
+        从文本中提取关键词（用于匹配父子关系）
+        
+        Args:
+            text: 文本内容
+            
+        Returns:
+            List[str]: 关键词列表
+        """
+        if not text:
+            return []
+        
+        # 简单的关键词提取：移除常见停用词，保留有意义的词
+        stop_words = {'的', '和', '或', '与', '及', '等', '部分', '项', '分', '规则'}
+        keywords = []
+        
+        # 按字符分割，保留2-4个字符的词
+        for i in range(len(text)):
+            for length in [2, 3, 4]:
+                if i + length <= len(text):
+                    word = text[i:i+length]
+                    if word not in stop_words and len(word) >= 2:
+                        keywords.append(word)
+        
+        return keywords[:5]  # 返回前5个关键词
 
     def _merge_cross_page_tables(
         self, table_data_list: List[List[List[str]]]

@@ -100,6 +100,9 @@ class ScoringRulesManager:
 
                 # 获取否决项标识
                 is_veto = bool(rule_data.get('is_veto', False))
+                
+                # 获取综合分析标识（从is_comprehensive字段转换）
+                needs_comprehensive = bool(rule_data.get('is_comprehensive', False))
 
                 # 如果规则名称和描述都为空且不是价格规则，跳过保存
                 if (
@@ -123,6 +126,7 @@ class ScoringRulesManager:
                         is_qualitative=is_qualitative,
                         is_quantitative=is_quantitative,
                         is_veto=is_veto,
+                        needs_comprehensive_analysis=needs_comprehensive,
                     )
                     if is_price:
                         db_rule.price_formula = str(
@@ -177,6 +181,7 @@ class ScoringRulesManager:
                         is_qualitative=is_qualitative,
                         is_quantitative=is_quantitative,
                         is_veto=is_veto,
+                        needs_comprehensive_analysis=needs_comprehensive,
                     )
                     if self.db:
                         self.db.add(db_rule)

@@ -632,13 +632,50 @@ class AnalysisManager:
                 self.logger.info(f'投标文件分析完成: {bid_document.bidder_name}')
 
                 # 更新投标文件状态为completed
-                bid_document.processing_status = 'completed'
-                setattr(bid_document, 'progress_current_rule', '分析完成')
-                bid_document.processing_phase = '分析完成'
-                db.commit()
-                self.logger.info(
-                    f'已将投标文件 {bid_document.bidder_name} 状态更新为 completed'
-                )
+                # 使用try-except确保状态更新不会失败
+                try:
+                    bid_document.processing_status = 'completed'
+                    setattr(bid_document, 'progress_current_rule', '分析完成')
+                    bid_document.processing_phase = '分析完成'
+                    db.commit()
+                    # 立即刷新对象，确保状态已保存
+                    db.refresh(bid_document)
+                    self.logger.info(
+                        f'已将投标文件 {bid_document.bidder_name} 状态更新为 completed (ID: {bid_document_id})'
+                    )
+                    # 验证状态确实已更新
+                    if bid_document.processing_status != 'completed':
+                        self.logger.error(
+                            f'警告：投标文件 {bid_document_id} 状态更新后验证失败，'
+                            f'实际状态: {bid_document.processing_status}'
+                        )
+                except Exception as status_update_error:
+                    self.logger.error(
+                        f'更新投标文件状态时出错: {status_update_error}'
+                    )
+                    # 尝试回滚并重新更新
+                    try:
+                        db.rollback()
+                        # 重新查询bid_document
+                        bid_document = (
+                            db.query(BidDocument)
+                            .filter(BidDocument.id == bid_document_id)
+                            .first()
+                        )
+                        if bid_document:
+                            bid_document.processing_status = 'completed'
+                            setattr(bid_document, 'progress_current_rule', '分析完成')
+                            bid_document.processing_phase = '分析完成'
+                            db.commit()
+                            db.refresh(bid_document)  # 刷新对象
+                            self.logger.info(
+                                f'重试后成功更新投标文件 {bid_document.bidder_name} 状态为 completed (ID: {bid_document_id})'
+                            )
+                    except Exception as retry_error:
+                        self.logger.error(
+                            f'重试更新投标文件状态时出错: {retry_error}'
+                        )
+                        db.rollback()
 
                 # 延迟检查项目完成状态，避免竞态条件
                 self._delayed_check_and_update_project_status(
@@ -908,24 +945,58 @@ class AnalysisManager:
         # 获取完成统计
         completed_count, total_count = self._get_analysis_completion_stats(project_id)
 
-        if not analysis_completed:
+        # 严格检查：只有当所有分析任务都完成时才继续综合计算
+        if completed_count != total_count or total_count == 0:
             self.logger.error(
-                f'项目 [{project_name}]: 非价格项分析步骤未全部成功完成，无法进行价格计算。'
+                f'项目 [{project_name}]: 非价格项分析步骤未全部成功完成，无法进行综合计算。'
+                f'完成情况: {completed_count}/{total_count}'
             )
             if self.db is not None:
                 project.status = 'error'
                 project.error_message = (
-                    f'分析任务完成率: {completed_count}/{total_count}，无法进行价格计算'
+                    f'分析任务完成率: {completed_count}/{total_count}，无法进行综合计算'
                 )
                 self.db.commit()
             return
 
-        # 如果有部分任务失败但允许继续，记录警告日志
-        if completed_count < total_count:
-            self.logger.warning(
-                f'项目 [{project_name}]: 部分分析任务({completed_count}/{total_count})完成，'
-                f'将尝试继续价格计算流程'
+        # 再次确认：所有分析任务都已完成
+        if not analysis_completed:
+            self.logger.error(
+                f'项目 [{project_name}]: 等待分析完成超时，但仍有任务未完成，无法进行综合计算。'
             )
+            if self.db is not None:
+                project.status = 'error'
+                project.error_message = (
+                    f'等待分析完成超时，完成情况: {completed_count}/{total_count}'
+                )
+                self.db.commit()
+            return
+
+        # 双重确认：确保所有分析结果都已存在
+        from models.database import AnalysisResult
+        analysis_results_count = len(
+            self.db.query(AnalysisResult)
+            .filter(AnalysisResult.project_id == project_id)
+            .all()
+        )
+        
+        if analysis_results_count < total_count:
+            self.logger.error(
+                f'项目 [{project_name}]: 分析结果数量不足，无法进行综合计算。'
+                f'预期结果数: {total_count}, 实际结果数: {analysis_results_count}'
+            )
+            if self.db is not None:
+                project.status = 'error'
+                project.error_message = (
+                    f'分析结果数量不足: {analysis_results_count}/{total_count}'
+                )
+                self.db.commit()
+            return
+
+        self.logger.info(
+            f'项目 [{project_name}]: 所有分析任务已完成 ({completed_count}/{total_count})，'
+            f'分析结果数量: {analysis_results_count}，准备进行综合计算'
+        )
 
         # 新增步骤: 使用统一综合计算器执行价格分和综合分析规则的计算
         self.logger.info(
@@ -1172,6 +1243,10 @@ class AnalysisManager:
             last_progress_report = 0
 
             while wait_time < max_wait_time:
+                # 刷新数据库会话，确保获取最新数据
+                if self.db is not None:
+                    self.db.expire_all()
+                
                 # 获取完成和总数
                 completed_count, total_count = self._get_analysis_completion_stats(
                     project_id
@@ -1214,12 +1289,28 @@ class AnalysisManager:
                 from modules.project_status_manager import ProjectStatusManager
 
                 status_manager = ProjectStatusManager(db_session=self.db)
-                stuck_count = status_manager.handle_stuck_processes(project_id)
+                # 强制处理所有processing状态的任务（因为已经超时）
+                stuck_count = status_manager.handle_stuck_processes(project_id, force_all_processing=True)
 
                 self.logger.warning(
-                    f'项目 [{project_name}] 处理了 {stuck_count} 个卡住的任务，将继续后续流程'
+                    f'项目 [{project_name}] 等待超时，处理了 {stuck_count} 个卡住的任务'
                 )
-                return True  # 返回True以继续后续流程
+                
+                # 再次检查完成情况
+                completed_count, total_count = self._get_analysis_completion_stats(project_id)
+                
+                # 只有当所有任务都完成（包括处理卡住的任务后）才返回True
+                if completed_count == total_count and total_count > 0:
+                    self.logger.info(
+                        f'项目 [{project_name}] 处理卡住任务后，所有分析任务已完成 ({completed_count}/{total_count})'
+                    )
+                    return True
+                else:
+                    self.logger.warning(
+                        f'项目 [{project_name}] 处理卡住任务后，仍有任务未完成 ({completed_count}/{total_count})'
+                    )
+                    # 即使超时，也不应该继续，除非所有任务都完成
+                    return False
 
             # 如果没有设置强制继续，则返回失败
             return False
@@ -1229,9 +1320,23 @@ class AnalysisManager:
                 from modules.project_status_manager import ProjectStatusManager
 
                 status_manager = ProjectStatusManager(db_session=self.db)
-                status_manager.handle_stuck_processes(project_id)
-                # 返回部分成功
-                return True
+                # 异常情况下也强制处理所有processing状态的任务
+                stuck_count = status_manager.handle_stuck_processes(project_id, force_all_processing=True)
+                
+                # 再次检查完成情况
+                completed_count, total_count = self._get_analysis_completion_stats(project_id)
+                
+                # 如果所有任务都完成了，返回True
+                if completed_count == total_count and total_count > 0:
+                    self.logger.info(
+                        f'项目 [{project_name}] 异常处理后，所有分析任务已完成 ({completed_count}/{total_count})'
+                    )
+                    return True
+                else:
+                    self.logger.warning(
+                        f'项目 [{project_name}] 异常处理后，仍有任务未完成 ({completed_count}/{total_count})'
+                    )
+                    return False
             except Exception as inner_e:
                 self.logger.error(f'处理卡住的任务时出错: {inner_e}')
                 return False
@@ -1240,7 +1345,9 @@ class AnalysisManager:
         self, project_id: int, delay_seconds: int = 2
     ):
         """
-        延迟检查并更新项目状态，避免竞态条件
+        延迟检查项目状态，但不更新为completed
+        注意：此方法仅用于检查，不更新项目状态
+        项目状态的更新应该由run_analysis_and_calculate_prices中的综合计算流程完成
 
         Args:
             project_id: 项目ID
@@ -1274,39 +1381,27 @@ class AnalysisManager:
                             f'检查项目 {project_id} 当前状态: {current_status}'
                         )
 
-                        # 如果项目状态已经是completed，不需要再次更新
-                        if current_status == 'completed':
+                        # 如果项目状态已经是completed或completed_with_errors，不需要再次检查
+                        if current_status in ['completed', 'completed_with_errors', 'error']:
                             self.logger.info(
-                                f'项目 {project_id} 状态已经是completed，无需再次更新'
+                                f'项目 {project_id} 状态已经是{current_status}，无需再次检查'
                             )
                             return
 
-                        # 使用增强的状态管理器等待并更新状态
-                        from modules.project_status_manager import ProjectStatusManager
-
-                        status_manager = ProjectStatusManager(db_session=check_db)
-                        # 增加重试机制以处理临时的数据库同步问题
-                        max_retries = 3
-                        for retry in range(max_retries):
-                            try:
-                                result = status_manager.wait_and_update_project_status_when_all_completed(
-                                    project_id,
-                                    max_wait_time=60,  # 最后阶段综合计算前的等待时间
-                                    force_complete_after_timeout=True,
-                                )
-                                if result:
-                                    break
-                                elif retry < max_retries - 1:
-                                    # 如果不是最后一次重试，等待一段时间后重试
-                                    time.sleep(2)
-                            except Exception as retry_e:
-                                self.logger.warning(
-                                    f'第{retry + 1}次尝试更新项目状态时出错: {retry_e}'
-                                )
-                                if retry < max_retries - 1:
-                                    time.sleep(2)
-                                else:
-                                    raise
+                        # 只检查是否所有分析完成，但不更新项目状态
+                        # 项目状态的更新应该由run_analysis_and_calculate_prices中的综合计算流程完成
+                        from modules.analysis_manager import AnalysisManager
+                        analysis_manager = AnalysisManager(db_session=check_db)
+                        # 使用expire_all确保获取最新数据
+                        check_db.expire_all()
+                        completed_count, total_count = analysis_manager._get_analysis_completion_stats(project_id)
+                        
+                        self.logger.info(
+                            f'项目 {project_id} 分析进度: {completed_count}/{total_count}'
+                        )
+                        
+                        # 不更新项目状态，让run_analysis_and_calculate_prices中的等待流程来处理
+                        # 这样可以确保综合计算流程在正确的时机执行
                 finally:
                     check_db.close()
             except Exception as check_e:
@@ -1328,6 +1423,10 @@ class AnalysisManager:
             tuple: (已完成数量, 总数量)
         """
         try:
+            # 如果数据库会话存在，先刷新所有对象以确保获取最新数据
+            if self.db is not None:
+                self.db.expire_all()
+            
             # 获取项目下的所有投标文件
             bid_documents = []
             if self.db is not None:
@@ -1336,6 +1435,14 @@ class AnalysisManager:
                     .filter(BidDocument.project_id == project_id)
                     .all()
                 )
+                
+                # 刷新所有查询到的对象，确保获取最新状态
+                for doc in bid_documents:
+                    try:
+                        self.db.refresh(doc)
+                    except Exception:
+                        # 如果刷新失败，可能是对象已被删除或不存在，忽略
+                        pass
 
             if not bid_documents:
                 self.logger.warning(f'项目 {project_id} 没有找到投标文件')
@@ -1351,6 +1458,7 @@ class AnalysisManager:
             status_counts = {}
 
             for doc in bid_documents:
+                # 确保获取最新状态
                 status = doc.processing_status
                 status_counts[status] = status_counts.get(status, 0) + 1
 

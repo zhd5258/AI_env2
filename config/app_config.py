@@ -1,5 +1,16 @@
 #!/usr/bin/env python
 # -*- coding:utf-8 -*-
+#
+# 作者           : KingFreeDom
+# 创建时间         : 2025-10-18 08:22:38
+# 最近一次编辑者      : KingFreeDom
+# 最近一次编辑时间     : 2025-11-01 12:19:05
+# 文件相对于项目的路径   : \AI_env2\config\app_config.py
+#
+# Copyright (c) 2025 by 中车眉山车辆有限公司/KingFreeDom, All Rights Reserved.
+#
+#!/usr/bin/env python
+# -*- coding:utf-8 -*-
 """
 应用配置文件
 """
@@ -35,9 +46,7 @@ class Config:
 
     # RAG优化配置
     RAG_ENABLED = os.environ.get('RAG_ENABLED', 'false').lower() == 'true'
-    RAG_EMBEDDING_MODEL = os.environ.get(
-        'RAG_EMBEDDING_MODEL', 'qwen3-embedding:latest'
-    )
+    RAG_EMBEDDING_MODEL = os.environ.get('RAG_EMBEDDING_MODEL', 'qwen3-embedding:4b')
     RAG_RERANKER_MODEL = os.environ.get(
         'RAG_RERANKER_MODEL', 'dengcao/Qwen3-Reranker-8B:Q5_K_M'
     )
